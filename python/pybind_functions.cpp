@@ -956,7 +956,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
             kImageSizes_,
             settings_,
             settings_.localOptimizationSettings,
-            superansac::models::Types::FundamentalMatrix,
+            superansac::models::Types::EssentialMatrix,
             false);
             
         // Set the local optimizer
@@ -981,7 +981,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
             kImageSizes_,
             settings_,
             settings_.finalOptimizationSettings,
-            superansac::models::Types::FundamentalMatrix,
+            superansac::models::Types::EssentialMatrix,
             true);
 
         // Set the final optimizer
