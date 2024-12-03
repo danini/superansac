@@ -20,16 +20,26 @@ Install SupeRANSAC by running
 pip install .
 ```
 
-# Jupyter Notebook examples
+# Jupyter Notebook Examples
 
-The example for homography fitting using SuperPoint + LightGlue matches is available at: [notebook](examples/example_homography_fitting_splg.ipynb).
-The example for homography fitting using RoMA matches is available at: [notebook](examples/example_homography_fitting_roma.ipynb).
+- **Homography Fitting with SuperPoint + LightGlue Matches**  
+  Example available at: [notebook](examples/example_homography_fitting_splg.ipynb)
 
-The example for fundamental matrix fitting using SuperPoint + LightGlue matches is available at: [notebook](examples/example_fundamental_matrix_fitting_splg.ipynb).
-The example for fundamental matrix fitting using RoMA matches is available at: [notebook](examples/example_fundamental_matrix_fitting_roma.ipynb).
+- **Homography Fitting with RoMA Matches**  
+  Example available at: [notebook](examples/example_homography_fitting_roma.ipynb)
 
-The example for essential matrix fitting using SuperPoint + LightGlue matches is available at: [notebook](examples/example_essential_matrix_fitting_splg.ipynb).
-The example for essential matrix fitting using RoMA matches is available at: [notebook](examples/example_essential_matrix_fitting_roma.ipynb).
+- **Fundamental Matrix Fitting with SuperPoint + LightGlue Matches**  
+  Example available at: [notebook](examples/example_fundamental_matrix_fitting_splg.ipynb)
+
+- **Fundamental Matrix Fitting with RoMA Matches**  
+  Example available at: [notebook](examples/example_fundamental_matrix_fitting_roma.ipynb)
+
+- **Essential Matrix Fitting with SuperPoint + LightGlue Matches**  
+  Example available at: [notebook](examples/example_essential_matrix_fitting_splg.ipynb)
+
+- **Essential Matrix Fitting with RoMA Matches**  
+  Example available at: [notebook](examples/example_essential_matrix_fitting_roma.ipynb)
+
 
 ## Usage
 
