@@ -76,16 +76,14 @@ BundleStats lm_impl(Problem &problem, Param *parameters, const BundleOptions &op
         }
 
         // Add dampening
-        for (size_t k = 0; k < n_params; ++k) {
+        for (size_t k = 0; k < n_params; ++k) 
             JtJ(k, k) += stats.lambda;
-        }
 
         Eigen::Matrix<double, n_params, 1> sol = -JtJ.template selfadjointView<Eigen::Lower>().llt().solve(Jtr);
 
         stats.step_norm = sol.norm();
-        if (stats.step_norm < opt.step_tol) {
+        if (stats.step_norm < opt.step_tol) 
             break;
-        }
 
         Param parameters_new = problem.step(sol, *parameters);
 
@@ -99,15 +97,13 @@ BundleStats lm_impl(Problem &problem, Param *parameters, const BundleOptions &op
         } else {
             stats.invalid_steps++;
             // Remove dampening
-            for (size_t k = 0; k < n_params; ++k) {
+            for (size_t k = 0; k < n_params; ++k) 
                 JtJ(k, k) -= stats.lambda;
-            }
             stats.lambda = std::min(opt.max_lambda, stats.lambda * 10);
             recompute_jac = false;
         }
-        if (callback != nullptr) {
+        if (callback != nullptr) 
             callback(stats);
-        }
     }
     return stats;
 }
