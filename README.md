@@ -75,6 +75,8 @@ config.inlier_threshold = 3.0
 config.confidence = 0.99
 config.scoring = ScoringType.MAGSAC
 config.sampler = SamplerType.PROSAC
+config.local_optimization = LocalOptimizationType.GCRANSAC
+config.final_optimization = LocalOptimizationType.LSQ
 
 # Estimate homography
 result = superansac.estimateHomography(correspondences, image_sizes, config=config)
