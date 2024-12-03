@@ -33,3 +33,11 @@
 
 # Build files
 build/*
+
+# Other
+*.pyc
+*.zip
+pysuperansac.egg-info/*
+.vscode/
+pyproject.toml
+*.egg
