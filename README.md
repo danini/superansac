@@ -111,7 +111,7 @@ print("Estimated Homography Matrix:", result)
   - `probabilities` *(optional)*: Correspondence probabilities.
 
 
-## Advanced Configuration: RANSACSettings
+### Advanced Configuration: RANSACSettings
 
 The ```RANSACSettings``` class provides fine-grained control over the RANSAC pipeline. Customize it as needed:
 
@@ -127,7 +127,7 @@ config.local_optimization = LocalOptimizationType.LSQ
 config.neighborhood = NeighborhoodType.Grid
 ```
 
-## Enumerations and Their Values
+### Enumerations and Their Values
 
 The library supports several enumeration types to customize sampling, scoring, and other pipeline components:
 
