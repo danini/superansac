@@ -58,7 +58,7 @@ from superansac import ScoringType, SamplerType, LocalOptimizationType, InlierSe
 
 ### Example: Estimate a Homography Matrix
 
-```
+```python
 # Example correspondences and image sizes
 correspondences = [
     ([x1, y1], [x2, y2]),
