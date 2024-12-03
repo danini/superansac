@@ -1,3 +1,7 @@
+# SupeRANSAC
+
+SupeRANSAC is a Python library that provides bindings for an advanced RANSAC C++ implementation using pybind11. It supports a wide variety of sampling, scoring, local optimization, and inlier selection techniques for robust model estimation tasks.
+
 ## Installation
 
 Clone the repository and its submodules:
@@ -15,6 +19,131 @@ Install SupeRANSAC by running
 ```
 pip install .
 ```
+
+## Example fitting
+
+Examples on how to use the code are provided...
+
+## Usage
+
+The library provides several model estimation functions and settings that allow customization of the RANSAC pipeline. Below are the primary features and their usage.
+
+### Importing the Library
+
+```python
+import superansac
+from superansac import ScoringType, SamplerType, LocalOptimizationType, InlierSelectorType, NeighborhoodType, CameraType, RANSACSettings
+```
+
+### Example: Estimate a Homography Matrix
+
+```
+# Example correspondences and image sizes
+correspondences = [
+    ([x1, y1], [x2, y2]),
+    ([x3, y3], [x4, y4]),
+    # Add more correspondences...
+]
+image_sizes = [(width1, height1), (width2, height2)]
+
+# Configure RANSAC settings
+config = RANSACSettings()
+config.min_iterations = 100
+config.max_iterations = 1000
+config.inlier_threshold = 3.0
+config.confidence = 0.99
+config.scoring = ScoringType.MAGSAC
+config.sampler = SamplerType.PROSAC
+
+# Estimate homography
+result = superansac.estimateHomography(correspondences, image_sizes, config=config)
+print("Estimated Homography Matrix:", result) 
+```
+
+### Supported Estimation Functions
+
+1. Homography Estimation
+    Function: superansac.estimateHomography
+    Description: Estimates a homography matrix from 2D-2D point correspondences.
+    Parameters:
+    - correspondences: A list of paired 2D points.
+    - image_sizes: A tuple of source and target image sizes.
+    - probabilities (optional): Correspondence probabilities.
+    - config: An instance of RANSACSettings.
+
+2. Fundamental Matrix Estimation
+    Function: superansac.estimateFundamentalMatrix
+    Description: Estimates a fundamental matrix from 2D-2D point correspondences.
+    Parameters: Same as above.
+
+3. Essential Matrix Estimation
+    Function: superansac.estimateEssentialMatrix
+    Description: Estimates an essential matrix using 2D-2D point correspondences and intrinsic matrices.
+    Parameters:
+    - intrinsics_src: Source camera intrinsic matrix.
+    - intrinsics_dst: Destination camera intrinsic matrix.
+
+4. Rigid Transformation Estimation
+    Function: superansac.estimateRigidTransform
+    Description: Estimates a 6D rigid transformation matrix from 3D-3D point correspondences.
+    Parameters:
+    - bounding_box_sizes: Size of the bounding box.
+
+5. Absolute Pose Estimation
+    Function: superansac.estimateAbsolutePose
+    Description: Estimates the absolute pose of a camera using 2D-3D correspondences.
+    Parameters:
+    - camera_type: Type of the camera (e.g., CameraType.SimpleRadial).
+    - camera_params: Camera parameters.
+
+## Advanced Configuration: RANSACSettings
+
+The ```RANSACSettings``` class provides fine-grained control over the RANSAC pipeline. Customize it as needed:
+
+```
+config = RANSACSettings()
+config.min_iterations = 100
+config.max_iterations = 1000
+config.inlier_threshold = 3.0
+config.confidence = 0.99
+config.scoring = ScoringType.MAGSAC
+config.sampler = SamplerType.PROSAC
+config.local_optimization = LocalOptimizationType.LSQ
+config.neighborhood = NeighborhoodType.Grid
+```
+
+## Enumerations and Their Values
+
+The library supports several enumeration types to customize sampling, scoring, and other pipeline components:
+
+Scoring Types
+- ScoringType.RANSAC
+- ScoringType.MSAC
+- ScoringType.MAGSAC
+- ScoringType.ACRANSAC
+
+Sampler Types
+- SamplerType.Uniform
+- SamplerType.PROSAC
+- SamplerType.NAPSAC
+- SamplerType.ProgressiveNAPSAC
+- SamplerType.ImportanceSampler
+- SamplerType.ARSampler
+
+Local Optimization Types
+- LocalOptimizationType.Nothing
+- LocalOptimizationType.LSQ
+- LocalOptimizationType.IteratedLSQ
+- LocalOptimizationType.NestedRANSAC
+- LocalOptimizationType.GCRANSAC
+
+Neighborhood Types
+- NeighborhoodType.Grid
+- NeighborhoodType.BruteForce
+
+Camera Types
+- CameraType.SimpleRadial
+- CameraType.SimplePinhole
 
 ## Evaluation - Python
 
