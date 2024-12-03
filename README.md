@@ -68,34 +68,47 @@ print("Estimated Homography Matrix:", result)
 - **Parameters**:
   - `correspondences`: A list of paired 2D points.
   - `image_sizes`: A tuple of source and target image sizes.
-  - `probabilities` *(optional)*: Correspondence probabilities.
   - `config`: An instance of `RANSACSettings`.
+  - `probabilities` *(optional)*: Correspondence probabilities.
 
 #### 2. Fundamental Matrix Estimation
 - **Function**: `superansac.estimateFundamentalMatrix`
 - **Description**: Estimates a fundamental matrix from 2D-2D point correspondences.
 - **Parameters**:
-  - Same as above.
+  - `correspondences`: A list of paired 2D points.
+  - `image_sizes`: A tuple of source and target image sizes.
+  - `config`: An instance of `RANSACSettings`.
+  - `probabilities` *(optional)*: Correspondence probabilities.
 
 #### 3. Essential Matrix Estimation
 - **Function**: `superansac.estimateEssentialMatrix`
 - **Description**: Estimates an essential matrix using 2D-2D point correspondences and intrinsic matrices.
 - **Parameters**:
+  - `correspondences`: A list of paired 2D points.
+  - `image_sizes`: A tuple of source and target image sizes.
+  - `config`: An instance of `RANSACSettings`.
   - `intrinsics_src`: Source camera intrinsic matrix.
   - `intrinsics_dst`: Destination camera intrinsic matrix.
+  - `probabilities` *(optional)*: Correspondence probabilities.
 
 #### 4. Rigid Transformation Estimation
 - **Function**: `superansac.estimateRigidTransform`
 - **Description**: Estimates a 6D rigid transformation matrix from 3D-3D point correspondences.
 - **Parameters**:
+  - `correspondences`: A list of paired 3D points.
   - `bounding_box_sizes`: Size of the bounding box.
+  - `config`: An instance of `RANSACSettings`.
+  - `probabilities` *(optional)*: Correspondence probabilities.
 
 #### 5. Absolute Pose Estimation
 - **Function**: `superansac.estimateAbsolutePose`
 - **Description**: Estimates the absolute pose of a camera using 2D-3D correspondences.
 - **Parameters**:
+  - `correspondences`: A list of paired 2D-3D points.
   - `camera_type`: Type of the camera (e.g., `CameraType.SimpleRadial`).
   - `camera_params`: Camera parameters.
+  - `config`: An instance of `RANSACSettings`.
+  - `probabilities` *(optional)*: Correspondence probabilities.
 
 
 ## Advanced Configuration: RANSACSettings
@@ -118,13 +131,13 @@ config.neighborhood = NeighborhoodType.Grid
 
 The library supports several enumeration types to customize sampling, scoring, and other pipeline components:
 
-Scoring Types
+**Scoring Types**
 - ScoringType.RANSAC
 - ScoringType.MSAC
 - ScoringType.MAGSAC
 - ScoringType.ACRANSAC
 
-Sampler Types
+**Sampler Types**
 - SamplerType.Uniform
 - SamplerType.PROSAC
 - SamplerType.NAPSAC
@@ -132,18 +145,18 @@ Sampler Types
 - SamplerType.ImportanceSampler
 - SamplerType.ARSampler
 
-Local Optimization Types
+**Local Optimization Types**
 - LocalOptimizationType.Nothing
 - LocalOptimizationType.LSQ
 - LocalOptimizationType.IteratedLSQ
 - LocalOptimizationType.NestedRANSAC
 - LocalOptimizationType.GCRANSAC
 
-Neighborhood Types
+**Neighborhood Types**
 - NeighborhoodType.Grid
 - NeighborhoodType.BruteForce
 
-Camera Types
+**Camera Types**
 - CameraType.SimpleRadial
 - CameraType.SimplePinhole
 
