@@ -65,7 +65,7 @@ correspondences = [
     ([x3, y3], [x4, y4]),
     # Add more correspondences...
 ]
-image_sizes = [(width1, height1), (width2, height2)]
+image_sizes = [width1, height1, width2, height2]
 
 # Configure RANSAC settings
 config = RANSACSettings()
