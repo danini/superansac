@@ -62,39 +62,41 @@ print("Estimated Homography Matrix:", result)
 
 ### Supported Estimation Functions
 
-1. Homography Estimation
-    Function: superansac.estimateHomography
-    Description: Estimates a homography matrix from 2D-2D point correspondences.
-    Parameters:
-    - correspondences: A list of paired 2D points.
-    - image_sizes: A tuple of source and target image sizes.
-    - probabilities (optional): Correspondence probabilities.
-    - config: An instance of RANSACSettings.
+#### 1. Homography Estimation
+- **Function**: `superansac.estimateHomography`
+- **Description**: Estimates a homography matrix from 2D-2D point correspondences.
+- **Parameters**:
+  - `correspondences`: A list of paired 2D points.
+  - `image_sizes`: A tuple of source and target image sizes.
+  - `probabilities` *(optional)*: Correspondence probabilities.
+  - `config`: An instance of `RANSACSettings`.
 
-2. Fundamental Matrix Estimation
-    Function: superansac.estimateFundamentalMatrix
-    Description: Estimates a fundamental matrix from 2D-2D point correspondences.
-    Parameters: Same as above.
+#### 2. Fundamental Matrix Estimation
+- **Function**: `superansac.estimateFundamentalMatrix`
+- **Description**: Estimates a fundamental matrix from 2D-2D point correspondences.
+- **Parameters**:
+  - Same as above.
 
-3. Essential Matrix Estimation
-    Function: superansac.estimateEssentialMatrix
-    Description: Estimates an essential matrix using 2D-2D point correspondences and intrinsic matrices.
-    Parameters:
-    - intrinsics_src: Source camera intrinsic matrix.
-    - intrinsics_dst: Destination camera intrinsic matrix.
+#### 3. Essential Matrix Estimation
+- **Function**: `superansac.estimateEssentialMatrix`
+- **Description**: Estimates an essential matrix using 2D-2D point correspondences and intrinsic matrices.
+- **Parameters**:
+  - `intrinsics_src`: Source camera intrinsic matrix.
+  - `intrinsics_dst`: Destination camera intrinsic matrix.
 
-4. Rigid Transformation Estimation
-    Function: superansac.estimateRigidTransform
-    Description: Estimates a 6D rigid transformation matrix from 3D-3D point correspondences.
-    Parameters:
-    - bounding_box_sizes: Size of the bounding box.
+#### 4. Rigid Transformation Estimation
+- **Function**: `superansac.estimateRigidTransform`
+- **Description**: Estimates a 6D rigid transformation matrix from 3D-3D point correspondences.
+- **Parameters**:
+  - `bounding_box_sizes`: Size of the bounding box.
 
-5. Absolute Pose Estimation
-    Function: superansac.estimateAbsolutePose
-    Description: Estimates the absolute pose of a camera using 2D-3D correspondences.
-    Parameters:
-    - camera_type: Type of the camera (e.g., CameraType.SimpleRadial).
-    - camera_params: Camera parameters.
+#### 5. Absolute Pose Estimation
+- **Function**: `superansac.estimateAbsolutePose`
+- **Description**: Estimates the absolute pose of a camera using 2D-3D correspondences.
+- **Parameters**:
+  - `camera_type`: Type of the camera (e.g., `CameraType.SimpleRadial`).
+  - `camera_params`: Camera parameters.
+
 
 ## Advanced Configuration: RANSACSettings
 
