@@ -41,3 +41,6 @@ pysuperansac.egg-info/*
 .vscode/
 pyproject.toml
 *.egg
+*.csv
+*.pdf
+tests/*
