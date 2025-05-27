@@ -44,6 +44,12 @@ pip install .
 - **Essential Matrix Fitting with RoMA Matches**  
   Example available at: [notebook](examples/example_essential_matrix_fitting_roma.ipynb)
 
+- **Absolute Pose Estimation**  
+  Example available at: [notebook](examples/example_absolute_pose_fitting.ipynb)
+
+- **6D Rigit Transformation Estimation**  
+  Example available at: [notebook](examples/example_rigid_transform_fitting.ipynb)
+
 
 ## Usage
 
