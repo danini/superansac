@@ -1,8 +1,8 @@
-# SupeRANSAC ([Paper](https://arxiv.org/pdf/2407.20219))
+# SupeRANSAC ([Arxiv Paper](https://arxiv.org/pdf/2407.20219))
 
 ## About
 
-SupeRANSAC is a Python lbriary that provides bindings for an advanced RANSAC C++ implementation using pybind11. 
+SupeRANSAC is a Python library that provides bindings for an advanced RANSAC C++ implementation using pybind11. 
 It supports a wide variety of sampling, scoring, local optimization, and inlier selection techniques for robust model estimation tasks.
 It provides estimators for homography, essential, fundamental matrix, rigid and absolute pose estimation.
 
@@ -47,7 +47,7 @@ pip install .
 - **Absolute Pose Estimation**  
   Example available at: [notebook](examples/example_absolute_pose_fitting.ipynb)
 
-- **6D Rigit Transformation Estimation**  
+- **6D Rigid Transformation Estimation**  
   Example available at: [notebook](examples/example_rigid_transform_fitting.ipynb)
 
 
