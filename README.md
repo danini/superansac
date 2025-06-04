@@ -27,20 +27,26 @@ pip install .
 # Results
 
 Below, the AUC@10&deg; scores are shown averaged over the LaMAR, PhotoTourism, ETH3D, Kitti, 7Scenes, and ScanNet datasets.
-We show results both with SuperPoint + LightGlue (top row) and RoMA (bottom) features.  
+We show results both with SuperPoint + LightGlue (top row) and RoMA (bottom) features for essential matrix (left), fundamental matrix (middle) and homography (right) estimation.  
 
-<!-- Row 1 -->
-<p align="center">
-  <img src="assets/essential_matrix_splg.png" width="250"/>
-  <img src="assets/fundamental_matrix_splg.png" width="250"/>
-  <img src="assets/homography_matrix_splg.png" width="250"/>
-</p>
-<!-- Row 2 -->
-<p align="center">
-  <img src="assets/essential_matrix_roma.png" width="250"/>
-  <img src="assets/fundamental_matrix_roma.png" width="250"/>
-  <img src="assets/homography_matrix_roma.png" width="250"/>
-</p>
+<table align="center">
+  <tr>
+    <td align="center"><img src="assets/essential_matrix_splg.png" width="250"/></td>
+    <td align="center"><img src="assets/fundamental_matrix_splg.png" width="250"/></td>
+    <td align="center"><img src="assets/homography_matrix_splg.png" width="250"/></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/essential_matrix_roma.png" width="250"/></td>
+    <td align="center"><img src="assets/fundamental_matrix_roma.png" width="250"/></td>
+    <td align="center"><img src="assets/homography_matrix_roma.png" width="250"/></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Essential matrix</b></td>
+    <td align="center"><b>Fundamental matrix</b></td>
+    <td align="center"><b>Homography</b></td>
+  </tr>
+</table>
+
 
 
 # Jupyter Notebook Examples
