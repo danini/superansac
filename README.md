@@ -26,6 +26,7 @@ pip install .
 
 # Results
 
+Below, the AUC@10^\circ scores are shown averaged over the LaMAR, PhotoTourism, ETH3D, Kitti, 7Scenes, and ScanNet datasets. 
 
 <!-- Row 1 -->
 <p align="center">
