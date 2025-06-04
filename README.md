@@ -24,6 +24,23 @@ Install SupeRANSAC by running
 pip install .
 ```
 
+# Results
+
+
+<!-- Row 1 -->
+<p align="center">
+  <img src="assets/essential_matrix_splg.png" width="250"/>
+  <img src="assets/fundamental_matrix_splg.png" width="250"/>
+  <img src="assets/homography_splg.png" width="250"/>
+</p>
+<!-- Row 2 -->
+<p align="center">
+  <img src="assets/essential_matrix_roma.png" width="250"/>
+  <img src="assets/fundamental_matrix_roma.png" width="250"/>
+  <img src="assets/homography_roma.png" width="250"/>
+</p>
+
+
 # Jupyter Notebook Examples
 
 - **Homography Fitting with SuperPoint + LightGlue Matches**  
