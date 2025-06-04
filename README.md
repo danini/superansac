@@ -31,13 +31,13 @@ pip install .
 <p align="center">
   <img src="assets/essential_matrix_splg.png" width="250"/>
   <img src="assets/fundamental_matrix_splg.png" width="250"/>
-  <img src="assets/homography_splg.png" width="250"/>
+  <img src="assets/homography_matrix_splg.png" width="250"/>
 </p>
 <!-- Row 2 -->
 <p align="center">
   <img src="assets/essential_matrix_roma.png" width="250"/>
   <img src="assets/fundamental_matrix_roma.png" width="250"/>
-  <img src="assets/homography_roma.png" width="250"/>
+  <img src="assets/homography_matrix_roma.png" width="250"/>
 </p>
 
 
