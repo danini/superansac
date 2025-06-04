@@ -1,4 +1,3 @@
-import cv2
 import os
 import numpy as np
 import argparse
@@ -7,16 +6,16 @@ import time
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from lightglue import LightGlue, SuperPoint
+from utils import detect_and_load_data
 from romatch import roma_outdoor
+from errors import homography_pose_error
 
 # Add the parent directory (../) to the Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
-from utils import read_h5, append_h5
-from functions import point_matching, normalize_keypoints
-from evaluation import evaluate_R_t, pose_auc
+from evaluation import pose_auc
 
 from datasets.scannet import ScanNet
 from datasets.lamar import Lamar
@@ -27,37 +26,13 @@ from datasets.seven_scenes import SevenScenes
 
 import pysuperansac
 
-def detect_and_load_data(data, args, detector, matcher):
-    img1 = data["img1"]
-    img2 = data["img2"]
-
-    # Database labels
-    label1 = "-".join(data["id1"].split("/")[-3:])
-    label2 = "-".join(data["id2"].split("/")[-3:])
-
-    # Try loading the point matches from the database file
-    matches = read_h5(f"{args.features.lower()}-{label1}-{label2}", args.output_db_path)
-    scores = read_h5(f"{args.features.lower()}-{label1}-{label2}-scores", args.output_db_path)
-    if matches is None:
-        start_time = time.time()
-        # Detect keypoints by SuperPoint + SuperGlue, LoFTR, or GlueStick
-        matches, scores = point_matching(img1, img2, args.features, detector, matcher, args.device)
-        # Saving to the database
-        append_h5({f"{args.features.lower()}-{label1}-{label2}": matches}, args.output_db_path)
-        append_h5({f"{args.features.lower()}-{label1}-{label2}-scores": scores}, args.output_db_path)
-        end_time = time.time()
-        print(f"Point matching took {end_time - start_time:.2f} seconds")
-
-    return matches, scores
-
 def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     # Sort the matches by matching score
     indices = np.argsort(scores)[::-1]
     matches = matches[indices, :]
     scores = scores[indices]
 
-    # Return if there are fewer than 4 corres
-    # pondences
+    # Return if there are fewer than 4 correspondences
     if matches.shape[0] < 8:
         return (np.inf, np.inf), 0, 0
     
@@ -73,14 +48,8 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         config.sampler = pysuperansac.SamplerType.PROSAC
     elif args.sampler == "PNAPSAC":
         config.sampler = pysuperansac.SamplerType.ProgressiveNAPSAC
-    elif args.sampler == "ARSampler":
-        config.sampler = pysuperansac.SamplerType.ARSampler
     elif args.sampler == "Importance":
         config.sampler = pysuperansac.SamplerType.ImportanceSampler
-    elif args.sampler == "NAPSAC":
-        config.sampler = pysuperansac.SamplerType.NAPSAC
-    else:
-        raise ValueError("Invalid sampler type.")
         
     if args.scoring == "RANSAC":
         config.scoring = pysuperansac.ScoringType.RANSAC
@@ -94,8 +63,19 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         config.scoring = pysuperansac.ScoringType.GAU
     elif args.scoring == "ML":
         config.scoring = pysuperansac.ScoringType.ML
-    else:
-        raise ValueError("Invalid scoring type.")
+        
+    if args.lo == "LSQ":
+        config.local_optimization = pysuperansac.LocalOptimizationType.LSQ
+    elif args.lo == "IRLS":
+        config.local_optimization = pysuperansac.LocalOptimizationType.IteratedLSQ
+    elif args.lo == "NestedRANSAC":
+        config.local_optimization = pysuperansac.LocalOptimizationType.NestedRANSAC
+    elif args.lo == "GCRANSAC":
+        config.local_optimization = pysuperansac.LocalOptimizationType.GCRANSAC
+    elif args.lo == "IteratedLMEDS":
+        config.local_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
+    elif args.lo == "Nothing":
+        config.local_optimization = pysuperansac.LocalOptimizationType.Nothing
         
     if args.fo == "LSQ":
         config.final_optimization = pysuperansac.LocalOptimizationType.LSQ
@@ -109,25 +89,10 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         config.local_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
     elif args.fo == "Nothing":
         config.final_optimization = pysuperansac.LocalOptimizationType.Nothing
-        
-    if args.fo == "LSQ":
-        config.final_optimization = pysuperansac.LocalOptimizationType.LSQ
-    elif args.fo == "IRLS":
-        config.final_optimization = pysuperansac.LocalOptimizationType.IteratedLSQ
-    elif args.fo == "NestedRANSAC":
-        config.final_optimization = pysuperansac.LocalOptimizationType.NestedRANSAC
-    elif args.fo == "GCRANSAC":
-        config.local_optimization = pysuperansac.LocalOptimizationType.GCRANSAC
-    elif args.fo == "IteratedLMEDS":
-        config.local_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
-    elif args.fo == "Nothing":
-        config.final_optimization = pysuperansac.LocalOptimizationType.Nothing
-    else:
-        raise ValueError("Invalid final optimization type.")
         
     config.neighborhood_settings.neighborhood_grid_density = 6
     config.neighborhood_settings.neighborhood_size = args.neighborhood_size
-
+    
     # If Importance sampler or ARSampler is used, the SNN ratios are converted as probabilities
     probabilities = []
     if args.sampler == "Importance" or args.sampler == "ARSampler":
@@ -137,72 +102,69 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
 
     # Run the homography estimation implemented in OpenCV
     tic = time.perf_counter()
-    F_est, inliers, score, iterations = pysuperansac.estimateFundamentalMatrix(
+    H_est, inliers, score, iterations = pysuperansac.estimateHomography(
         np.ascontiguousarray(matches), 
         probabilities,
         [image_size1[2], image_size1[1], image_size2[2], image_size2[1]],
         config = config)
     toc = time.perf_counter()
     elapsed_time = toc - tic
-
-    if F_est is None:
+        
+    if H_est is None:
         return (np.inf, np.inf), 0, elapsed_time
-
-    # Convert the fundamental matrix to essential matrix if the estimation is successful
-    E_est = K2.T @ F_est @ K1
-
-    norm_matches = np.zeros(matches.shape)
-    norm_matches[:, :2] = normalize_keypoints(matches[:, :2], K1)
-    norm_matches[:, 2:] = normalize_keypoints(matches[:, 2:], K2)
-
-    # Decompose the essential matrix to get the relative pose
-    if len(inliers) > 0:
-        _, R, t, _ = cv2.recoverPose(E_est, norm_matches[inliers, :2], norm_matches[inliers, 2:])
-    else:
-        R = np.eye(3)
-        t = np.zeros((3, 1))
-
+    
     # Count the inliers
     inlier_number = len(inliers)
 
-    return evaluate_R_t(R_gt, t_gt, R, t), inlier_number, elapsed_time
+    if inlier_number < 4:  
+        H_est = np.identity(3)
+
+    # Calculate the pose error of the estimated homography given the ground truth relative pose
+    pose = np.zeros((3, 4)) 
+    pose[:, :3] = R_gt
+    pose[:, 3] = t_gt.reshape(3)
+    rotation_error, translation_error, absolute_translation_error = homography_pose_error(H_est, 1.0, pose, K1, K2)
+
+    return (rotation_error, translation_error), inlier_number, elapsed_time
 
 if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running on the HEB benchmark")
     parser.add_argument('--features', type=str, help="Choose from: DISKLG, RoMA.", choices=["splg", "RoMA"], default="splg")
-    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=3000)
+    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2000)
     parser.add_argument("--confidence", type=float, default=0.9999999)
-    parser.add_argument("--inlier_threshold", type=float, default=3.0)
+    parser.add_argument("--inlier_threshold", type=float, default=5.0)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
     parser.add_argument("--maximum_iterations", type=int, default=1000)
-    parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler", "NAPSAC"], default="PROSAC")
+    parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler"], default="PROSAC")
     parser.add_argument("--scoring", type=str, help="Choose from: RANSAC, MSAC, MAGSAC, ACRANSAC.", choices=["RANSAC", "MSAC", "MAGSAC", "ACRANSAC"], default="MAGSAC")
-    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="NestedRANSAC")
-    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="LSQ")
-    parser.add_argument("--spatial_coherence_weight", type=float, default=0.1)
+    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="GCRANSAC")
+    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="IRLS")
+    parser.add_argument("--spatial_coherence_weight", type=float, default=0.8)
     parser.add_argument("--neighborhood_size", type=float, default=20)
-    parser.add_argument("--neighborhood_grid_density", type=float, default=4)
-    parser.add_argument("--core_number", type=int, default=19)
+    parser.add_argument("--neighborhood_grid_density", type=float, default=5)
+    parser.add_argument("--core_number", type=int, default=18)
     parser.add_argument("--device", type=str, default="cuda")
     
     args = parser.parse_args()
+
+    out = f"tests/homography/results_testing_superansac_{args.features}.csv"
     
     print(f"Testing SupeRANSAC")
-    
+
     if args.features == "splg":
         print("Initialize SP+LG detector")
         detector = SuperPoint(max_num_keypoints=2048).eval().to(args.device)  # load the extractor
         matcher = LightGlue(features='superpoint').eval().to(args.device)  # load the matcher
+        args.inlier_threshold = 5.0
     elif args.features == "RoMA":
         print("Initialize RoMA detector")
         detector = roma_outdoor(device = args.device)
         matcher = None
         args.inlier_threshold = 2.0
+        if args.lo == "GCRANSAC":
+            args.lo = "NestedRANSAC"
     
-    # The output file
-    out = f"tests/fundamental_matrix/results_testing_superansac_{args.features}_new.csv"
-
     dataset_paths = ["/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
                      "/media/hdd2tb/datasets/RANSAC-Tutorial-Data",
                      "/media/hdd3tb/datasets/lamar/CAB/sessions/query_val_hololens",
@@ -258,7 +220,6 @@ if __name__ == "__main__":
 
                     args.maximum_iterations = iters
                     args.minimum_iterations = iters
-                    args.scene_idx = i
 
                     results = Parallel(n_jobs=min(args.core_number, len(processing_queue)))(delayed(run)(
                         matches,
@@ -295,7 +256,7 @@ if __name__ == "__main__":
                 auc_t = 100 * np.r_[pose_auc(curr_pose_errors[:,1], thresholds=[5, 10, 20])]
                 auc_Rt = 100 * np.r_[pose_auc(curr_pose_errors.max(1), thresholds=[5, 10, 20])]
 
-                # Remove inf values 
+                # Remove inf values
                 curr_pose_errors = curr_pose_errors[np.isfinite(curr_pose_errors).all(axis=1)]
                 f.write(f"superansac,{args.features},{db_name},{args.inlier_threshold},{iters},{args.confidence},{args.spatial_coherence_weight},{args.neighborhood_grid_density},{args.sampler},0,0,{auc_R[0]},{auc_R[1]},{auc_R[2]},{auc_t[0]},{auc_t[1]},{auc_t[2]},{auc_Rt[0]},{auc_Rt[1]},{auc_Rt[2]},{np.mean(curr_pose_errors)},{np.median(curr_pose_errors)},{np.mean(runtimes[key])},{np.median(runtimes[key])},{np.mean(inlier_numbers[key])},{np.median(inlier_numbers[key])},0,{0},{0}\n")
 
