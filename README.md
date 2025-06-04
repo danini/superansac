@@ -1,4 +1,4 @@
-# SupeRANSAC ([Arxiv Paper](https://arxiv.org/pdf/2407.20219))
+# SupeRANSAC ([Arxiv Paper]())
 
 ## About
 

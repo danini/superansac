@@ -43,4 +43,4 @@ pyproject.toml
 *.egg
 *.csv
 *.pdf
-tests/*
+tests/*.csv
