@@ -47,6 +47,9 @@ We show results both with SuperPoint + LightGlue (top row) and RoMA (bottom) fea
   </tr>
 </table>
 
+Below, absolute pose (from 2D-3D correspondences) and rigid transformation (from 3D-3D matches) estimation results are shown. 
+For absolute pose estimation, we integrated SupeRANSAC into the hloc library.
+For rigid transformation estimation, we employ GeoTransformer features. 
 
 <table align="center">
   <tr>
