@@ -6,16 +6,17 @@ import sys
 import time
 from joblib import Parallel, delayed
 from tqdm import tqdm
-from evaluation import evaluate_R_t, pose_auc
 from lightglue import LightGlue, SuperPoint
-from utils import detect_and_load_data
 from romatch import roma_outdoor
-from functions import normalize_keypoints
 
 # Add the parent directory (../) to the Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
+
+from evaluation import evaluate_R_t, pose_auc
+from utils import detect_and_load_data
+from functions import normalize_keypoints
 
 from datasets.scannet import ScanNet
 from datasets.lamar import Lamar

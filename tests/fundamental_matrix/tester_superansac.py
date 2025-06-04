@@ -4,17 +4,19 @@ import numpy as np
 import argparse
 import sys
 import time
-from utils import read_h5, append_h5
 from joblib import Parallel, delayed
 from tqdm import tqdm
-from functions import point_matching, normalize_keypoints
-from evaluation import evaluate_R_t, pose_auc
 from lightglue import LightGlue, SuperPoint
+from romatch import roma_outdoor
 
 # Add the parent directory (../) to the Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
+
+from utils import read_h5, append_h5
+from functions import point_matching, normalize_keypoints
+from evaluation import evaluate_R_t, pose_auc
 
 from datasets.scannet import ScanNet
 from datasets.lamar import Lamar
