@@ -48,6 +48,18 @@ We show results both with SuperPoint + LightGlue (top row) and RoMA (bottom) fea
 </table>
 
 
+<table align="center">
+  <tr>
+    <td align="center"><img src="assets/absolute_pose_experiments.png" width="250"/></td>
+    <td align="center"><img src="assets/rigid_transform_experiments.png" width="250"/></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Absolute Pose with hloc</b></td>
+    <td align="center"><b>Rigid transform with GeoTransformer</b></td>
+  </tr>
+</table>
+
+
 
 # Jupyter Notebook Examples
 
@@ -219,12 +231,10 @@ The library supports several enumeration types to customize sampling, scoring, a
 The testing scripts for SupeRANSAC and the baselines are located in folder `tests/`.
 The results for essential, fundamental, and homography matrix estimation are obtained by running
 ```
-python tester-X-superansac.py
-python tester-X-baseline.py
+python tests/X/tester-X-superansac.py
 ```
-where X is E/F/H. Note that this process may take a while. 
+where X is essential/fundamental/homography matrix. Note that this process may take a while. 
 However, before running, you need to install the feature detectors and set up the datasets as described below. 
-Also, you need to install the baselines you want to test. 
 
 ### Install feature detectors
 
