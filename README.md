@@ -26,7 +26,8 @@ pip install .
 
 # Results
 
-Below, the AUC@10&deg; scores are shown averaged over the LaMAR, PhotoTourism, ETH3D, Kitti, 7Scenes, and ScanNet datasets. 
+Below, the AUC@10&deg; scores are shown averaged over the LaMAR, PhotoTourism, ETH3D, Kitti, 7Scenes, and ScanNet datasets.
+We show results both with SuperPoint + LightGlue (top row) and RoMA (bottom) features.  
 
 <!-- Row 1 -->
 <p align="center">
