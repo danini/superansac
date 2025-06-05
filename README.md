@@ -1,4 +1,4 @@
-# SupeRANSAC ([Arxiv Paper]())
+# SupeRANSAC: One RANSAC to Rule them All ([Arxiv Paper]())
 
 ## About
 
