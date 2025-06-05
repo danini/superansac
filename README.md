@@ -98,8 +98,8 @@ The library provides several model estimation functions and settings that allow 
 ### Importing the Library
 
 ```python
-import superansac
-from superansac import ScoringType, SamplerType, LocalOptimizationType, InlierSelectorType, NeighborhoodType, CameraType, RANSACSettings
+import pysuperansac
+from pysuperansac import ScoringType, SamplerType, LocalOptimizationType, InlierSelectorType, NeighborhoodType, CameraType, RANSACSettings
 ```
 
 ### Example: Estimate a Homography Matrix
@@ -125,14 +125,14 @@ config.local_optimization = LocalOptimizationType.GCRANSAC
 config.final_optimization = LocalOptimizationType.LSQ
 
 # Estimate homography
-result = superansac.estimateHomography(correspondences, image_sizes, config=config)
+result = pysuperansac.estimateHomography(correspondences, image_sizes, config=config)
 print("Estimated Homography Matrix:", result) 
 ```
 
 ### Supported Estimation Functions
 
 #### 1. Homography Estimation
-- **Function**: `superansac.estimateHomography`
+- **Function**: `pysuperansac.estimateHomography`
 - **Description**: Estimates a homography matrix from 2D-2D point correspondences.
 - **Parameters**:
   - `correspondences`: A list of paired 2D points.
@@ -141,7 +141,7 @@ print("Estimated Homography Matrix:", result)
   - `probabilities` *(optional)*: Correspondence probabilities.
 
 #### 2. Fundamental Matrix Estimation
-- **Function**: `superansac.estimateFundamentalMatrix`
+- **Function**: `pysuperansac.estimateFundamentalMatrix`
 - **Description**: Estimates a fundamental matrix from 2D-2D point correspondences.
 - **Parameters**:
   - `correspondences`: A list of paired 2D points.
@@ -150,7 +150,7 @@ print("Estimated Homography Matrix:", result)
   - `probabilities` *(optional)*: Correspondence probabilities.
 
 #### 3. Essential Matrix Estimation
-- **Function**: `superansac.estimateEssentialMatrix`
+- **Function**: `pysuperansac.estimateEssentialMatrix`
 - **Description**: Estimates an essential matrix using 2D-2D point correspondences and intrinsic matrices.
 - **Parameters**:
   - `correspondences`: A list of paired 2D points.
@@ -161,7 +161,7 @@ print("Estimated Homography Matrix:", result)
   - `probabilities` *(optional)*: Correspondence probabilities.
 
 #### 4. Rigid Transformation Estimation
-- **Function**: `superansac.estimateRigidTransform`
+- **Function**: `pysuperansac.estimateRigidTransform`
 - **Description**: Estimates a 6D rigid transformation matrix from 3D-3D point correspondences.
 - **Parameters**:
   - `correspondences`: A list of paired 3D points.
@@ -170,7 +170,7 @@ print("Estimated Homography Matrix:", result)
   - `probabilities` *(optional)*: Correspondence probabilities.
 
 #### 5. Absolute Pose Estimation
-- **Function**: `superansac.estimateAbsolutePose`
+- **Function**: `pysuperansac.estimateAbsolutePose`
 - **Description**: Estimates the absolute pose of a camera using 2D-3D correspondences.
 - **Parameters**:
   - `correspondences`: A list of paired 2D-3D points.
