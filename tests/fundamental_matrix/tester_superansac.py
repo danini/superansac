@@ -169,11 +169,11 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
 
 if __name__ == "__main__":
     # Passing the arguments
-    parser = argparse.ArgumentParser(description="Running on the HEB benchmark")
-    parser.add_argument('--features', type=str, help="Choose from: DISKLG, RoMA.", choices=["splg", "RoMA"], default="splg")
+    parser = argparse.ArgumentParser(description="Running on fundamental matrix estimation with SupeRANSAC")
+    parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA.", choices=["splg", "RoMA"], default="splg")
     parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=3000)
     parser.add_argument("--confidence", type=float, default=0.9999999)
-    parser.add_argument("--inlier_threshold", type=float, default=3.0)
+    parser.add_argument("--inlier_threshold", type=float, default=-1.0)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
     parser.add_argument("--maximum_iterations", type=int, default=1000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler", "NAPSAC"], default="PROSAC")
@@ -194,14 +194,19 @@ if __name__ == "__main__":
         print("Initialize SP+LG detector")
         detector = SuperPoint(max_num_keypoints=2048).eval().to(args.device)  # load the extractor
         matcher = LightGlue(features='superpoint').eval().to(args.device)  # load the matcher
+        if args.inlier_threshold <= 0:
+            args.inlier_threshold = 3.0
+            print(f"Setting the threshold to {args.inlier_threshold} px as it works best for F estimation with SP-LG features.")
     elif args.features == "RoMA":
         print("Initialize RoMA detector")
         detector = roma_outdoor(device = args.device)
         matcher = None
-        args.inlier_threshold = 2.0
+        if args.inlier_threshold <= 0:
+            args.inlier_threshold = 2.0
+            print(f"Setting the threshold to {args.inlier_threshold} px as it works best for F estimation with RoMA features.")
     
     # The output file
-    out = f"tests/fundamental_matrix/results_testing_superansac_{args.features}_new.csv"
+    out = f"tests/fundamental_matrix/results_testing_superansac_{args.features}.csv"
 
     dataset_paths = ["/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
                      "/media/hdd2tb/datasets/RANSAC-Tutorial-Data",
@@ -223,7 +228,7 @@ if __name__ == "__main__":
         elif dataset_class == SevenScenes:
             dataset = SevenScenes(root_dir=os.path.expanduser(dataset_paths[idx]), split='test', scene='all')
         elif dataset_class == Kitti:
-            dataset = Kitti(root_dir=os.path.expanduser(dataset_paths[idx]), steps=20)
+            dataset = Kitti(root_dir=os.path.expanduser(dataset_paths[idx]))
         else:
             raise ValueError(f"Unknown dataset: '{dataset_class}'")
         

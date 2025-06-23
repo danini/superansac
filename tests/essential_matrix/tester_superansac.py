@@ -104,11 +104,11 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     # Run the homography estimation implemented in OpenCV
     tic = time.perf_counter()
     E_est, inliers, score, iterations = pysuperansac.estimateEssentialMatrix(
-        np.ascontiguousarray(matches), 
+        np.ascontiguousarray(matches).astype(np.float64), 
         K1,
         K2,
-        probabilities,
         [image_size1[2], image_size1[1], image_size2[2], image_size2[1]],
+        probabilities,
         config = config)
     toc = time.perf_counter()
     elapsed_time = toc - tic
@@ -135,10 +135,10 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
 if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running on essential matrix estimation with SupeRANSAC")
-    parser.add_argument('--features', type=str, help="Choose from: DISKLG, RoMA.", choices=["splg", "RoMA"], default="splg")
-    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=3000)
+    parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA.", choices=["splg", "RoMA"], default="splg")
+    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2000)
     parser.add_argument("--confidence", type=float, default=0.9999999)
-    parser.add_argument("--inlier_threshold", type=float, default=5.0)
+    parser.add_argument("--inlier_threshold", type=float, default=-1.0)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
     parser.add_argument("--maximum_iterations", type=int, default=1000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler"], default="PROSAC")
@@ -159,22 +159,29 @@ if __name__ == "__main__":
         print("Initialize SP+LG detector")
         detector = SuperPoint(max_num_keypoints=2048).eval().to(args.device)  # load the extractor
         matcher = LightGlue(features='superpoint').eval().to(args.device)  # load the matcher
+        
+        if args.inlier_threshold <= 0:
+            args.inlier_threshold = 5.0
+            print(f"Setting the threshold to {args.inlier_threshold} px as it works best for E estimation with SP-LG features.")
     elif args.features == "RoMA":
         print("Initialize RoMA detector")
         detector = roma_outdoor(device = args.device)
         matcher = None
-        args.inlier_threshold = 2.0
+        
+        if args.inlier_threshold <= 0:
+            args.inlier_threshold = 3.0
+            print(f"Setting the threshold to {args.inlier_threshold} px as it works best for E estimation with RoMA features.")
     
     # The output file
-    out = f"tests/essential_matrix/results_testing_superansac_{args.features}_new.csv"
+    out = f"tests/essential_matrix/results_testing_superansac_{args.features}.csv"
 
-    dataset_paths = ["/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
-                     "/media/hdd2tb/datasets/RANSAC-Tutorial-Data",
-                     "/media/hdd3tb/datasets/lamar/CAB/sessions/query_val_hololens",
-                      "/media/hdd2tb/datasets/7scenes",
-                     "/media/hdd3tb/datasets/kitti/dataset",
+    dataset_paths = [#"/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
+                     #"/media/hdd2tb/datasets/RANSAC-Tutorial-Data",
+                     #"/media/hdd3tb/datasets/lamar/CAB/sessions/query_val_hololens",
+                     #"/media/hdd2tb/datasets/7scenes",
+                     #"/media/hdd3tb/datasets/kitti/dataset",
                      "/media/hdd3tb/datasets/eth3d"]
-    datasets = [ScanNet, PhotoTourism, Lamar, SevenScenes, Kitti, ETH3D]
+    datasets = [ETH3D] # ScanNet, PhotoTourism, Lamar, SevenScenes, Kitti, 
 
     for idx, dataset_class in enumerate(datasets):
         if dataset_class == ScanNet:
@@ -188,7 +195,7 @@ if __name__ == "__main__":
         elif dataset_class == SevenScenes:
             dataset = SevenScenes(root_dir=os.path.expanduser(dataset_paths[idx]), split='test', scene='all')
         elif dataset_class == Kitti:
-            dataset = Kitti(root_dir=os.path.expanduser(dataset_paths[idx]), steps=20)
+            dataset = Kitti(root_dir=os.path.expanduser(dataset_paths[idx]))
         else:
             raise ValueError(f"Unknown dataset: '{dataset_class}'")
         
@@ -214,7 +221,7 @@ if __name__ == "__main__":
             
             ## Running the estimators so we don't have too much things in the memory
             if len(processing_queue) >= args.batch_size or i == len(dataloader) - 1:
-                for iters in [5000]: #[10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]:
+                for iters in [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]:
                     key = iters
                     if iters not in pose_errors:
                         pose_errors[key] = []
@@ -252,7 +259,7 @@ if __name__ == "__main__":
             with open(out, "w") as f:
                 f.write("method,features,dataset,threshold,maximum_iterations,confidence,spatial_weight,neighborhood_size,sampler,space_partitioning,sprt,auc_R5,auc_R10,auc_R20,auc_t5,auc_t10,auc_t20,auc_Rt5,auc_Rt10,auc_Rt20,avg_error,med_error,avg_time,median_time,avg_inliers,median_inliers,variance,solver,scoring\n")
         with open(out, "a") as f:
-            for iters in [5000]: #[10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]:
+            for iters in [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]:
                 key = iters
                 curr_pose_errors = np.array(pose_errors[key])
                 auc_R = 100 * np.r_[pose_auc(curr_pose_errors[:,0], thresholds=[5, 10, 20])]
