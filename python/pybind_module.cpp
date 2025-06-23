@@ -151,21 +151,81 @@ PYBIND11_MODULE(pysuperansac, m) {
         .def_readwrite("neighborhood_settings", &superansac::RANSACSettings::neighborhoodSettings);
     
     // Expose the function to Python
-    m.def("estimateHomography", &estimateHomography, "A function that performs homography estimation from point correspondences.",
+    m.def("estimateHomography",
+        [](py::array_t<double, py::array::c_style | py::array::forcecast> correspondences,
+           const std::vector<double>& image_sizes,
+           const std::vector<double>& probabilities,
+           superansac::RANSACSettings& config) {
+  
+            auto buf = correspondences.request();
+            if (buf.ndim != 2)
+                throw std::runtime_error("Input must be a 2D array");
+  
+            Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> mat(
+                static_cast<double*>(buf.ptr), buf.shape[0], buf.shape[1]);
+  
+            return estimateHomography(mat, probabilities, image_sizes, config);
+        },
+        "A function that performs homography estimation from point correspondences.",
         py::arg("correspondences"),
         py::arg("image_sizes"),
         py::arg("probabilities") = std::vector<double>(),
         py::arg("config") = superansac::RANSACSettings());
         
     // Expose the function to Python
-    m.def("estimateFundamentalMatrix", &estimateFundamentalMatrix, "A function that performs fundamental matrix estimation from point correspondences.",
+    m.def("estimateFundamentalMatrix",
+        [](py::array_t<double, py::array::c_style | py::array::forcecast> correspondences,
+           const std::vector<double>& image_sizes,
+           const std::vector<double>& probabilities,
+           superansac::RANSACSettings& config) {
+  
+            auto buf = correspondences.request();
+            if (buf.ndim != 2)
+                throw std::runtime_error("Input must be a 2D array");
+  
+            Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> mat(
+                static_cast<double*>(buf.ptr), buf.shape[0], buf.shape[1]);
+  
+            return estimateFundamentalMatrix(mat, probabilities, image_sizes, config);
+        },
+        "A function that performs fundamental matrix estimation from point correspondences.",
         py::arg("correspondences"),
         py::arg("image_sizes"),
         py::arg("probabilities") = std::vector<double>(),
         py::arg("config") = superansac::RANSACSettings());
         
     // Expose the function to Python
-    m.def("estimateEssentialMatrix", &estimateEssentialMatrix, "A function that performs fundamental matrix estimation from point correspondences.",
+    m.def("estimateEssentialMatrix",
+        [](py::array_t<double, py::array::c_style | py::array::forcecast> correspondences,
+           py::array_t<double, py::array::c_style | py::array::forcecast> intrinsics_src,
+           py::array_t<double, py::array::c_style | py::array::forcecast> intrinsics_dst,
+           const std::vector<double>& image_sizes,
+           const std::vector<double>& probabilities,
+           superansac::RANSACSettings& config) {
+  
+            auto buf = correspondences.request();
+            if (buf.ndim != 2)
+                throw std::runtime_error("Input must be a 2D array");
+  
+            Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> mat(
+                static_cast<double*>(buf.ptr), buf.shape[0], buf.shape[1]);
+
+            auto intr_src_buf = intrinsics_src.request();
+            if (intr_src_buf.ndim != 2 || intr_src_buf.shape[0] != 3 || intr_src_buf.shape[1] != 3)
+                throw std::runtime_error("intrinsics_src must be a 3x3 matrix");
+
+            auto intr_dst_buf = intrinsics_dst.request();
+            if (intr_dst_buf.ndim != 2 || intr_dst_buf.shape[0] != 3 || intr_dst_buf.shape[1] != 3)
+                throw std::runtime_error("intrinsics_dst must be a 3x3 matrix");
+
+            Eigen::Map<const Eigen::Matrix<double, 3, 3, Eigen::RowMajor>> intrinsics_src_mat(
+                static_cast<double*>(intr_src_buf.ptr));
+            Eigen::Map<const Eigen::Matrix<double, 3, 3, Eigen::RowMajor>> intrinsics_dst_mat(
+                static_cast<double*>(intr_dst_buf.ptr));
+  
+            return estimateEssentialMatrix(mat, intrinsics_src_mat, intrinsics_dst_mat, probabilities, image_sizes, config);
+        },
+        "A function that performs essential matrix estimation from point correspondences.",
         py::arg("correspondences"),
         py::arg("intrinsics_src"),
         py::arg("intrinsics_dst"),
@@ -174,14 +234,46 @@ PYBIND11_MODULE(pysuperansac, m) {
         py::arg("config") = superansac::RANSACSettings());
         
     // Expose the function to Python
-    m.def("estimateRigidTransform", &estimateRigidTransform, "A function that performs 6D rigid transformation estimation from 3D-3D point correspondences.",
+    m.def("estimateRigidTransform",
+        [](py::array_t<double, py::array::c_style | py::array::forcecast> correspondences,
+           const std::vector<double>& bounding_box_sizes,
+           const std::vector<double>& probabilities,
+           superansac::RANSACSettings& config) {
+
+            auto buf = correspondences.request();
+            if (buf.ndim != 2)
+                throw std::runtime_error("Input must be a 2D array");
+
+            Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> mat(
+                                                                                                         static_cast<double*>(buf.ptr), buf.shape[0], buf.shape[1]);
+
+            return estimateRigidTransform(mat, bounding_box_sizes, probabilities, config);
+        },
+        "A function that performs 6D rigid transformation estimation from 3D-3D point correspondences.",
         py::arg("correspondences"),
         py::arg("bounding_box_sizes"),
         py::arg("probabilities") = std::vector<double>(),
         py::arg("config") = superansac::RANSACSettings());
         
     // Expose the function to Python
-    m.def("estimateAbsolutePose", &estimateAbsolutePose, "A function that performs absolute camera pose estimation from 2D-3D point correspondences.",
+    m.def("estimateAbsolutePose",
+        [](py::array_t<double, py::array::c_style | py::array::forcecast> correspondences,
+           const superansac::camera::CameraType& camera_type,
+           const std::vector<double>& camera_params,
+           const std::vector<double>& bounding_box,
+           const std::vector<double>& probabilities,
+           superansac::RANSACSettings& config) {
+  
+            auto buf = correspondences.request();
+            if (buf.ndim != 2)
+                throw std::runtime_error("Input must be a 2D array");
+  
+            Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> mat(
+                static_cast<double*>(buf.ptr), buf.shape[0], buf.shape[1]);
+  
+            return estimateAbsolutePose(mat, camera_type, camera_params, bounding_box, probabilities, config);
+        },
+        "A function that performs absolute camera pose estimation from 2D-3D point correspondences.",
         py::arg("correspondences"),
         py::arg("camera_type"),
         py::arg("camera_params"),
