@@ -186,6 +186,7 @@ class ETH3D(Dataset):
 
         return {
             "id1": data["ref_name"], "id2": data["target_name"],
+            "path1": data["ref_img_path"], "path2": data["target_img_path"],
             "img1": ref_img, "img2": target_img,
             "R_1_2": Rt[:3, :3], "T_1_2": Rt[:3, 3],
             "K1": data["ref_undist_camera"],

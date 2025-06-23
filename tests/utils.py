@@ -323,3 +323,5 @@ def detect_and_load_data(data, args, detector, matcher):
         print(f"Point matching took {end_time - start_time:.2f} seconds")
     else:
         raise NotImplementedError
+    
+    return matches, scores
