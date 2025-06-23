@@ -11,7 +11,7 @@ def simple_collate_fn(sample):
 
 
 class Kitti(Dataset):
-    def __init__(self, root_dir, sequences='all', steps=20):
+    def __init__(self, root_dir, sequences='all'):
         self.root_dir = root_dir
         self.name = "KITTI"
         if sequences == 'all':
@@ -25,7 +25,7 @@ class Kitti(Dataset):
         (self.img_pairs, self.K1, self.K2, self.T_1_2, self.R_1_2,
          self.R1, self.R2) = [], [], [], [], [], [], []
         for s in sequences:
-            data = pykitti.odometry(root_dir, s, steps=steps)
+            data = pykitti.odometry(root_dir, s)
             num_imgs = len(data.cam0_files)
             # Load the image pairs
             self.img_pairs += [(data.cam0_files[i], data.cam0_files[i + 1])
