@@ -276,7 +276,7 @@ def run(matches, scores, K1, K2, R_gt, t_gt, args):
 
 if __name__ == "__main__":
     # Passing the arguments
-    parser = argparse.ArgumentParser(description="Running on the HEB benchmark")
+    parser = argparse.ArgumentParser(description="Running on essential matrix estimation with baselines.")
     parser.add_argument('--features', type=str, help="Choose from: splg, RoMA.", choices=["splg", "RoMA"], default="splg")
     parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=1000)
     parser.add_argument('--output_db_path', type=str, help="The path to where the dataset of matches should be saved.", default="/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test/matches.h5")
