@@ -139,8 +139,8 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     tic = time.perf_counter()
     F_est, inliers, score, iterations = pysuperansac.estimateFundamentalMatrix(
         np.ascontiguousarray(matches), 
-        probabilities,
         [image_size1[2], image_size1[1], image_size2[2], image_size2[1]],
+        probabilities,
         config = config)
     toc = time.perf_counter()
     elapsed_time = toc - tic
@@ -178,8 +178,8 @@ if __name__ == "__main__":
     parser.add_argument("--maximum_iterations", type=int, default=1000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler", "NAPSAC"], default="PROSAC")
     parser.add_argument("--scoring", type=str, help="Choose from: RANSAC, MSAC, MAGSAC, ACRANSAC.", choices=["RANSAC", "MSAC", "MAGSAC", "ACRANSAC"], default="MAGSAC")
-    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="NestedRANSAC")
-    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="LSQ")
+    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="GCRANSAC")
+    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="IRLS")
     parser.add_argument("--spatial_coherence_weight", type=float, default=0.1)
     parser.add_argument("--neighborhood_size", type=float, default=20)
     parser.add_argument("--neighborhood_grid_density", type=float, default=4)
@@ -189,13 +189,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     print(f"Testing SupeRANSAC")
-    
+
     if args.features == "splg":
         print("Initialize SP+LG detector")
         detector = SuperPoint(max_num_keypoints=2048).eval().to(args.device)  # load the extractor
         matcher = LightGlue(features='superpoint').eval().to(args.device)  # load the matcher
         if args.inlier_threshold <= 0:
-            args.inlier_threshold = 3.0
+            args.inlier_threshold = 2.0
             print(f"Setting the threshold to {args.inlier_threshold} px as it works best for F estimation with SP-LG features.")
     elif args.features == "RoMA":
         print("Initialize RoMA detector")
