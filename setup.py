@@ -35,11 +35,15 @@ class CMakeBuild(build_ext):
 
 setup(
     name='pysuperansac',
-    version='0.1',
+    version='1.0',
     author='Daniel Barath',
+    author_email="majti89@gmail.com",
     description='A RANSAC implementation for robust estimation.',
-    long_description='',
+    long_description=open("README.md").read(),
+    long_description_content_type="text/markdown",
     ext_modules=[CMakeExtension('SupeRANSAC', sourcedir='.')],
     cmdclass=dict(build_ext=CMakeBuild),
+    url="https://github.com/you/superansac",
     zip_safe=False,
+    license='MIT',
 )
