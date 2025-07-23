@@ -105,7 +105,6 @@ namespace superansac
 				scoring::Score &estimatedScore_, // The score of the estimated model
 				std::vector<size_t> &estimatedInliers_) const // The inliers of the estimated model
 			{
-				//std::cout <<  1 << std::endl;
 				if (neighborhoodGraph == nullptr)
 					throw std::runtime_error("The neighborhood graph is not set.");
 
@@ -141,18 +140,17 @@ namespace superansac
 
 				// The inlier-outlier threshold
 				const double &kThreshold = kScoring_->getThreshold();
-				//std::cout << 2 << std::endl;
 
 				// The inner RANSAC loop
 				for (size_t iteration = 0; iteration < graphCutNumber; ++iteration)
 				{
-					//std::cout << 3 << std::endl;
 					// In the beginning, the best model is not updated
 					updated = false;
 
 					// Apply the graph-cut-based inlier/outlier labeling.
 					// The inlier set will contain the points closer than the threshold and
 					// their neighbors depending on the weight of the spatial coherence term.
+					currentInliers.clear();
 					labeling(
 						kData_, // The input points
 						kNeighborNumber, // The number of neighbors, i.e. the edge number of the graph 
@@ -161,7 +159,6 @@ namespace superansac
 						spatialCoherenceWeight, // The weight of the spatial coherence term
 						kThreshold, // The inlier-outlier threshold
 						currentInliers); // The selected inliers
-					//std::cout << 4 << std::endl;
 
 					// Calculate the current sample size
 					currentSampleSize = currentInliers.size() - 1;
@@ -171,16 +168,13 @@ namespace superansac
 					// Break if the sample size is too small
 					if (currentSampleSize < kEstimator_->sampleSize())
 						break;
-					//std::cout << 5 << std::endl;
 						
 					// Re-initialize the sampler with the current inliers
 					sampler.initialize(currentInliers.size() - 1);
-					//std::cout << 6 << std::endl;
 
 					// Doing inner RANSACs using the current pool of potential inliers
 					for (size_t innerIterations = 0; innerIterations < maxIterations; ++innerIterations)
 					{
-						//std::cout << 61 << std::endl;
 						// Remove the previous models
 						currentlyEstimatedModels.clear();
 						// Add the previous model to the list of models so that if iterative optimization is applied, it can use it as a starting point
@@ -189,7 +183,6 @@ namespace superansac
 						// If there are enough inliers to estimate the model, use all of them
 						if (currentSampleSize == currentInliers.size())
 						{
-							//std::cout << 62 << std::endl;
 							// Estimate the model
 							if (!kEstimator_->estimateModelNonminimal(
 								kData_,  // The data points
@@ -198,10 +191,8 @@ namespace superansac
 								&currentlyEstimatedModels, // The estimated models
 								nullptr)) // The indices of the inliers
 								continue;
-							//std::cout << 63 << std::endl;
 						} else
 						{
-							//std::cout << 64 << std::endl;
 							// Sample minimal set
 							if (!sampler.sample(currentInliers.size(), // Data matrix
 								currentSampleSize, // Selected minimal sample 
@@ -223,10 +214,8 @@ namespace superansac
 									currentSample, // Selected minimal sample
 									&currentlyEstimatedModels)) // The estimated models
 									continue;
-							//std::cout << 65 << std::endl;
 						}
 
-						//std::cout << 66 << std::endl;
 						// Calculate the scoring of the estimated model
 						for (const auto &model : currentlyEstimatedModels)
 						{
@@ -244,16 +233,12 @@ namespace superansac
 								updated = true;
 							}
 						}
-						//std::cout << 67 << std::endl;
 					}
-					//std::cout << 7 << std::endl;
 
 					// If the model is not updated, interrupt the procedure
 					if (!updated)
 						break;
 				}
-				//std::cout << 8 << std::endl;
-
 
 				// Clean up
 				delete[] currentSample;
@@ -269,7 +254,6 @@ namespace superansac
 				const double kThreshold_, // The kThreshold_ for the inlier-outlier decision
 				std::vector<size_t> &inliers_) const // The resulting inlier set
 			{
-				//std::cout << 31 << std::endl;
 				// The number of points in the data set
 				const int &pointNumber = kData_.rows();
 
@@ -291,7 +275,6 @@ namespace superansac
 				const double squaredTruncatedThreshold = kThreshold_ * kThreshold_;
 				const double oneMinusLambda = 1.0 - kLambda_;
 
-				//std::cout << 32 << std::endl;
 				// Estimate the vertex capacities
 				for (size_t i = 0; i < pointNumber; ++i)
 				{
@@ -311,7 +294,6 @@ namespace superansac
 						problemGraph->add_term1(i, 0, oneMinusLambda * (1 - tmpEnergy));
 				}
 
-				//std::cout << 33 << std::endl;
 				std::vector<std::vector<int>> usedEdges(pointNumber, std::vector<int>(pointNumber, 0));
 
 				if (kLambda_ > 0)
@@ -359,22 +341,18 @@ namespace superansac
 						}
 					}
 				}
-				//std::cout << 34 << std::endl;
 
 				// Run the standard st-graph-cut algorithm
 				problemGraph->minimize();
-				//std::cout << 35<< std::endl;
 
 				// Select the inliers, i.e., the points labeled as SINK.
 				inliers_.reserve(pointNumber); 
 				for (auto pointIdx = 0; pointIdx < pointNumber; ++pointIdx)
 					if (problemGraph->what_segment(pointIdx) == Graph<double, double, double>::SINK)
 						inliers_.emplace_back(pointIdx);
-				//std::cout << 36 << std::endl;
 
 				// Clean the memory
 				delete problemGraph;
-				//std::cout << 37 << std::endl;
 			} 
 		};
 	}
