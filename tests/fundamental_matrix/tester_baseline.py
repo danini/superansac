@@ -333,7 +333,7 @@ if __name__ == "__main__":
                 for method in ["vsac", "MAGSAC OpenCV", "GCRANSAC OpenCV", "poselib", "RANSAC OpenCV", "LMEDS OpenCV", "magsac", "magsac++"]:
                     for iters in [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]:
                         key = (method, iters)
-                        if iters not in pose_errors:
+                        if key not in pose_errors:
                             pose_errors[key] = []
                             runtimes[key] = []
                             inlier_numbers[key] = []

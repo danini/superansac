@@ -40,6 +40,7 @@
 #include "nested_ransac_optimizer.h"
 #include "graph_cut_ransac_optimizer.h"
 #include "iterated_lmeds_optimizer.h"
+#include "cross_validation_optimizer.h"
 
 namespace superansac {
 namespace local_optimization {
@@ -51,7 +52,8 @@ namespace local_optimization {
         IRLS,
         NestedRANSAC,
         GCRANSAC,
-        IteratedLMEDS
+        IteratedLMEDS,
+        CrossValidation
     };
 
     // Factory function to create samplers
@@ -69,6 +71,8 @@ namespace local_optimization {
                 return std::make_unique<GraphCutRANSACOptimizer>();
             case LocalOptimizationType::IteratedLMEDS:
                 return std::make_unique<IteratedLMEDSOptimizer>();
+            case LocalOptimizationType::CrossValidation:
+                return std::make_unique<CrossValidationOptimizer>();
             default:
                 throw std::invalid_argument("Unknown Local Optimizer Type");
         }

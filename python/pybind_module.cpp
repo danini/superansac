@@ -85,6 +85,7 @@ PYBIND11_MODULE(pysuperansac, m) {
         .value("NestedRANSAC", superansac::local_optimization::LocalOptimizationType::NestedRANSAC)
         .value("GCRANSAC", superansac::local_optimization::LocalOptimizationType::GCRANSAC)
         .value("IteratedLMEDS", superansac::local_optimization::LocalOptimizationType::IteratedLMEDS)
+        .value("CrossValidation", superansac::local_optimization::LocalOptimizationType::CrossValidation)
         .export_values();
 
     // Expose the Termination types to Python

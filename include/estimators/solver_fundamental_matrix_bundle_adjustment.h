@@ -54,10 +54,12 @@ namespace superansac
 			{
 			protected:
 				poselib::BundleOptions options;
+				const std::vector<double> *pointWeights;
 
 			public:
 				FundamentalMatrixBundleAdjustmentSolver(poselib::BundleOptions kOptions_ = poselib::BundleOptions())
-					: options(kOptions_)
+					: options(kOptions_), 
+					pointWeights(nullptr)
 				{
 				}
 
@@ -89,6 +91,11 @@ namespace superansac
 					return options;
 				}
 
+				void setWeights(const std::vector<double> *pointWeights_)
+				{
+					pointWeights = pointWeights_;
+				}
+
 				// Estimate the model parameters from the given point sample
 				// using weighted fitting if possible.
 				FORCE_INLINE bool estimateModel(
@@ -106,18 +113,16 @@ namespace superansac
 				std::vector<models::Model> &models_, // The estimated model parameters
 				const double *kWeights_) const // The weight for each point
 			{				
-				/*std::cout << "BA" << std::endl;
-
-				std::cout << kSampleNumber_ << std::endl;
-				std::cout << kData_.rows() << std::endl;
-				std::cout << models_[0].getData() << std::endl;*/
-
 				// Check if we have enough points for the bundle adjustment
 				if (kSampleNumber_ < sampleSize())
 					return false;
 
 				std::vector<Eigen::Vector2d> x1(kSampleNumber_); 
 				std::vector<Eigen::Vector2d> x2(kSampleNumber_); 
+				std::vector<double> weights;
+				bool useWeights = (pointWeights != nullptr && pointWeights->size() == kSampleNumber_);
+				if (useWeights)
+					weights.resize(kSampleNumber_);
 
 				if (kSample_ == nullptr)
 				{
@@ -125,16 +130,19 @@ namespace superansac
 					{
 						x1[pointIdx] = Eigen::Vector2d(kData_(pointIdx, 0), kData_(pointIdx, 1));
 						x2[pointIdx] = Eigen::Vector2d(kData_(pointIdx, 2), kData_(pointIdx, 3));
+						if (useWeights)
+							weights[pointIdx] = pointWeights->at(pointIdx);
 					}
 				} else
 				{
 					for (size_t pointIdx = 0; pointIdx < kSampleNumber_; pointIdx++)
 					{
-						//std::cout << kSample_[pointIdx] << " ";
-						x1[pointIdx] = Eigen::Vector2d(kData_(kSample_[pointIdx], 0), kData_(kSample_[pointIdx], 1));
-						x2[pointIdx] = Eigen::Vector2d(kData_(kSample_[pointIdx], 2), kData_(kSample_[pointIdx], 3));
+						const size_t &idx = kSample_[pointIdx];
+						x1[pointIdx] = Eigen::Vector2d(kData_(idx, 0), kData_(idx, 1));
+						x2[pointIdx] = Eigen::Vector2d(kData_(idx, 2), kData_(idx, 3));
+						if (useWeights)
+							weights[pointIdx] = pointWeights->at(idx);
 					}
-					//std::cout << std::endl;
 				}
 				
 				if (models_.size() == 0)
@@ -145,17 +153,6 @@ namespace superansac
 					if (models_.size() == 0)
 						return false;
 				}
-
-				/*std::cout << options.max_iterations << std::endl;
-				std::cout << options.loss_type << std::endl;
-				std::cout << options.loss_scale << std::endl;
-				std::cout << options.gradient_tol << std::endl;
-				std::cout << options.step_tol << std::endl;
-				std::cout << options.initial_lambda << std::endl;
-				std::cout << options.min_lambda << std::endl;
-				std::cout << options.max_lambda << std::endl;
-				std::cout << options.verbose << std::endl;
-				std::cout << options.loss_scale << std::endl;*/
 
 				poselib::BundleOptions tmpOptions = options;
 				if (kSample_ != nullptr)
@@ -176,22 +173,21 @@ namespace superansac
 						x1, 
 						x2, 
 						&fundamentalMatrix,
-						tmpOptions);
-
-					/*if (kSample_ != nullptr)
+						tmpOptions,
+						weights);
+					
+					if (stats.cost > stats.initial_cost)
 					{
-						std::cout << tmpOptions.max_iterations << std::endl;
-						std::cout << tmpOptions.loss_type << std::endl;
-						std::cout << tmpOptions.loss_scale << std::endl;
-						std::cout << tmpOptions.gradient_tol << std::endl;
-						std::cout << tmpOptions.step_tol << std::endl;
-						std::cout << tmpOptions.initial_lambda << std::endl;
-						std::cout << tmpOptions.min_lambda << std::endl;
-						std::cout << tmpOptions.max_lambda << std::endl;
-						std::cout << tmpOptions.verbose << std::endl;
-						std::cout << fundamentalMatrix << std::endl;
-						std::cout << "----------------" << std::endl;
-					}*/
+						std::cout <<std::endl<<stats.iterations;
+						std::cout <<std::endl<<stats.initial_cost;
+						std::cout <<std::endl<<stats.cost;
+						std::cout <<std::endl<<stats.lambda;
+						std::cout <<std::endl<<stats.invalid_steps;
+						std::cout <<std::endl<<stats.step_norm;
+						std::cout <<std::endl<<stats.grad_norm;
+
+						while (1);
+					}
 
 					// Update the model
 					model.getMutableData().block<3, 3>(0, 0) = fundamentalMatrix;

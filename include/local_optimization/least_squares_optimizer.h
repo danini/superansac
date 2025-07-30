@@ -81,18 +81,8 @@ namespace superansac
 
 				if (useInliers)
 				{
-					//std::cout << " - " << kInliers_.size() << std::endl;
-					//std::cout << " - " << kScore_.getValue() << std::endl;
 					if (kInliers_.size() > 0)
 					{
-						/*std::cout << "FO" << std::endl;
-						std::cout << estimatedModels[0].getData() << std::endl;
-						std::cout << kInliers_.size() << std::endl;
-
-						for (const auto &inlier : kInliers_)
-							std::cout << inlier << " ";
-						std::cout << std::endl;*/
-
 						// Estimate the model using the inliers
 						if (!kEstimator_->estimateModelNonminimal(
 							kData_,  // The data points
@@ -104,8 +94,6 @@ namespace superansac
 							estimatedScore_ = kInvalidScore;
 							return;
 						}
-
-						//std::cout << estimatedModels[0].getData() << std::endl;
 					}
 					else
 					{
@@ -124,7 +112,6 @@ namespace superansac
 							return;
 						}
 					}
-					//std::cout << " - " << estimatedScore_.getValue() << std::endl;
 				} else if (!kEstimator_->estimateModelNonminimal(
 					kData_,  // The data points
 					nullptr, 
@@ -143,8 +130,6 @@ namespace superansac
 				std::vector<size_t> tmpInliers;
 				tmpInliers.reserve(kData_.rows());
 
-				//std::cout << " - " << estimatedModels.size() << std::endl;
-
 				// Calculate the scoring of the estimated model
 				for (const auto &model : estimatedModels)
 				{
@@ -152,25 +137,13 @@ namespace superansac
 					tmpInliers.clear();
 					currentScore = kScoring_->score(kData_, model, kEstimator_, tmpInliers);
 
-					/*if (useInliers)
-					{
-						std::cout << " - " << estimatedScore_.getInlierNumber() << std::endl;
-						std::cout << " - " << estimatedScore_.getValue() << std::endl;
-						std::cout << " - " << currentScore.getInlierNumber() << std::endl;
-						std::cout << " - " << currentScore.getValue() << std::endl;
-						std::cout << " - " << model.getData() << std::endl;
-					}*/
-
 					// Check if the current model is better than the previous one
 					if (useInliers || estimatedScore_ < currentScore)
 					{
-						//std::cout << " - " << currentScore.getInlierNumber() << std::endl;
-						//std::cout << " - " << currentScore.getValue() << std::endl;
 						// Update the estimated model
 						estimatedModel_ = model;
 						estimatedScore_ = currentScore;
 						tmpInliers.swap(estimatedInliers_);
-						//std::cout << " - " << estimatedModel_.getData() << std::endl;
 					}
 				}
 			}

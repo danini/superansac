@@ -117,7 +117,8 @@ namespace superansac
 				for (size_t i = 0; i < kSampleNumber_; ++i)
 				{
 					// Get index of the current point
-					const size_t &idx = kSample_[i];
+					const size_t idx =
+						kSample_ == nullptr ? i : kSample_[i];
 
 					// Add the coordinates to that of the mass points
 					massPointSrc[0] += kData_(idx, 0);
@@ -138,7 +139,8 @@ namespace superansac
 				for (size_t i = 0; i < kSampleNumber_; ++i)
 				{
 					// Get index of the current point
-					const size_t &idx = kSample_[i];
+					const size_t idx =
+						kSample_ == nullptr ? i : kSample_[i];
 
 					const double &x1 = kData_(idx, 0);
 					const double &y1 = kData_(idx, 1);
@@ -165,7 +167,8 @@ namespace superansac
 				for (size_t i = 0; i < kSampleNumber_; ++i)
 				{
 					// Get index of the current point
-					const size_t &idx = kSample_[i];
+					const size_t idx =
+						kSample_ == nullptr ? i : kSample_[i];
 
 					const double &x1 = kData_(idx, 0);
 					const double &y1 = kData_(idx, 1);
@@ -222,9 +225,6 @@ namespace superansac
                 
 				for (size_t i = 0; i < kSampleNumber_; ++i)
 				{
-					const size_t idx =
-						kSample_ == nullptr ? i : kSample_[i];
-
 					const double
 						&x0 = normalizedPoints(i, 0),
 						&y0 = normalizedPoints(i, 1),

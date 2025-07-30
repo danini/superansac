@@ -51,9 +51,10 @@ namespace superansac
 		{
 		protected:
 			size_t maxIterations;
+			bool useInliers;
 
 		public:
-			IRLSOptimizer() : maxIterations(100) 
+			IRLSOptimizer() : maxIterations(100), useInliers(false) 
 			{
 
 			}
@@ -64,6 +65,11 @@ namespace superansac
 			void setMaxIterations(const size_t maxIterations_)
 			{
 				maxIterations = maxIterations_;
+			}
+
+			void setUseInliers(const bool kUseInliers_)
+			{
+				useInliers = kUseInliers_;
 			}
 
 			// The function for estimating the model parameters from the data points.
@@ -113,8 +119,40 @@ namespace superansac
 					
 					estimatedModels.clear();
 
-					// Estimate the model using the inliers
-					if (!kEstimator_->estimateModelNonminimal(
+					if (useInliers)
+					{
+						if (kInliers_.size() > 0)
+						{
+							// Estimate the model using the inliers
+							if (!kEstimator_->estimateModelNonminimal(
+								kData_,  // The data points
+								&kInliers_[0], 
+								kInliers_.size(),
+								&estimatedModels,
+								nullptr))
+							{
+								estimatedScore_ = kInvalidScore;
+								return;
+							}
+						}
+						else
+						{
+							// Calculate the score of the estimated model
+							currentScore = kScoring_->score(kData_, kModel_, kEstimator_, estimatedInliers_);
+
+							// Estimate the model using the inliers
+							if (!kEstimator_->estimateModelNonminimal(
+								kData_,  // The data points
+								&estimatedInliers_[0], 
+								estimatedInliers_.size(),
+								&estimatedModels,
+								nullptr))
+							{
+								estimatedScore_ = kInvalidScore;
+								return;
+							}
+						}
+					} else if (!kEstimator_->estimateModelNonminimal( // Estimate the model using the inliers
 						kData_,  // The data points
 						&estimatedInliers_[0], 
 						estimatedInliers_.size(),

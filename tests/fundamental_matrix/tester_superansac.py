@@ -59,7 +59,7 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     # Return if there are fewer than 4 corres
     # pondences
     if matches.shape[0] < 8:
-        return (np.inf, np.inf), 0, 0
+        return evaluate_R_t(R_gt, t_gt, np.eye(3), np.zeros((3, 1))), 0, 0
     
     # Set up the configuration
     config = pysuperansac.RANSACSettings()
@@ -90,25 +90,23 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         config.scoring = pysuperansac.ScoringType.MAGSAC
     elif args.scoring == "ACRANSAC":
         config.scoring = pysuperansac.ScoringType.ACRANSAC
-    elif args.scoring == "GaU":
-        config.scoring = pysuperansac.ScoringType.GAU
-    elif args.scoring == "ML":
-        config.scoring = pysuperansac.ScoringType.ML
     else:
         raise ValueError("Invalid scoring type.")
         
-    if args.fo == "LSQ":
-        config.final_optimization = pysuperansac.LocalOptimizationType.LSQ
-    elif args.fo == "IRLS":
-        config.final_optimization = pysuperansac.LocalOptimizationType.IteratedLSQ
-    elif args.fo == "NestedRANSAC":
-        config.final_optimization = pysuperansac.LocalOptimizationType.NestedRANSAC
-    elif args.fo == "GCRANSAC":
+    if args.lo == "LSQ":
+        config.local_optimization = pysuperansac.LocalOptimizationType.LSQ
+    elif args.lo == "IRLS":
+        config.local_optimization = pysuperansac.LocalOptimizationType.IteratedLSQ
+    elif args.lo == "NestedRANSAC":
+        config.local_optimization = pysuperansac.LocalOptimizationType.NestedRANSAC
+    elif args.lo == "GCRANSAC":
         config.local_optimization = pysuperansac.LocalOptimizationType.GCRANSAC
-    elif args.fo == "IteratedLMEDS":
+    elif args.lo == "IteratedLMEDS":
         config.local_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
-    elif args.fo == "Nothing":
-        config.final_optimization = pysuperansac.LocalOptimizationType.Nothing
+    elif args.lo == "CrossValidation":
+        config.local_optimization = pysuperansac.LocalOptimizationType.CrossValidation
+    elif args.lo == "Nothing":
+        config.local_optimization = pysuperansac.LocalOptimizationType.Nothing
         
     if args.fo == "LSQ":
         config.final_optimization = pysuperansac.LocalOptimizationType.LSQ
@@ -117,15 +115,17 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     elif args.fo == "NestedRANSAC":
         config.final_optimization = pysuperansac.LocalOptimizationType.NestedRANSAC
     elif args.fo == "GCRANSAC":
-        config.local_optimization = pysuperansac.LocalOptimizationType.GCRANSAC
+        config.final_optimization = pysuperansac.LocalOptimizationType.GCRANSAC
     elif args.fo == "IteratedLMEDS":
-        config.local_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
+        config.final_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
+    elif args.fo == "CrossValidation":
+        config.final_optimization = pysuperansac.LocalOptimizationType.CrossValidation
     elif args.fo == "Nothing":
         config.final_optimization = pysuperansac.LocalOptimizationType.Nothing
     else:
         raise ValueError("Invalid final optimization type.")
         
-    config.neighborhood_settings.neighborhood_grid_density = 6
+    config.neighborhood_settings.neighborhood_grid_density = args.neighborhood_grid_density
     config.neighborhood_settings.neighborhood_size = args.neighborhood_size
 
     # If Importance sampler or ARSampler is used, the SNN ratios are converted as probabilities
@@ -134,6 +134,8 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         point_number = matches.shape[0]
         for i in range(point_number):
             probabilities.append(1.0 - i / point_number)
+
+    probabilities = scores
 
     # Run the homography estimation implemented in OpenCV
     tic = time.perf_counter()
@@ -146,7 +148,7 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     elapsed_time = toc - tic
 
     if F_est is None:
-        return (np.inf, np.inf), 0, elapsed_time
+        return evaluate_R_t(R_gt, t_gt, np.eye(3), np.zeros((3, 1))), 0, elapsed_time
 
     # Convert the fundamental matrix to essential matrix if the estimation is successful
     E_est = K2.T @ F_est @ K1
@@ -171,19 +173,19 @@ if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running on fundamental matrix estimation with SupeRANSAC")
     parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA.", choices=["splg", "RoMA"], default="splg")
-    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=3000)
+    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2500)
     parser.add_argument("--confidence", type=float, default=0.9999999)
     parser.add_argument("--inlier_threshold", type=float, default=-1.0)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
     parser.add_argument("--maximum_iterations", type=int, default=1000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler", "NAPSAC"], default="PROSAC")
     parser.add_argument("--scoring", type=str, help="Choose from: RANSAC, MSAC, MAGSAC, ACRANSAC.", choices=["RANSAC", "MSAC", "MAGSAC", "ACRANSAC"], default="MAGSAC")
-    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="GCRANSAC")
-    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="IRLS")
-    parser.add_argument("--spatial_coherence_weight", type=float, default=0.1)
+    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "CrossValidation", "Nothing"], default="GCRANSAC")
+    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "CrossValidation", "Nothing"], default="LSQ")
+    parser.add_argument("--spatial_coherence_weight", type=float, default=0.4)
     parser.add_argument("--neighborhood_size", type=float, default=20)
-    parser.add_argument("--neighborhood_grid_density", type=float, default=4)
-    parser.add_argument("--core_number", type=int, default=19)
+    parser.add_argument("--neighborhood_grid_density", type=float, default=3)
+    parser.add_argument("--core_number", type=int, default=16)
     parser.add_argument("--device", type=str, default="cuda")
     
     args = parser.parse_args()

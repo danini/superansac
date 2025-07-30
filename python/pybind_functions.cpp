@@ -117,7 +117,6 @@ void initializeLocalOptimizer(
         // Set the neighborhood graph to the local optimizer
         auto gcransacLocalOptimizer = dynamic_cast<superansac::local_optimization::GraphCutRANSACOptimizer *>(localOptimizer_.get());
         gcransacLocalOptimizer->setNeighborhood(neighborhoodGraph_.get());
-
         gcransacLocalOptimizer->setMaxIterations(kLOSettings_.maxIterations);
         gcransacLocalOptimizer->setGraphCutNumber(kLOSettings_.graphCutNumber);
         gcransacLocalOptimizer->setSampleSizeMultiplier(kLOSettings_.sampleSizeMultiplier);
@@ -126,24 +125,45 @@ void initializeLocalOptimizer(
     {
         // Set the neighborhood graph to the local optimizer
         auto irlsLocalOptimizer = dynamic_cast<superansac::local_optimization::IRLSOptimizer *>(localOptimizer_.get());
-        irlsLocalOptimizer->setMaxIterations(kLOSettings_.maxIterations);        
-    }  else if (kLocalOptimizationType_ == superansac::local_optimization::LocalOptimizationType::LSQ)
+        irlsLocalOptimizer->setMaxIterations(kLOSettings_.maxIterations);       
+        if (kFinalOptimization_ || 
+            kModelType_ == superansac::models::Types::Homography || 
+            kModelType_ == superansac::models::Types::RigidTransformation || 
+            kModelType_ == superansac::models::Types::EssentialMatrix ||
+            kModelType_ == superansac::models::Types::FundamentalMatrix)
+            irlsLocalOptimizer->setUseInliers(true); 
+    } else if (kLocalOptimizationType_ == superansac::local_optimization::LocalOptimizationType::LSQ)
     {
         // Set the neighborhood graph to the local optimizer
         auto lsqLocalOptimizer = dynamic_cast<superansac::local_optimization::LeastSquaresOptimizer *>(localOptimizer_.get());
-        if (kFinalOptimization_ || kModelType_ == superansac::models::Types::Homography || kModelType_ == superansac::models::Types::RigidTransformation)
+        if (kFinalOptimization_ || 
+            kModelType_ == superansac::models::Types::Homography || 
+            kModelType_ == superansac::models::Types::RigidTransformation || 
+            kModelType_ == superansac::models::Types::EssentialMatrix ||
+            kModelType_ == superansac::models::Types::FundamentalMatrix)
             lsqLocalOptimizer->setUseInliers(true);
-    }  else if (kLocalOptimizationType_ == superansac::local_optimization::LocalOptimizationType::NestedRANSAC)
+    } else if (kLocalOptimizationType_ == superansac::local_optimization::LocalOptimizationType::NestedRANSAC)
     {
         // Set the neighborhood graph to the local optimizer
         auto nestedRansacLocalOptimizer = dynamic_cast<superansac::local_optimization::NestedRANSACOptimizer *>(localOptimizer_.get());
         nestedRansacLocalOptimizer->setMaxIterations(kLOSettings_.maxIterations); 
         nestedRansacLocalOptimizer->setSampleSizeMultiplier(kLOSettings_.sampleSizeMultiplier); 
-    }  else if (kLocalOptimizationType_ == superansac::local_optimization::LocalOptimizationType::IteratedLMEDS)
+    } else if (kLocalOptimizationType_ == superansac::local_optimization::LocalOptimizationType::IteratedLMEDS)
     {
-        // Set the neighborhood graph to the local optimizer
         auto iteratedLMEDSLocalOptimizer = dynamic_cast<superansac::local_optimization::IteratedLMEDSOptimizer *>(localOptimizer_.get());
         iteratedLMEDSLocalOptimizer->setModelType(kModelType_); 
+    } else if (kLocalOptimizationType_ == superansac::local_optimization::LocalOptimizationType::CrossValidation)
+    {
+        auto crossValidationLocalOptimizer = dynamic_cast<superansac::local_optimization::CrossValidationOptimizer *>(localOptimizer_.get());
+        if (kFinalOptimization_ || 
+            kModelType_ == superansac::models::Types::Homography || 
+            kModelType_ == superansac::models::Types::RigidTransformation || 
+            kModelType_ == superansac::models::Types::EssentialMatrix ||
+            kModelType_ == superansac::models::Types::FundamentalMatrix)
+            crossValidationLocalOptimizer->setUseInliers(true);
+        
+        //crossValidationLocalOptimizer->setRepetitions(kLOSettings_.maxIterations);
+        //crossValidationLocalOptimizer->setSampleSizeMultiplier(kLOSettings_.sampleSizeMultiplier);
     } 
 }
 
@@ -563,6 +583,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     if (settings_.sampler == superansac::samplers::SamplerType::ImportanceSampler && 
         kPointProbabilities_.size() != kCorrespondences_.rows())
         throw std::invalid_argument("The point probabilities must have the same number of elements as the number of correspondences when using the ImportanceSampler or the ARSampler.");
+    if (kPointProbabilities_.size() > 0 && 
+        kPointProbabilities_.size() != kCorrespondences_.rows())
+        throw std::invalid_argument("The point probabilities must have either the same number of elements as the number of correspondences or none.");
 
     // Normalize the point correspondences
     DataMatrix normalizedCorrespondences;
@@ -590,7 +613,11 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
         std::unique_ptr<superansac::estimator::FundamentalMatrixEstimator>(new superansac::estimator::FundamentalMatrixEstimator());
     estimator->setMinimalSolver(new superansac::estimator::solver::FundamentalMatrixSevenPointSolver());
     estimator->setNonMinimalSolver(new superansac::estimator::solver::FundamentalMatrixBundleAdjustmentSolver());
-    auto &solverOptions = dynamic_cast<superansac::estimator::solver::FundamentalMatrixBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver())->getMutableOptions();
+    superansac::estimator::solver::FundamentalMatrixBundleAdjustmentSolver * nonminimalSolver = 
+        dynamic_cast<superansac::estimator::solver::FundamentalMatrixBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver());
+    if (kPointProbabilities_.size() > 0)
+        nonminimalSolver->setWeights(&kPointProbabilities_);
+    auto &solverOptions = nonminimalSolver->getMutableOptions();
     solverOptions.loss_type = poselib::BundleOptions::LossType::TRUNCATED;
     solverOptions.loss_scale = settings_.inlierThreshold;
     solverOptions.max_iterations = 25;
@@ -816,6 +843,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     if (settings_.sampler == superansac::samplers::SamplerType::ImportanceSampler && 
         kPointProbabilities_.size() != kCorrespondences_.rows())
         throw std::invalid_argument("The point probabilities must have the same number of elements as the number of correspondences when using the ImportanceSampler or the ARSampler.");
+    if (kPointProbabilities_.size() > 0 && 
+        kPointProbabilities_.size() != kCorrespondences_.rows())
+        throw std::invalid_argument("The point probabilities must have either the same number of elements as the number of correspondences or none.");
 
     // Normalize the point correspondences
     DataMatrix normalizedCorrespondences;
@@ -843,7 +873,11 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
         std::unique_ptr<superansac::estimator::EssentialMatrixEstimator>(new superansac::estimator::EssentialMatrixEstimator());
     estimator->setMinimalSolver(new superansac::estimator::solver::EssentialMatrixFivePointNisterSolver());
     estimator->setNonMinimalSolver(new superansac::estimator::solver::EssentialMatrixBundleAdjustmentSolver());
-    auto &solverOptions = dynamic_cast<superansac::estimator::solver::EssentialMatrixBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver())->getMutableOptions();
+    superansac::estimator::solver::EssentialMatrixBundleAdjustmentSolver * nonminimalSolver = 
+        dynamic_cast<superansac::estimator::solver::EssentialMatrixBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver());
+    if (kPointProbabilities_.size() > 0)
+        nonminimalSolver->setWeights(&kPointProbabilities_);
+    auto &solverOptions = nonminimalSolver->getMutableOptions();
     solverOptions.loss_type = poselib::BundleOptions::LossType::TRUNCATED;
     solverOptions.loss_scale = settings_.inlierThreshold;
     solverOptions.max_iterations = 25;

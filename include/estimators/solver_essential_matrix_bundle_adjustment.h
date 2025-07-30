@@ -56,11 +56,13 @@ namespace superansac
 			protected:
 				poselib::BundleOptions options;
 				size_t pointNumberForCheiralityCheck;
+				const std::vector<double> *pointWeights;
 
 			public:
 				EssentialMatrixBundleAdjustmentSolver(poselib::BundleOptions kOptions_ = poselib::BundleOptions())
 					: 	options(kOptions_),
-						pointNumberForCheiralityCheck(1)
+						pointNumberForCheiralityCheck(1),
+						pointWeights(nullptr)
 				{
 				}
 
@@ -92,6 +94,11 @@ namespace superansac
 					return options;
 				}
 
+				void setWeights(const std::vector<double> *pointWeights_)
+				{
+					pointWeights = pointWeights_;
+				}
+
 				// Estimate the model parameters from the given point sample
 				// using weighted fitting if possible.
 				FORCE_INLINE bool estimateModel(
@@ -116,6 +123,9 @@ namespace superansac
 				// The point correspondences
 				std::vector<Eigen::Vector2d> x1(kSampleNumber_); 
 				std::vector<Eigen::Vector2d> x2(kSampleNumber_); 
+				std::vector<double> weights;
+				if (pointWeights != nullptr)
+					weights.resize(kSampleNumber_);
 
 				// Filling the point correspondences if the sample is not provided
 				if (kSample_ == nullptr)
@@ -125,13 +135,18 @@ namespace superansac
 					{
 						x1[pointIdx] = Eigen::Vector2d(kData_(pointIdx, 0), kData_(pointIdx, 1));
 						x2[pointIdx] = Eigen::Vector2d(kData_(pointIdx, 2), kData_(pointIdx, 3));
+						if (pointWeights != nullptr)
+							weights[pointIdx] = (*pointWeights)[pointIdx];
 					}
 				} else // Filling the point correspondences if the sample is provided
 				{
 					for (size_t pointIdx = 0; pointIdx < kSampleNumber_; pointIdx++)
 					{
-						x1[pointIdx] = Eigen::Vector2d(kData_(kSample_[pointIdx], 0), kData_(kSample_[pointIdx], 1));
-						x2[pointIdx] = Eigen::Vector2d(kData_(kSample_[pointIdx], 2), kData_(kSample_[pointIdx], 3));
+						const size_t &idx = kSample_[pointIdx];
+						x1[pointIdx] = Eigen::Vector2d(kData_(idx, 0), kData_(idx, 1));
+						x2[pointIdx] = Eigen::Vector2d(kData_(idx, 2), kData_(idx, 3));
+						if (pointWeights != nullptr)
+							weights[pointIdx] = (*pointWeights)[idx];
 					}
 				}
 				
@@ -194,7 +209,8 @@ namespace superansac
 							x1, 
 							x2, 
 							&pose,
-							tmpOptions);
+							tmpOptions,
+							weights);
 
 						if (stats.cost < bestCost)
 						{
