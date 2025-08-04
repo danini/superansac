@@ -110,6 +110,8 @@ class Lamar(Dataset):
         outputs = {
             'id1': self.img_pairs[item][0],
             'id2': self.img_pairs[item][1],
+            'path1': self.img_pairs[item][0],
+            'path2': self.img_pairs[item][1],
             'img1': img1,
             'img2': img2,
             'R_1_2': self.R_1_2[item],

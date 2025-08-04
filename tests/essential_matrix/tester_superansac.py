@@ -60,10 +60,6 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         config.scoring = pysuperansac.ScoringType.MAGSAC
     elif args.scoring == "ACRANSAC":
         config.scoring = pysuperansac.ScoringType.ACRANSAC
-    elif args.scoring == "GaU":
-        config.scoring = pysuperansac.ScoringType.GAU
-    elif args.scoring == "ML":
-        config.scoring = pysuperansac.ScoringType.ML
         
     if args.lo == "LSQ":
         config.local_optimization = pysuperansac.LocalOptimizationType.LSQ
@@ -75,6 +71,8 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         config.local_optimization = pysuperansac.LocalOptimizationType.GCRANSAC
     elif args.lo == "IteratedLMEDS":
         config.local_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
+    elif args.lo == "CrossValidation":
+        config.local_optimization = pysuperansac.LocalOptimizationType.CrossValidation
     elif args.lo == "Nothing":
         config.local_optimization = pysuperansac.LocalOptimizationType.Nothing
         
@@ -85,21 +83,23 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     elif args.fo == "NestedRANSAC":
         config.final_optimization = pysuperansac.LocalOptimizationType.NestedRANSAC
     elif args.fo == "GCRANSAC":
-        config.local_optimization = pysuperansac.LocalOptimizationType.GCRANSAC
+        config.final_optimization = pysuperansac.LocalOptimizationType.GCRANSAC
     elif args.fo == "IteratedLMEDS":
-        config.local_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
+        config.final_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
+    elif args.fo == "CrossValidation":
+        config.final_optimization = pysuperansac.LocalOptimizationType.CrossValidation
+        config.final_optimization_settings.sample_size_multiplier = 1.0
     elif args.fo == "Nothing":
         config.final_optimization = pysuperansac.LocalOptimizationType.Nothing
         
-    config.neighborhood_settings.neighborhood_grid_density = 6
+    config.neighborhood_settings.neighborhood_grid_density = args.neighborhood_grid_density
     config.neighborhood_settings.neighborhood_size = args.neighborhood_size
     
     # If Importance sampler or ARSampler is used, the SNN ratios are converted as probabilities
     probabilities = []
-    if args.sampler == "Importance" or args.sampler == "ARSampler":
-        point_number = matches.shape[0]
-        for i in range(point_number):
-            probabilities.append(1.0 - i / point_number)
+    point_number = matches.shape[0]
+    for i in range(point_number):
+        probabilities.append(1.0 - i / point_number)
 
     # Run the homography estimation implemented in OpenCV
     tic = time.perf_counter()
@@ -112,13 +112,13 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         config = config)
     toc = time.perf_counter()
     elapsed_time = toc - tic
-
-    if E_est is None:
-        return (np.inf, np.inf), 0, elapsed_time
-
+    
     norm_matches = np.zeros(matches.shape)
     norm_matches[:, :2] = normalize_keypoints(matches[:, :2], K1)
     norm_matches[:, 2:] = normalize_keypoints(matches[:, 2:], K2)
+
+    if E_est is None:
+        return (np.inf, np.inf), 0, elapsed_time
 
     # Decompose the essential matrix to get the relative pose
     if len(inliers) > 0:
@@ -128,7 +128,7 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         t = np.zeros((3, 1))
 
     # Count the inliers
-    inlier_number = np.sum(inliers)
+    inlier_number = len(inliers)
 
     return evaluate_R_t(R_gt, t_gt, R, t), inlier_number, elapsed_time
 
@@ -136,18 +136,18 @@ if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running on essential matrix estimation with SupeRANSAC")
     parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA.", choices=["splg", "RoMA"], default="splg")
-    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2000)
+    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2500)
     parser.add_argument("--confidence", type=float, default=0.9999999)
-    parser.add_argument("--inlier_threshold", type=float, default=-1.0)
+    parser.add_argument("--inlier_threshold", type=float, default=4.0)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
     parser.add_argument("--maximum_iterations", type=int, default=1000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler"], default="PROSAC")
     parser.add_argument("--scoring", type=str, help="Choose from: RANSAC, MSAC, MAGSAC, ACRANSAC.", choices=["RANSAC", "MSAC", "MAGSAC", "ACRANSAC"], default="MAGSAC")
     parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="NestedRANSAC")
     parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="LSQ")
-    parser.add_argument("--spatial_coherence_weight", type=float, default=0.4)
+    parser.add_argument("--spatial_coherence_weight", type=float, default=0.2)
     parser.add_argument("--neighborhood_size", type=float, default=20)
-    parser.add_argument("--neighborhood_grid_density", type=float, default=5)
+    parser.add_argument("--neighborhood_grid_density", type=float, default=4)
     parser.add_argument("--core_number", type=int, default=18)
     parser.add_argument("--device", type=str, default="cuda", help="Device used for feature detection and matching.")
     
@@ -161,7 +161,7 @@ if __name__ == "__main__":
         matcher = LightGlue(features='superpoint').eval().to(args.device)  # load the matcher
         
         if args.inlier_threshold <= 0:
-            args.inlier_threshold = 5.0
+            args.inlier_threshold = 5.5 # 5.0
             print(f"Setting the threshold to {args.inlier_threshold} px as it works best for E estimation with SP-LG features.")
     elif args.features == "RoMA":
         print("Initialize RoMA detector")
@@ -175,13 +175,13 @@ if __name__ == "__main__":
     # The output file
     out = f"tests/essential_matrix/results_testing_superansac_{args.features}.csv"
 
-    dataset_paths = [#"/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
-                     #"/media/hdd2tb/datasets/RANSAC-Tutorial-Data",
-                     #"/media/hdd3tb/datasets/lamar/CAB/sessions/query_val_hololens",
-                     #"/media/hdd2tb/datasets/7scenes",
-                     #"/media/hdd3tb/datasets/kitti/dataset",
+    dataset_paths = ["/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
+                     "/media/hdd2tb/datasets/RANSAC-Tutorial-Data",
+                     "/media/hdd3tb/datasets/lamar/CAB/sessions/query_val_hololens",
+                     "/media/hdd2tb/datasets/7scenes",
+                     "/media/hdd3tb/datasets/kitti/dataset",
                      "/media/hdd3tb/datasets/eth3d"]
-    datasets = [ETH3D] # ScanNet, PhotoTourism, Lamar, SevenScenes, Kitti, 
+    datasets = [ScanNet, PhotoTourism, Lamar, SevenScenes, Kitti, ETH3D]
 
     for idx, dataset_class in enumerate(datasets):
         if dataset_class == ScanNet:
@@ -223,7 +223,7 @@ if __name__ == "__main__":
             if len(processing_queue) >= args.batch_size or i == len(dataloader) - 1:
                 for iters in [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]:
                     key = iters
-                    if iters not in pose_errors:
+                    if key not in pose_errors:
                         pose_errors[key] = []
                         runtimes[key] = []
                         inlier_numbers[key] = []

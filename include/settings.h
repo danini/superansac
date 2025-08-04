@@ -50,8 +50,8 @@ namespace superansac {
     struct LocalOptimizationSettings
     {
         size_t maxIterations = 50,
-            graphCutNumber = 20,
-            sampleSizeMultiplier = 7;
+            graphCutNumber = 20;
+        double sampleSizeMultiplier = 7.0;
         double spatialCoherenceWeight = 0.1;
     };
 

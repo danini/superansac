@@ -163,7 +163,7 @@ void initializeLocalOptimizer(
             crossValidationLocalOptimizer->setUseInliers(true);
         
         //crossValidationLocalOptimizer->setRepetitions(kLOSettings_.maxIterations);
-        //crossValidationLocalOptimizer->setSampleSizeMultiplier(kLOSettings_.sampleSizeMultiplier);
+        crossValidationLocalOptimizer->setSampleSizeMultiplier(kLOSettings_.sampleSizeMultiplier);
     } 
 }
 
