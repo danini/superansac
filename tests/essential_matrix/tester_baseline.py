@@ -278,7 +278,7 @@ if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running on essential matrix estimation with baselines.")
     parser.add_argument('--features', type=str, help="Choose from: splg, RoMA.", choices=["splg", "RoMA"], default="splg")
-    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=1000)
+    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2000)
     parser.add_argument('--output_db_path', type=str, help="The path to where the dataset of matches should be saved.", default="/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test/matches.h5")
     parser.add_argument("--confidence", type=float, default=0.99)
     parser.add_argument("--inlier_threshold", type=float, default=7.5)
@@ -329,13 +329,13 @@ if __name__ == "__main__":
             "MAGSAC OpenCV": 0.5
         }
 
-    dataset_paths = ["/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
-                     "/media/hdd2tb/datasets/RANSAC-Tutorial-Data",
+    dataset_paths = ["/media/hdd2tb/datasets/RANSAC-Tutorial-Data",
+                     "/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
                      "/media/hdd3tb/datasets/lamar/CAB/sessions/query_val_hololens",
                      "/media/hdd2tb/datasets/7scenes",
                      "/media/hdd3tb/datasets/kitti/dataset",
                      "/media/hdd3tb/datasets/eth3d"]
-    datasets = [ScanNet, PhotoTourism, Lamar, SevenScenes, Kitti, ETH3D]
+    datasets = [PhotoTourism, ScanNet, Lamar, SevenScenes, Kitti, ETH3D]
 
     for idx, dataset_class in enumerate(datasets):
         if dataset_class == ScanNet:
@@ -376,7 +376,7 @@ if __name__ == "__main__":
                 for method in ["poselib", "vsac", "MAGSAC OpenCV", "GCRANSAC OpenCV", "RANSAC OpenCV", "LMEDS OpenCV", "gcransac", "magsac", "magsac++", "pycolmap"]:
                     for iters in [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]:
                         key = (method, iters)
-                        if iters not in pose_errors:
+                        if key not in pose_errors:
                             pose_errors[key] = []
                             runtimes[key] = []
                             inlier_numbers[key] = []
@@ -413,18 +413,18 @@ if __name__ == "__main__":
         out = f"tests/essential_matrix/results_testing_baselines_{args.features}.csv"
         if not os.path.exists(out):
             with open(out, "w") as f:
-                f.write("method,features,dataset,threshold,maximum_iterations,confidence,spatial_weight,neighborhood_size,sampler,space_partitioning,sprt,auc_R5,auc_R10,auc_R20,auc_t5,auc_t10,auc_t20,auc_Rt5,auc_Rt10,auc_Rt20,avg_error,med_error,avg_time,median_time,avg_inliers,median_inliers,variance,solver,scoring\n")
+                f.write("method,features,dataset,threshold,maximum_iterations,confidence,spatial_weight,neighborhood_size,sampler,space_partitioning,sprt,auc_R5,auc_R10,auc_R20,auc_t5,auc_t10,auc_t20,auc_Rt1,auc_Rt2_5,auc_Rt5,auc_Rt10,auc_Rt20,avg_error,med_error,avg_time,median_time,avg_inliers,median_inliers,variance,solver,scoring\n")
         with open(out, "a") as f:
-            for method in ["poselib", "vsac", "MAGSAC OpenCV", "GCRANSAC OpenCV", "RANSAC OpenCV", "LMEDS OpenCV", "gcransac", "magsac", "magsac++", "pycolmap"]: 
+            for method in ["poselib", "vsac", "MAGSAC OpenCV", "GCRANSAC OpenCV", "RANSAC OpenCV", "LMEDS OpenCV", "gcransac", "magsac", "magsac++", "pycolmap"]:
                 for iters in [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]:
                     key = (method, iters)
                     curr_pose_errors = np.array(pose_errors[key])
                     auc_R = 100 * np.r_[pose_auc(curr_pose_errors[:,0], thresholds=[5, 10, 20])]
                     auc_t = 100 * np.r_[pose_auc(curr_pose_errors[:,1], thresholds=[5, 10, 20])]
-                    auc_Rt = 100 * np.r_[pose_auc(curr_pose_errors.max(1), thresholds=[5, 10, 20])]
+                    auc_Rt = 100 * np.r_[pose_auc(curr_pose_errors.max(1), thresholds=[1, 2.5, 5, 10, 20])]
                     args.inlier_threshold = thresholds[method]
 
                     # Remove inf values
                     curr_pose_errors = curr_pose_errors[np.isfinite(curr_pose_errors).all(axis=1)]
-                    f.write(f"{method},{args.features},{db_name},{args.inlier_threshold},{iters},{args.confidence},{args.spatial_coherence_weight},{args.neighborhood_grid_density},{args.sampler},0,0,{auc_R[0]},{auc_R[1]},{auc_R[2]},{auc_t[0]},{auc_t[1]},{auc_t[2]},{auc_Rt[0]},{auc_Rt[1]},{auc_Rt[2]},{np.mean(curr_pose_errors)},{np.median(curr_pose_errors)},{np.mean(runtimes[key])},{np.median(runtimes[key])},{np.mean(inlier_numbers[key])},{np.median(inlier_numbers[key])},0,{0},{0}\n")
+                    f.write(f"{method},{args.features},{db_name},{args.inlier_threshold},{iters},{args.confidence},{args.spatial_coherence_weight},{args.neighborhood_grid_density},{args.sampler},0,0,{auc_R[0]},{auc_R[1]},{auc_R[2]},{auc_t[0]},{auc_t[1]},{auc_t[2]},{auc_Rt[0]},{auc_Rt[1]},{auc_Rt[2]},{auc_Rt[3]},{auc_Rt[4]},{np.mean(curr_pose_errors)},{np.median(curr_pose_errors)},{np.mean(runtimes[key])},{np.median(runtimes[key])},{np.mean(inlier_numbers[key])},{np.median(inlier_numbers[key])},0,{0},{0}\n")
 
