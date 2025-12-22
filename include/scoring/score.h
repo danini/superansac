@@ -50,16 +50,16 @@ class Score {
 			value(kValue_)
 		{ }
 
-		FORCE_INLINE bool operator<(const Score& score_)
+		FORCE_INLINE bool operator<(const Score& score_) const
 		{
-			return 
+			return
                 //inlierNumber < score_.inlierNumber ||
                 value < score_.value;
-		}   
+		}
 
-		FORCE_INLINE bool operator>(const Score& score_)
+		FORCE_INLINE bool operator>(const Score& score_) const
 		{
-			return //inlierNumber > score_.inlierNumber || 
+			return //inlierNumber > score_.inlierNumber ||
                 value > score_.value;
 		}
 

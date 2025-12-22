@@ -268,14 +268,29 @@ double undistort_poly1(double k1, double rd) {
     // f  = k1 * r^3 + r + 1 - rd = 0
     // fp = 3 * k1 * r^2 + 1
     double r = rd;
-    for (size_t iter = 0; iter < UNDIST_MAX_ITER; ++iter) {
-        double r2 = r * r;
-        double f = k1 * r2 * r + r - rd;
-        if (std::abs(f) < UNDIST_TOL) {
-            break;
-        }
+    double r2 = r * r;
+    double f = k1 * r2 * r + r - rd;
+    if (std::abs(f) >= UNDIST_TOL) {
         double fp = 3.0 * k1 * r2 + 1.0;
         r = r - f / fp;
+
+        r2 = r * r;
+        f = k1 * r2 * r + r - rd;
+        if (std::abs(f) >= UNDIST_TOL) {
+            fp = 3.0 * k1 * r2 + 1.0;
+            r = r - f / fp;
+
+            // Continue with remaining iterations if needed
+            for (size_t iter = 2; iter < UNDIST_MAX_ITER; ++iter) {
+                r2 = r * r;
+                f = k1 * r2 * r + r - rd;
+                if (std::abs(f) < UNDIST_TOL) {
+                    break;
+                }
+                fp = 3.0 * k1 * r2 + 1.0;
+                r = r - f / fp;
+            }
+        }
     }
     return r;
 }
@@ -286,14 +301,32 @@ double undistort_poly2(double k1, double k2, double rd) {
     // f  = k2 * r^5 + k1 * r^3 + r + 1 - rd = 0
     // fp = 5 * k2 * r^4 + 3 * k1 * r^2 + 1
     double r = rd;
-    for (size_t iter = 0; iter < UNDIST_MAX_ITER; ++iter) {
-        double r2 = r * r;
-        double f = k2 * r2 * r2 * r + k1 * r2 * r + r - rd;
-        if (std::abs(f) < UNDIST_TOL) {
-            break;
-        }
-        double fp = 5.0 * k2 * r2 * r2 + 3.0 * k1 * r2 + 1.0;
+    double r2 = r * r;
+    double r4 = r2 * r2;
+    double f = k2 * r4 * r + k1 * r2 * r + r - rd;
+    if (std::abs(f) >= UNDIST_TOL) {
+        double fp = 5.0 * k2 * r4 + 3.0 * k1 * r2 + 1.0;
         r = r - f / fp;
+
+        r2 = r * r;
+        r4 = r2 * r2;
+        f = k2 * r4 * r + k1 * r2 * r + r - rd;
+        if (std::abs(f) >= UNDIST_TOL) {
+            fp = 5.0 * k2 * r4 + 3.0 * k1 * r2 + 1.0;
+            r = r - f / fp;
+
+            // Continue with remaining iterations if needed
+            for (size_t iter = 2; iter < UNDIST_MAX_ITER; ++iter) {
+                r2 = r * r;
+                r4 = r2 * r2;
+                f = k2 * r4 * r + k1 * r2 * r + r - rd;
+                if (std::abs(f) < UNDIST_TOL) {
+                    break;
+                }
+                fp = 5.0 * k2 * r4 + 3.0 * k1 * r2 + 1.0;
+                r = r - f / fp;
+            }
+        }
     }
     return r;
 }

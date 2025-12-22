@@ -78,19 +78,16 @@ namespace superansac
 			// The function for estimating the model parameters from the data points.
 			void run(const DataMatrix &kData_, // The data points
 				const std::vector<size_t> &kInliers_, // The inliers of the previously estimated model
-				const models::Model &kModel_, // The previously estimated model 
+				const models::Model &kModel_, // The previously estimated model
 				const scoring::Score &kScore_, // The of the previously estimated model
 				const estimator::Estimator *kEstimator_, // The estimator used for the model estimation
-				const scoring::AbstractScoring *kScoring_, // The scoring object used for the model estimation
+				scoring::AbstractScoring *kScoring_, // The scoring object used for the model estimation
 				models::Model &estimatedModel_, // The estimated model
 				scoring::Score &estimatedScore_, // The score of the estimated model
 				std::vector<size_t> &estimatedInliers_) const // The inliers of the estimated model
 			{
 				// The invalid score
 				static const scoring::Score kInvalidScore = scoring::Score();
-
-				// The sampler used for selecting minimal samples
-				samplers::UniformRandomSampler sampler;
 
 				// Initialize the estimated model and score
 				estimatedModel_ = kModel_;
@@ -99,48 +96,58 @@ namespace superansac
 				const size_t kNonMinimalSampleSize = sampleSizeMultiplier * kEstimator_->sampleSize();
 				size_t currentSampleSize;
 
-				// The currently estimated models
+				// The currently estimated models - reserve to avoid reallocations
 				std::vector<models::Model> currentlyEstimatedModels;
+				currentlyEstimatedModels.reserve(10); // Reserve space for typical number of models
 				scoring::Score currentScore = kInvalidScore;
 				std::vector<size_t> currentInliers;
 				currentInliers.reserve(kData_.rows());
 
-				// Allocate memory for the current sample
-				size_t *currentSample = new size_t[kNonMinimalSampleSize];
+				// Use vector instead of raw pointer for automatic memory management
+				std::vector<size_t> currentSample(kNonMinimalSampleSize);
+
+				// The sampler used for selecting minimal samples - initialize once outside loop
+				samplers::UniformRandomSampler sampler;
 
 				// Calculate the score of the estimated model
 				estimatedScore_ = kScoring_->score(kData_, estimatedModel_, kEstimator_, estimatedInliers_);
 				sampler.initialize(estimatedInliers_.size() - 1);
+				bool isModelUpdated;
+
+				const size_t kMinSampleSize = kEstimator_->sampleSize();
 
 				// The inner RANSAC loop
 				for (size_t iteration = 0; iteration < maxIterations; ++iteration)
 				{
+					isModelUpdated = false;
+
 					// Calculate the current sample size
-					currentSampleSize = estimatedInliers_.size() - 1;
-					if (currentSampleSize >= kNonMinimalSampleSize)
-						currentSampleSize = kNonMinimalSampleSize;
+					const size_t inlierCount = estimatedInliers_.size();
+					currentSampleSize = std::min(inlierCount - 1, kNonMinimalSampleSize);
 
 					// Break if the sample size is too small
-					if (currentSampleSize < kEstimator_->sampleSize())
+					if (currentSampleSize < kMinSampleSize)
 						break;
 
 					// Check if the sample size is equal to the number of inliers
-					if (currentSampleSize == estimatedInliers_.size())
+					if (currentSampleSize == inlierCount)
 					{
-						// Copy the inliers to the current sample
-						for (size_t sampleIdx = 0; sampleIdx < currentSampleSize; ++sampleIdx)
-							currentSample[sampleIdx] = estimatedInliers_[sampleIdx];
+						// Copy the inliers to the current sample (use memcpy or std::copy for speed)
+						std::copy(estimatedInliers_.begin(),
+						         estimatedInliers_.begin() + currentSampleSize,
+						         currentSample.begin());
 					} else
 					{
 						// Sample minimal set
-						if (!sampler.sample(estimatedInliers_.size(), // Data matrix
-							currentSampleSize, // Selected minimal sample 
-							currentSample)) // Sample indices
+						if (!sampler.sample(inlierCount, // Data matrix
+							currentSampleSize, // Selected minimal sample
+							currentSample.data())) // Sample indices
 							continue;
 
-						// Replace the sample indices with the data point indices
+						// Use pointer arithmetic for better performance
+						const size_t* inlierData = estimatedInliers_.data();
 						for (size_t sampleIdx = 0; sampleIdx < currentSampleSize; ++sampleIdx)
-							currentSample[sampleIdx] = estimatedInliers_[currentSample[sampleIdx]];
+							currentSample[sampleIdx] = inlierData[currentSample[sampleIdx]];
 					}
 
 					// Remove the previous models
@@ -149,7 +156,7 @@ namespace superansac
 					// Estimate the model
 					if (!kEstimator_->estimateModelNonminimal(
 						kData_,  // The data points
-						currentSample, // Selected minimal sample
+						currentSample.data(), // Selected minimal sample
 						currentSampleSize, // The size of the minimal sample
 						&currentlyEstimatedModels, // The estimated models
 						nullptr)) // The indices of the inliers
@@ -166,16 +173,23 @@ namespace superansac
 						if (currentScore > estimatedScore_)
 						{
 							// Update the estimated model
+							isModelUpdated = true;
 							estimatedModel_ = model;
 							estimatedScore_ = currentScore;
 							currentInliers.swap(estimatedInliers_);
+							// Only reinitialize sampler if inlier count changed significantly
 							sampler.initialize(estimatedInliers_.size() - 1);
 						}
 					}
+
+					// Update SPRT parameters (only if model was updated to avoid unnecessary work)
+					if (isModelUpdated)
+						kScoring_->updateSPRTParameters(estimatedScore_, -1, kData_.rows());
+					else
+						kScoring_->updateSPRTParameters(scoring::Score(), -1, kData_.rows());
 				}
 
-				// Clean up
-				delete[] currentSample;
+				// No cleanup needed - vector handles memory automatically
 			}
 
 		};

@@ -142,7 +142,12 @@ public:
                 continue;
             }
             double Tn_plus1 = static_cast<double>(i + 1) * T_n / (i + 1 - sampleSize);
-            growthFunction[i] = T_n_prime + static_cast<size_t>(ceil(Tn_plus1 - T_n));
+            double diff = Tn_plus1 - T_n;
+            // Optimized ceil: avoid function call overhead
+            // For positive numbers: ceil(x) = floor(x) + (x > floor(x) ? 1 : 0)
+            int64_t diff_floor = static_cast<int64_t>(diff);
+            size_t ceiled_diff = static_cast<size_t>(diff_floor + (diff > static_cast<double>(diff_floor) ? 1 : 0));
+            growthFunction[i] = T_n_prime + ceiled_diff;
             T_n = Tn_plus1;
             T_n_prime = growthFunction[i];
         }

@@ -78,7 +78,7 @@ namespace superansac
 				const models::Model &kModel_, // The previously estimated model 
 				const scoring::Score &kScore_, // The of the previously estimated model
 				const estimator::Estimator *kEstimator_, // The estimator used for the model estimation
-				const scoring::AbstractScoring *kScoring_, // The scoring object used for the model estimation
+				scoring::AbstractScoring *kScoring_, // The scoring object used for the model estimation
 				models::Model &estimatedModel_, // The estimated model
 				scoring::Score &estimatedScore_, // The score of the estimated model
 				std::vector<size_t> &estimatedInliers_) const // The inliers of the estimated model
@@ -86,15 +86,18 @@ namespace superansac
 				// The invalid score
 				static const scoring::Score kInvalidScore = scoring::Score();
 
-				// The estimated models
+				// The estimated models - reserve to avoid reallocations
 				std::vector<models::Model> estimatedModels;
+				estimatedModels.reserve(10);
 				scoring::Score currentScore = kInvalidScore;
+
+				// Pre-allocate weights vector outside loop
 				std::vector<double> weights(kData_.rows());
 
 				// Initialize the estimated model and score
 				estimatedModel_ = kModel_;
 				estimatedScore_ = kScore_;
-				
+
 				// Clear the estimated inliers
 				estimatedInliers_.clear();
 				estimatedInliers_.reserve(kData_.rows());

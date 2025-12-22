@@ -64,7 +64,7 @@ namespace superansac
 				const models::Model &kModel_,
 				const scoring::Score &kScore_,
 				const estimator::Estimator *kEstimator_,
-				const scoring::AbstractScoring *kScoring_,
+				scoring::AbstractScoring *kScoring_,
 				models::Model &estimatedModel_,
 				scoring::Score &estimatedScore_,
 				std::vector<size_t> &estimatedInliers_) const = 0;

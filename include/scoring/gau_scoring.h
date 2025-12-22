@@ -59,6 +59,13 @@ class GAUScoring : public AbstractScoring
             threshold = 1.5 * kThreshold_;
             squaredThreshold = threshold * threshold;
         }
+        
+        FORCE_INLINE void updateSPRTParameters(const Score& currentBest, 
+            int iterationIndex, 
+            size_t totalPoints)
+        {
+            
+        }
 
         // Sample function
         FORCE_INLINE Score score(

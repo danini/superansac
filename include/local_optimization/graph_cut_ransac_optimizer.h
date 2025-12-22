@@ -60,9 +60,10 @@ namespace superansac
 			double spatialCoherenceWeight;
 
 		public:
-			GraphCutRANSACOptimizer() : maxIterations(50), 
+			GraphCutRANSACOptimizer() : maxIterations(50),
 				graphCutNumber(20),
-				sampleSizeMultiplier(7)
+				sampleSizeMultiplier(7),
+				spatialCoherenceWeight(0.1)  // Initialize to default value
 			{
 
 			}
@@ -100,7 +101,7 @@ namespace superansac
 				const models::Model &kModel_, // The previously estimated model 
 				const scoring::Score &kScore_, // The of the previously estimated model
 				const estimator::Estimator *kEstimator_, // The estimator used for the model estimation
-				const scoring::AbstractScoring *kScoring_, // The scoring object used for the model estimation
+				scoring::AbstractScoring *kScoring_, // The scoring object used for the model estimation
 				models::Model &estimatedModel_, // The estimated model
 				scoring::Score &estimatedScore_, // The score of the estimated model
 				std::vector<size_t> &estimatedInliers_) const // The inliers of the estimated model
@@ -233,6 +234,11 @@ namespace superansac
 								updated = true;
 							}
 						}
+
+						if (updated) 
+							kScoring_->updateSPRTParameters(estimatedScore_, -1, kData_.rows());
+						else
+							kScoring_->updateSPRTParameters(scoring::Score(), -1, kData_.rows());
 					}
 
 					// If the model is not updated, interrupt the procedure
@@ -274,6 +280,7 @@ namespace superansac
 					tmpEnergy;
 				const double squaredTruncatedThreshold = kThreshold_ * kThreshold_;
 				const double oneMinusLambda = 1.0 - kLambda_;
+				const double invSquaredTruncatedThreshold = 1.0 / squaredTruncatedThreshold;
 
 				// Estimate the vertex capacities
 				for (size_t i = 0; i < pointNumber; ++i)
@@ -281,11 +288,11 @@ namespace superansac
 					// Calculating the point-to-model squared residual
 					tmpSquaredDistance = kEstimator_->squaredResidual(kData_.row(i),
 						kModel_);
-					// Storing the residual divided by the squared threshold 
-					distancePerThreshold.emplace_back(
-						std::min(std::max(tmpSquaredDistance / squaredTruncatedThreshold, 0.0), 1.0));
+					double distRatio = tmpSquaredDistance * invSquaredTruncatedThreshold;
+					distRatio = std::min(std::max(distRatio, 0.0), 1.0);
+					distancePerThreshold.emplace_back(distRatio);
 					// Calculating the implied unary energy
-					tmpEnergy = 1.0 - distancePerThreshold.back();
+					tmpEnergy = 1.0 - distRatio;
 
 					// Adding the unary energy to the graph
 					if (tmpSquaredDistance <= squaredTruncatedThreshold)
@@ -310,10 +317,8 @@ namespace superansac
 						const auto &neighbors = neighborhoodGraph->getNeighbors(pointIdx);
 						for (const size_t &actualNeighborIdx : neighbors)
 						{
+							// Skip self-loops and already processed edges
 							if (actualNeighborIdx == pointIdx)
-								continue;
-
-							if (actualNeighborIdx == pointIdx || actualNeighborIdx < 0)
 								continue;
 
 							if (usedEdges[actualNeighborIdx][pointIdx] == 1 ||

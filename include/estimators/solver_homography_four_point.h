@@ -113,43 +113,86 @@ namespace superansac
     			coefficients.setZero(); // Initialize the matrix with zeros
 
 				size_t rowIdx = 0;
-				double weight = 1.0;
-                
-				for (size_t i = 0; i < kSampleNumber_; ++i)
+
+				// Remove branch from inner loop by handling weighted/unweighted separately
+				if (kWeights_ == nullptr)
 				{
-					const size_t idx =
-						kSample_ == nullptr ? i : kSample_[i];
+					// Unweighted case - weight = 1.0, avoid unnecessary multiplications
+					for (size_t i = 0; i < kSampleNumber_; ++i)
+					{
+						const size_t idx = kSample_ == nullptr ? i : kSample_[i];
 
-					const double
-						&x1 = kData_(idx, 0),
-						&y1 = kData_(idx, 1),
-						&x2 = kData_(idx, 2),
-						&y2 = kData_(idx, 3);
+						const double
+							&x1 = kData_(idx, 0),
+							&y1 = kData_(idx, 1),
+							&x2 = kData_(idx, 2),
+							&y2 = kData_(idx, 3);
 
-					if (kWeights_ != nullptr)
-						weight = kWeights_[idx];
+						coefficients(rowIdx, 0) = -x1;
+						coefficients(rowIdx, 1) = -y1;
+						coefficients(rowIdx, 2) = -1.0;
+						coefficients(rowIdx, 3) = 0.0;
+						coefficients(rowIdx, 4) = 0.0;
+						coefficients(rowIdx, 5) = 0.0;
+						coefficients(rowIdx, 6) = x2 * x1;
+						coefficients(rowIdx, 7) = x2 * y1;
+						coefficients(rowIdx, 8) = -x2;
+						++rowIdx;
 
-					const double
-						minusWeightTimesX1 = -weight * x1,
-						minusWeightTimesY1 = -weight * y1,
-						weightTimesX2 = weight * x2,
-						weightTimesY2 = weight * y2;
+						coefficients(rowIdx, 0) = 0.0;
+						coefficients(rowIdx, 1) = 0.0;
+						coefficients(rowIdx, 2) = 0.0;
+						coefficients(rowIdx, 3) = -x1;
+						coefficients(rowIdx, 4) = -y1;
+						coefficients(rowIdx, 5) = -1.0;
+						coefficients(rowIdx, 6) = y2 * x1;
+						coefficients(rowIdx, 7) = y2 * y1;
+						coefficients(rowIdx, 8) = -y2;
+						++rowIdx;
+					}
+				}
+				else
+				{
+					// Weighted case
+					for (size_t i = 0; i < kSampleNumber_; ++i)
+					{
+						const size_t idx = kSample_ == nullptr ? i : kSample_[i];
 
-					coefficients(rowIdx, 0) = minusWeightTimesX1;
-					coefficients(rowIdx, 1) = minusWeightTimesY1;
-					coefficients(rowIdx, 2) = -weight;
-					coefficients(rowIdx, 6) = weightTimesX2 * x1;
-					coefficients(rowIdx, 7) = weightTimesX2 * y1;
-					coefficients(rowIdx, 8) = -weightTimesX2;
-					++rowIdx;
+						const double
+							&x1 = kData_(idx, 0),
+							&y1 = kData_(idx, 1),
+							&x2 = kData_(idx, 2),
+							&y2 = kData_(idx, 3);
 
-					coefficients(rowIdx, 3) = minusWeightTimesX1;
-					coefficients(rowIdx, 4) = minusWeightTimesY1;
-					coefficients(rowIdx, 5) = -weight;
-					coefficients(rowIdx, 6) = weightTimesY2 * x1;
-					coefficients(rowIdx, 7) = weightTimesY2 * y1;
-					coefficients(rowIdx, 8) = -weightTimesY2;
-					++rowIdx;
+						const double weight = kWeights_[idx];
+						const double
+							wx1 = weight * x1,
+							wy1 = weight * y1,
+							wx2 = weight * x2,
+							wy2 = weight * y2;
+
+						coefficients(rowIdx, 0) = -wx1;
+						coefficients(rowIdx, 1) = -wy1;
+						coefficients(rowIdx, 2) = -weight;
+						coefficients(rowIdx, 3) = 0.0;
+						coefficients(rowIdx, 4) = 0.0;
+						coefficients(rowIdx, 5) = 0.0;
+						coefficients(rowIdx, 6) = wx2 * x1;
+						coefficients(rowIdx, 7) = wx2 * y1;
+						coefficients(rowIdx, 8) = -wx2;
+						++rowIdx;
+
+						coefficients(rowIdx, 0) = 0.0;
+						coefficients(rowIdx, 1) = 0.0;
+						coefficients(rowIdx, 2) = 0.0;
+						coefficients(rowIdx, 3) = -wx1;
+						coefficients(rowIdx, 4) = -wy1;
+						coefficients(rowIdx, 5) = -weight;
+						coefficients(rowIdx, 6) = wy2 * x1;
+						coefficients(rowIdx, 7) = wy2 * y1;
+						coefficients(rowIdx, 8) = -wy2;
+						++rowIdx;
+					}
 				}
 
 				Eigen::Matrix<double, 8, 1> h;

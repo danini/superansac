@@ -259,7 +259,7 @@ namespace superansac
                 const double *kWeights_) const // The weight for each point
 			{
 				constexpr size_t kEquationNumber = 1;
-				Eigen::Matrix<double, 7, 9> coefficients;
+				Eigen::Matrix<double, Eigen::Dynamic, 9> coefficients(kSampleNumber_, 9);
 
 				size_t rowIdx = 0;
 				double weight = 1.0;

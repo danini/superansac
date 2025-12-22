@@ -188,7 +188,10 @@ namespace superansac
 				const double C = x2_0 * Ex1_0 + x2_1 * Ex1_1 + Ex1_2;
 				const double Cx = Ex1_0 * Ex1_0 + Ex1_1 * Ex1_1;
 				const double Cy = Ex2_0 * Ex2_0 + Ex2_1 * Ex2_1;
-				const double r2 = C * C / (Cx + Cy);
+
+				// Use reciprocal multiplication (faster than division with -ffast-math)
+				const double denom_sum = Cx + Cy;
+				const double r2 = (C * C) / denom_sum;
 
 				return r2;
 			}

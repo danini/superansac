@@ -47,11 +47,12 @@ namespace poselib {
 typedef std::function<void(const BundleStats &stats)> IterationCallback;
 template <typename Problem, typename Param = typename Problem::param_t>
 BundleStats lm_impl(Problem &problem, Param *parameters, const BundleOptions &opt,
-                    IterationCallback callback = nullptr) 
+                    IterationCallback callback = nullptr)
 {
     constexpr int n_params = Problem::num_params;
     Eigen::Matrix<double, n_params, n_params> JtJ;
     Eigen::Matrix<double, n_params, 1> Jtr;
+    Eigen::Matrix<double, n_params, 1> sol;
 
     // Initialize
     BundleStats stats;
@@ -61,6 +62,9 @@ BundleStats lm_impl(Problem &problem, Param *parameters, const BundleOptions &op
     stats.step_norm = -1;
     stats.invalid_steps = 0;
     stats.lambda = opt.initial_lambda;
+
+    // Pre-allocate to avoid repeated allocations
+    Param parameters_new;
 
     bool recompute_jac = true;
     for (stats.iterations = 0; stats.iterations < opt.max_iterations; ++stats.iterations) {
@@ -75,34 +79,35 @@ BundleStats lm_impl(Problem &problem, Param *parameters, const BundleOptions &op
             }
         }
 
-        // Add dampening
-        for (size_t k = 0; k < n_params; ++k) 
-            JtJ(k, k) += stats.lambda;
+        for (int i = 0; i < n_params; ++i) {
+            JtJ(i, i) += stats.lambda;
+        }
 
-        Eigen::Matrix<double, n_params, 1> sol = -JtJ.template selfadjointView<Eigen::Lower>().llt().solve(Jtr);
+        sol = -JtJ.template selfadjointView<Eigen::Lower>().ldlt().solve(Jtr);
 
-        stats.step_norm = sol.norm();
-        if (stats.step_norm < opt.step_tol) 
+        stats.step_norm = sol.squaredNorm();  // Use squared norm to avoid sqrt
+        if (stats.step_norm < opt.step_tol * opt.step_tol)  // Compare squared values
             break;
+        stats.step_norm = std::sqrt(stats.step_norm);  // Compute actual norm only once
 
-        Param parameters_new = problem.step(sol, *parameters);
+        parameters_new = problem.step(sol, *parameters);
 
         double cost_new = problem.residual(parameters_new);
 
         if (cost_new < stats.cost) {
             *parameters = parameters_new;
-            stats.lambda = std::max(opt.min_lambda, stats.lambda / 10);
+            stats.lambda = std::max(opt.min_lambda, stats.lambda * 0.1);
             stats.cost = cost_new;
             recompute_jac = true;
         } else {
             stats.invalid_steps++;
-            // Remove dampening
-            for (size_t k = 0; k < n_params; ++k) 
-                JtJ(k, k) -= stats.lambda;
-            stats.lambda = std::min(opt.max_lambda, stats.lambda * 10);
+            for (int i = 0; i < n_params; ++i) {
+                JtJ(i, i) -= stats.lambda;
+            }
+            stats.lambda = std::min(opt.max_lambda, stats.lambda * 10.0);
             recompute_jac = false;
         }
-        if (callback != nullptr) 
+        if (callback != nullptr)
             callback(stats);
     }
     return stats;

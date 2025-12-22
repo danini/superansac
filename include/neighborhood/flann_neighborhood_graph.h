@@ -142,9 +142,9 @@ namespace superansac
 				initialize(kContainer_);
 			}
 
-			~FlannNeighborhoodGraph() 
+			~FlannNeighborhoodGraph()
 			{
-				std::cout << "FlannNeighborhoodGraph destructor" << std::endl;
+				// Destructor
 			}
 
 			// Setter for nearestNeighborNumber
@@ -181,16 +181,17 @@ namespace superansac
 			// Function to get the neighbors of a given point
 			const std::vector<size_t> &getNeighbors(const size_t pointIdx_) const override
 			{
-				// If the neighbors are already cached, return them
-				if (neighborsCache.find(pointIdx_) != neighborsCache.end())
+				// Check if neighbors are already cached and return directly
+				auto it = neighborsCache.find(pointIdx_);
+				if (it != neighborsCache.end())
 				{
-					return neighborsCache[pointIdx_];
+					return it->second;
 				}
 
 				// If the index is not initialized, throw an error
 				const auto &point = cloud.points->row(pointIdx_);
 
-				// Cache the neighbors in the mutable map
+				// Cache the neighbors in the mutable map using emplace for efficiency
 				auto &neighbors = neighborsCache[pointIdx_];
 
 				// If _Type is 0, do a knn search

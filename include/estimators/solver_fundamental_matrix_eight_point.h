@@ -134,8 +134,8 @@ namespace superansac
 				massPointDst[1] /= kSampleNumber_;
 
 				// Get the mean distance from the mass points
-				double average_distance_src = 0.0,
-					average_distance_dst = 0.0;
+				double sum_squared_dist_src = 0.0;
+				double sum_squared_dist_dst = 0.0;
 				for (size_t i = 0; i < kSampleNumber_; ++i)
 				{
 					// Get index of the current point
@@ -152,12 +152,13 @@ namespace superansac
 					const double dx2 = massPointDst[0] - x2;
 					const double dy2 = massPointDst[1] - y2;
 
-					average_distance_src += sqrt(dx1 * dx1 + dy1 * dy1);
-					average_distance_dst += sqrt(dx2 * dx2 + dy2 * dy2);
+					sum_squared_dist_src += dx1 * dx1 + dy1 * dy1;
+					sum_squared_dist_dst += dx2 * dx2 + dy2 * dy2;
 				}
 
-				average_distance_src /= kSampleNumber_;
-				average_distance_dst /= kSampleNumber_;
+				// Single sqrt instead of N sqrts - major optimization
+				const double average_distance_src = std::sqrt(sum_squared_dist_src / kSampleNumber_);
+				const double average_distance_dst = std::sqrt(sum_squared_dist_dst / kSampleNumber_);
 
 				// Calculate the sqrt(2) / MeanDistance ratios
 				const double ratioSrc = M_SQRT2 / average_distance_src;
@@ -217,23 +218,20 @@ namespace superansac
 					return false;
 				
 				constexpr size_t kEquationNumber = 1;
-				Eigen::MatrixXd coefficients;
-				coefficients.resize(kSampleNumber_ * kEquationNumber, 9);
+				Eigen::MatrixXd coefficients(kSampleNumber_ * kEquationNumber, 9);
 
-				size_t rowIdx = 0;
-				double weight = 1.0;
-                
-				for (size_t i = 0; i < kSampleNumber_; ++i)
+				// Build coefficient matrix - unroll weighted/unweighted to avoid branch in loop
+				if (kWeights_ == nullptr)
 				{
-					const double
-						&x0 = normalizedPoints(i, 0),
-						&y0 = normalizedPoints(i, 1),
-						&x1 = normalizedPoints(i, 2),
-						&y1 = normalizedPoints(i, 3);
-
-					// If not weighted least-squares is applied
-					if (kWeights_ == nullptr)
+					// Unweighted case - no multiplications by weight
+					for (size_t i = 0; i < kSampleNumber_; ++i)
 					{
+						const double
+							&x0 = normalizedPoints(i, 0),
+							&y0 = normalizedPoints(i, 1),
+							&x1 = normalizedPoints(i, 2),
+							&y1 = normalizedPoints(i, 3);
+
 						coefficients(i, 0) = x1 * x0;
 						coefficients(i, 1) = x1 * y0;
 						coefficients(i, 2) = x1;
@@ -242,28 +240,37 @@ namespace superansac
 						coefficients(i, 5) = y1;
 						coefficients(i, 6) = x0;
 						coefficients(i, 7) = y0;
-						coefficients(i, 8) = 1;
+						coefficients(i, 8) = 1.0;
 					}
-					else
+				}
+				else
+				{
+					// Weighted case
+					for (size_t i = 0; i < kSampleNumber_; ++i)
 					{
-						// If weighted least-squares is applied
-						weight = kWeights_[i];
-
-						// Precalculate these values to avoid calculating them multiple times
 						const double
-							kWeightTimesX0 = weight * x0,
-							kWeightTimesY0 = weight * y0,
-							kWeightTimesX1 = weight * x1,
-							kWeightTimesY1 = weight * y1;
+							&x0 = normalizedPoints(i, 0),
+							&y0 = normalizedPoints(i, 1),
+							&x1 = normalizedPoints(i, 2),
+							&y1 = normalizedPoints(i, 3);
 
-						coefficients(i, 0) = kWeightTimesX1 * x0;
-						coefficients(i, 1) = kWeightTimesX1 * y0;
-						coefficients(i, 2) = kWeightTimesX1;
-						coefficients(i, 3) = kWeightTimesY1 * x0;
-						coefficients(i, 4) = kWeightTimesY1 * y0;
-						coefficients(i, 5) = kWeightTimesY1;
-						coefficients(i, 6) = kWeightTimesX0;
-						coefficients(i, 7) = kWeightTimesY0;
+						const double weight = kWeights_[i];
+
+						// Precalculate to reduce multiplications
+						const double
+							wx0 = weight * x0,
+							wy0 = weight * y0,
+							wx1 = weight * x1,
+							wy1 = weight * y1;
+
+						coefficients(i, 0) = wx1 * x0;
+						coefficients(i, 1) = wx1 * y0;
+						coefficients(i, 2) = wx1;
+						coefficients(i, 3) = wy1 * x0;
+						coefficients(i, 4) = wy1 * y0;
+						coefficients(i, 5) = wy1;
+						coefficients(i, 6) = wx0;
+						coefficients(i, 7) = wy0;
 						coefficients(i, 8) = weight;
 					}
 				}

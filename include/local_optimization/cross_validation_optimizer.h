@@ -93,7 +93,7 @@ namespace superansac
                      const models::Model &kModel_,              // The initial model
                      const scoring::Score &kScore_,             // The score of the initial model
                      const estimator::Estimator *kEstimator_,   // The model estimator
-                     const scoring::AbstractScoring *kScoring_, // The scoring function
+                    scoring::AbstractScoring *kScoring_, // The scoring function
                      models::Model &estimatedModel_,            // Output: the refined model
                      scoring::Score &estimatedScore_,           // Output: the score of the refined model
                      std::vector<size_t> &estimatedInliers_) const // Output: inliers of the refined model

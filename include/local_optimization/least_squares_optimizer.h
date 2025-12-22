@@ -67,17 +67,19 @@ namespace superansac
 				const models::Model &kModel_, // The previously estimated model 
 				const scoring::Score &kScore_, // The of the previously estimated model
 				const estimator::Estimator *kEstimator_, // The estimator used for the model estimation
-				const scoring::AbstractScoring *kScoring_, // The scoring object used for the model estimation
+				scoring::AbstractScoring *kScoring_, // The scoring object used for the model estimation
 				models::Model &estimatedModel_, // The estimated model
 				scoring::Score &estimatedScore_, // The score of the estimated model
 				std::vector<size_t> &estimatedInliers_) const // The inliers of the estimated model
 			{
 				static const scoring::Score kInvalidScore = scoring::Score();
-				// The estimated models
-				std::vector<models::Model> estimatedModels;
-				scoring::Score currentScore;
 
+				// Pre-reserve estimated models to avoid reallocations
+				std::vector<models::Model> estimatedModels;
+				estimatedModels.reserve(10);
 				estimatedModels.emplace_back(kModel_);
+
+				scoring::Score currentScore;
 
 				if (useInliers)
 				{
@@ -86,7 +88,7 @@ namespace superansac
 						// Estimate the model using the inliers
 						if (!kEstimator_->estimateModelNonminimal(
 							kData_,  // The data points
-							&kInliers_[0], 
+							kInliers_.data(),  // Use .data() instead of &[0]
 							kInliers_.size(),
 							&estimatedModels,
 							nullptr))
@@ -103,7 +105,7 @@ namespace superansac
 						// Estimate the model using the inliers
 						if (!kEstimator_->estimateModelNonminimal(
 							kData_,  // The data points
-							&estimatedInliers_[0], 
+							estimatedInliers_.data(),  // Use .data() instead of &[0]
 							estimatedInliers_.size(),
 							&estimatedModels,
 							nullptr))
@@ -114,7 +116,7 @@ namespace superansac
 					}
 				} else if (!kEstimator_->estimateModelNonminimal(
 					kData_,  // The data points
-					nullptr, 
+					nullptr,
 					kData_.rows(),
 					&estimatedModels,
 					nullptr))
@@ -123,10 +125,11 @@ namespace superansac
 					return;
 				}
 
-				// Clear the estimated inliers
+				// Clear and reserve the estimated inliers
 				estimatedInliers_.clear();
+				estimatedInliers_.reserve(kData_.rows());
 
-				// Temp inliers for selecting the best model
+				// Temp inliers for selecting the best model - reserve outside loop
 				std::vector<size_t> tmpInliers;
 				tmpInliers.reserve(kData_.rows());
 

@@ -1,3 +1,5 @@
+#pragma once
+
 namespace superansac {
 namespace scoring {
 static constexpr size_t lookupTableSize = 10000;

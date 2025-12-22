@@ -81,25 +81,31 @@ class CameraJacobianAccumulator {
     // Only computes the lower half of JtJ
     size_t accumulate(const CameraPose &pose, Eigen::Matrix<double, 6, 6> &JtJ,
                       Eigen::Matrix<double, 6, 1> &Jtr) const {
-        Eigen::Matrix3d R = pose.R();
+        const Eigen::Matrix3d R = pose.R();
+        const Eigen::Vector3d &t = pose.t;
         Eigen::Matrix2d Jcam;
         Jcam.setIdentity(); // we initialize to identity here (this is for the calibrated case)
         size_t num_residuals = 0;
+
         for (size_t i = 0; i < x.size(); ++i) {
-            const Eigen::Vector3d Z = R * X[i] + pose.t;
-            const Eigen::Vector2d z = Z.hnormalized();
+            const Eigen::Vector3d &Xi = X[i];
+            const Eigen::Vector3d Z = R * Xi + t;
 
             // Note this assumes points that are behind the camera will stay behind the camera
             // during the optimization
-            if (Z(2) < 0)
+            const double Z2 = Z(2);
+            if (Z2 < 0)
                 continue;
+
+            const double inv_Z2 = 1.0 / Z2;
+            const Eigen::Vector2d z(Z(0) * inv_Z2, Z(1) * inv_Z2);
 
             // Project with intrinsics
             Eigen::Vector2d zp = z;
             CameraModel::project_with_jac(camera.params, z, &zp, &Jcam);
 
             // Setup residual
-            Eigen::Vector2d r = zp - x[i];
+            const Eigen::Vector2d r = zp - x[i];
             const double r_squared = r.squaredNorm();
             const double weight = weights[i] * loss_fn.weight(r_squared);
 
@@ -108,50 +114,91 @@ class CameraJacobianAccumulator {
             }
             num_residuals++;
 
-            // Compute jacobian w.r.t. Z (times R)
             Eigen::Matrix<double, 2, 3> dZ;
             dZ.block<2, 2>(0, 0) = Jcam;
             dZ.col(2) = -Jcam * z;
-            dZ *= 1.0 / Z(2);
+            dZ *= inv_Z2;  // Use pre-computed reciprocal
             dZ *= R;
 
             const double X0 = X[i](0);
             const double X1 = X[i](1);
             const double X2 = X[i](2);
-            const double dZtdZ_0_0 = weight * dZ.col(0).dot(dZ.col(0));
-            const double dZtdZ_1_0 = weight * dZ.col(1).dot(dZ.col(0));
-            const double dZtdZ_1_1 = weight * dZ.col(1).dot(dZ.col(1));
-            const double dZtdZ_2_0 = weight * dZ.col(2).dot(dZ.col(0));
-            const double dZtdZ_2_1 = weight * dZ.col(2).dot(dZ.col(1));
-            const double dZtdZ_2_2 = weight * dZ.col(2).dot(dZ.col(2));
-            JtJ(0, 0) += X2 * (X2 * dZtdZ_1_1 - X1 * dZtdZ_2_1) + X1 * (X1 * dZtdZ_2_2 - X2 * dZtdZ_2_1);
-            JtJ(1, 0) += -X2 * (X2 * dZtdZ_1_0 - X0 * dZtdZ_2_1) - X1 * (X0 * dZtdZ_2_2 - X2 * dZtdZ_2_0);
-            JtJ(2, 0) += X1 * (X0 * dZtdZ_2_1 - X1 * dZtdZ_2_0) - X2 * (X0 * dZtdZ_1_1 - X1 * dZtdZ_1_0);
-            JtJ(3, 0) += X1 * dZtdZ_2_0 - X2 * dZtdZ_1_0;
-            JtJ(4, 0) += X1 * dZtdZ_2_1 - X2 * dZtdZ_1_1;
-            JtJ(5, 0) += X1 * dZtdZ_2_2 - X2 * dZtdZ_2_1;
-            JtJ(1, 1) += X2 * (X2 * dZtdZ_0_0 - X0 * dZtdZ_2_0) + X0 * (X0 * dZtdZ_2_2 - X2 * dZtdZ_2_0);
-            JtJ(2, 1) += -X2 * (X1 * dZtdZ_0_0 - X0 * dZtdZ_1_0) - X0 * (X0 * dZtdZ_2_1 - X1 * dZtdZ_2_0);
-            JtJ(3, 1) += X2 * dZtdZ_0_0 - X0 * dZtdZ_2_0;
-            JtJ(4, 1) += X2 * dZtdZ_1_0 - X0 * dZtdZ_2_1;
-            JtJ(5, 1) += X2 * dZtdZ_2_0 - X0 * dZtdZ_2_2;
-            JtJ(2, 2) += X1 * (X1 * dZtdZ_0_0 - X0 * dZtdZ_1_0) + X0 * (X0 * dZtdZ_1_1 - X1 * dZtdZ_1_0);
-            JtJ(3, 2) += X0 * dZtdZ_1_0 - X1 * dZtdZ_0_0;
-            JtJ(4, 2) += X0 * dZtdZ_1_1 - X1 * dZtdZ_1_0;
-            JtJ(5, 2) += X0 * dZtdZ_2_1 - X1 * dZtdZ_2_0;
+
+            const double dZ00 = dZ(0, 0);
+            const double dZ01 = dZ(0, 1);
+            const double dZ02 = dZ(0, 2);
+            const double dZ10 = dZ(1, 0);
+            const double dZ11 = dZ(1, 1);
+            const double dZ12 = dZ(1, 2);
+
+            const double dZtdZ_0_0 = weight * (dZ00 * dZ00 + dZ10 * dZ10);
+            const double dZtdZ_1_0 = weight * (dZ01 * dZ00 + dZ11 * dZ10);
+            const double dZtdZ_1_1 = weight * (dZ01 * dZ01 + dZ11 * dZ11);
+            const double dZtdZ_2_0 = weight * (dZ02 * dZ00 + dZ12 * dZ10);
+            const double dZtdZ_2_1 = weight * (dZ02 * dZ01 + dZ12 * dZ11);
+            const double dZtdZ_2_2 = weight * (dZ02 * dZ02 + dZ12 * dZ12);
+
+            const double X0_X0 = X0 * X0;
+            const double X0_X1 = X0 * X1;
+            const double X0_X2 = X0 * X2;
+            const double X1_X1 = X1 * X1;
+            const double X1_X2 = X1 * X2;
+            const double X2_X2 = X2 * X2;
+
+            const double X2_dZtdZ_1_1 = X2 * dZtdZ_1_1;
+            const double X1_dZtdZ_2_1 = X1 * dZtdZ_2_1;
+            const double X1_dZtdZ_2_2 = X1 * dZtdZ_2_2;
+            const double X2_dZtdZ_2_1 = X2 * dZtdZ_2_1;
+            const double X2_dZtdZ_1_0 = X2 * dZtdZ_1_0;
+            const double X0_dZtdZ_2_1 = X0 * dZtdZ_2_1;
+            const double X0_dZtdZ_2_2 = X0 * dZtdZ_2_2;
+            const double X2_dZtdZ_2_0 = X2 * dZtdZ_2_0;
+            const double X0_dZtdZ_1_1 = X0 * dZtdZ_1_1;
+            const double X1_dZtdZ_2_0 = X1 * dZtdZ_2_0;
+            const double X1_dZtdZ_1_0 = X1 * dZtdZ_1_0;
+            const double X2_dZtdZ_0_0 = X2 * dZtdZ_0_0;
+            const double X0_dZtdZ_2_0 = X0 * dZtdZ_2_0;
+            const double X1_dZtdZ_0_0 = X1 * dZtdZ_0_0;
+            const double X0_dZtdZ_1_0 = X0 * dZtdZ_1_0;
+
+            JtJ(0, 0) += X2_X2 * dZtdZ_1_1 - X1_X2 * dZtdZ_2_1 - X1_X2 * dZtdZ_2_1 + X1_X1 * dZtdZ_2_2;
+            JtJ(1, 0) += -X2_X2 * dZtdZ_1_0 + X0_X2 * dZtdZ_2_1 - X0_X1 * dZtdZ_2_2 + X1_X2 * dZtdZ_2_0;
+            JtJ(2, 0) += X0_X1 * dZtdZ_2_1 - X1_X1 * dZtdZ_2_0 - X0_X2 * dZtdZ_1_1 + X1_X2 * dZtdZ_1_0;
+            JtJ(3, 0) += X1_dZtdZ_2_0 - X2_dZtdZ_1_0;
+            JtJ(4, 0) += X1_dZtdZ_2_1 - X2_dZtdZ_1_1;
+            JtJ(5, 0) += X1 * dZtdZ_2_2 - X2_dZtdZ_2_1;
+            JtJ(1, 1) += X2_X2 * dZtdZ_0_0 - X0_X2 * dZtdZ_2_0 - X0_X2 * dZtdZ_2_0 + X0_X0 * dZtdZ_2_2;
+            JtJ(2, 1) += -X1_X2 * dZtdZ_0_0 + X0_X2 * dZtdZ_1_0 - X0_X0 * dZtdZ_2_1 + X0_X1 * dZtdZ_2_0;
+            JtJ(3, 1) += X2_dZtdZ_0_0 - X0_dZtdZ_2_0;
+            JtJ(4, 1) += X2 * dZtdZ_1_0 - X0_dZtdZ_2_1;
+            JtJ(5, 1) += X2_dZtdZ_2_0 - X0_dZtdZ_2_2;
+            JtJ(2, 2) += X1_X1 * dZtdZ_0_0 - X0_X1 * dZtdZ_1_0 - X0_X1 * dZtdZ_1_0 + X0_X0 * dZtdZ_1_1;
+            JtJ(3, 2) += X0_dZtdZ_1_0 - X1_dZtdZ_0_0;
+            JtJ(4, 2) += X0_dZtdZ_1_1 - X1_dZtdZ_1_0;
+            JtJ(5, 2) += X0 * dZtdZ_2_1 - X1_dZtdZ_2_0;
             JtJ(3, 3) += dZtdZ_0_0;
             JtJ(4, 3) += dZtdZ_1_0;
             JtJ(5, 3) += dZtdZ_2_0;
             JtJ(4, 4) += dZtdZ_1_1;
             JtJ(5, 4) += dZtdZ_2_1;
             JtJ(5, 5) += dZtdZ_2_2;
-            r *= weight;
-            Jtr(0) += (r(0) * (X1 * dZ(0, 2) - X2 * dZ(0, 1)) + r(1) * (X1 * dZ(1, 2) - X2 * dZ(1, 1)));
-            Jtr(1) += (-r(0) * (X0 * dZ(0, 2) - X2 * dZ(0, 0)) - r(1) * (X0 * dZ(1, 2) - X2 * dZ(1, 0)));
-            Jtr(2) += (r(0) * (X0 * dZ(0, 1) - X1 * dZ(0, 0)) + r(1) * (X0 * dZ(1, 1) - X1 * dZ(1, 0)));
-            Jtr(3) += (dZ(0, 0) * r(0) + dZ(1, 0) * r(1));
-            Jtr(4) += (dZ(0, 1) * r(0) + dZ(1, 1) * r(1));
-            Jtr(5) += (dZ(0, 2) * r(0) + dZ(1, 2) * r(1));
+
+            const double wr0 = weight * r(0);
+            const double wr1 = weight * r(1);
+
+            const double X1_dZ02_minus_X2_dZ01 = X1 * dZ02 - X2 * dZ01;
+            const double X1_dZ12_minus_X2_dZ11 = X1 * dZ12 - X2 * dZ11;
+            const double X0_dZ02_minus_X2_dZ00 = X0 * dZ02 - X2 * dZ00;
+            const double X0_dZ12_minus_X2_dZ10 = X0 * dZ12 - X2 * dZ10;
+            const double X0_dZ01_minus_X1_dZ00 = X0 * dZ01 - X1 * dZ00;
+            const double X0_dZ11_minus_X1_dZ10 = X0 * dZ11 - X1 * dZ10;
+
+            Jtr(0) += wr0 * X1_dZ02_minus_X2_dZ01 + wr1 * X1_dZ12_minus_X2_dZ11;
+            Jtr(1) += -wr0 * X0_dZ02_minus_X2_dZ00 - wr1 * X0_dZ12_minus_X2_dZ10;
+            Jtr(2) += wr0 * X0_dZ01_minus_X1_dZ00 + wr1 * X0_dZ11_minus_X1_dZ10;
+            Jtr(3) += dZ00 * wr0 + dZ10 * wr1;
+            Jtr(4) += dZ01 * wr0 + dZ11 * wr1;
+            Jtr(5) += dZ02 * wr0 + dZ12 * wr1;
         }
         return num_residuals;
     }

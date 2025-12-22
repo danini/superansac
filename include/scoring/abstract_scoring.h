@@ -57,6 +57,11 @@ class AbstractScoring
 
         // Get the threshold
         FORCE_INLINE const double &getThreshold() const { return threshold; };
+        
+        FORCE_INLINE virtual void updateSPRTParameters(
+            const Score& currentBest, 
+            int iterationIndex, 
+            size_t totalPoints) = 0;
 
         // Set the image size
         FORCE_INLINE void setImageSize(

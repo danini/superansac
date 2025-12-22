@@ -70,6 +70,13 @@ class MAGSACScoring : public AbstractScoring
         double squaredTruncatedThreshold;
         double weightPremultiplier;
         
+        FORCE_INLINE void updateSPRTParameters(const Score& currentBest, 
+            int iterationIndex, 
+            size_t totalPoints)
+        {
+            
+        }
+        
         double upperIncompleteGamma(double a, double x) const
         {
             // boost::math::tgamma and boost::math::tgamma_upper
@@ -80,24 +87,22 @@ class MAGSACScoring : public AbstractScoring
         FORCE_INLINE std::pair<double, double> getGammaValues(double residual_) const
         {
             size_t index = static_cast<size_t>(residual_ * lookupTableSize);
-            if (index >= lookupTableSize)
-                index = lookupTableSize - 1;
-            return { lowerIncompleteGammaLookupTable[degreesOfFreedom - 2][index], upperIncompleteGammaLookupTable[degreesOfFreedom - 2][index] };
+            index = (index < lookupTableSize) ? index : (lookupTableSize - 1);
+            const size_t dof_idx = degreesOfFreedom - 2;
+            return { lowerIncompleteGammaLookupTable[dof_idx][index], upperIncompleteGammaLookupTable[dof_idx][index] };
         }
 
         FORCE_INLINE double getUpperGammaValue(double residual_) const
         {
             size_t index = static_cast<size_t>(residual_ * lookupTableSize);
-            if (index >= lookupTableSize)
-                index = lookupTableSize - 1;
+            index = (index < lookupTableSize) ? index : (lookupTableSize - 1);
             return upperIncompleteGammaLookupTable[degreesOfFreedom - 2][index];
         }
 
         FORCE_INLINE double getLowerGammaValue(double residual_) const
         {
             size_t index = static_cast<size_t>(residual_ * lookupTableSize);
-            if (index >= lookupTableSize)
-                index = lookupTableSize - 1;
+            index = (index < lookupTableSize) ? index : (lookupTableSize - 1);
             return lowerIncompleteGammaLookupTable[degreesOfFreedom - 2][index];
         }
 
@@ -273,9 +278,10 @@ class MAGSACScoring : public AbstractScoring
                 file << "}; }}\n"; // Close the namespace
                 file.close(); // Close the file
 
-                std::cout << "Lookup table saved." << std::endl; 
+                std::cout << "Lookup table saved." << std::endl;
 
-                while (1);
+                // Exit program after generating lookup table
+                std::exit(0);
             }
         }
 
@@ -354,12 +360,14 @@ class MAGSACScoring : public AbstractScoring
 
             if (kPotentialInlierSets_ != nullptr)
             {
-                std::cout << "Potential inlier sets." << std::endl;
-                std::cout << kPotentialInlierSets_->size() << " ";
+                const double kBestScoreValue = kBestScore_.getValue();
+                const double kBestPossibleGain = premultiplier * zeroResidualLoss;
+                const double kInvTwoTimesSquaredSigmaMax = 1.0 / twoTimesSquaredSigmaMax;
+
+                // Process potential inlier sets
                 size_t testedPoints = 0;
                 for (const auto &potentialInlierSet : *kPotentialInlierSets_)
                 {
-                    std::cout << potentialInlierSet->size() << " ";
                     // Increase the number of tested points
                     testedPoints += potentialInlierSet->size();
 
@@ -380,30 +388,25 @@ class MAGSACScoring : public AbstractScoring
                             // Increase the inlier number
                             ++inlierNumber;
 
-                            // Increase the score.
-                            residualPerTwoTimesSquaredSigmaMax = squaredResidual / twoTimesSquaredSigmaMax;
+                            residualPerTwoTimesSquaredSigmaMax = squaredResidual * kInvTwoTimesSquaredSigmaMax;
                             // Calculate the loss by using a look-up table or by calculating the incomplete gamma function
                             if constexpr (kUseLookUpTable)
                             {
                                 gammaValues = getGammaValues(residualPerTwoTimesSquaredSigmaMax); // Get the gamma values
-                                loss = squaredSigmaMaxPerTwo * gammaValues.first + squaredSigmaMaxPerFour * (gammaValues.second - value0); 
+                                loss = squaredSigmaMaxPerTwo * gammaValues.first + squaredSigmaMaxPerFour * (gammaValues.second - value0);
                             } else // Calculate the loss directly by using the incomplete gamma function
                                 loss = (squaredSigmaMaxPerTwo * boost::math::tgamma_lower(nPlus1Per2, residualPerTwoTimesSquaredSigmaMax) +
-                                    squaredSigmaMaxPerFour * (upperIncompleteGamma(nMinus1Per2, residualPerTwoTimesSquaredSigmaMax) - value0)); 
+                                    squaredSigmaMaxPerFour * (upperIncompleteGamma(nMinus1Per2, residualPerTwoTimesSquaredSigmaMax) - value0));
 
                             // Commenting "premultiplier" as it does not affect the final result. It is just a constant.
                             scoreValue += premultiplier * loss; // Increase the loss value
-                            //scoreValue += loss; // Increase the loss value
                         } else
-                            scoreValue += lossOutlier;                        
+                            scoreValue += lossOutlier;
 
-                        // Interrupt if there is no chance of being better than the best model
-                        if (premultiplier * zeroResidualLoss * (kPointNumber - pointIdx) + scoreValue < kBestScore_.getValue())
+                        if (kBestPossibleGain * (kPointNumber - pointIdx) + scoreValue < kBestScoreValue)
                             return kEmptyScore;
                     }
                 }
-
-                std::cout << std::endl;
 
                 // Increase the score by the loss of the untested outliers
                 scoreValue += (kData_.rows() - testedPoints) * lossOutlier;
@@ -433,10 +436,10 @@ class MAGSACScoring : public AbstractScoring
                         if constexpr (kUseLookUpTable)
                         {
                             gammaValues = getGammaValues(residualPerTwoTimesSquaredSigmaMax); // Get the gamma values
-                            loss = squaredSigmaMaxPerTwo * gammaValues.first + squaredSigmaMaxPerFour * (gammaValues.second - value0); 
+                            loss = squaredSigmaMaxPerTwo * gammaValues.first + squaredSigmaMaxPerFour * (gammaValues.second - value0);
                         } else // Calculate the loss directly by using the incomplete gamma function
                             loss = (squaredSigmaMaxPerTwo * boost::math::tgamma_lower(nPlus1Per2, residualPerTwoTimesSquaredSigmaMax) +
-                                squaredSigmaMaxPerFour * (upperIncompleteGamma(nMinus1Per2, residualPerTwoTimesSquaredSigmaMax) - value0)); 
+                                squaredSigmaMaxPerFour * (upperIncompleteGamma(nMinus1Per2, residualPerTwoTimesSquaredSigmaMax) - value0));
 
                         // Commenting "premultiplier" as it does not affect the final result. It is just a constant.
                         scoreValue += premultiplier * loss; // Increase the loss value

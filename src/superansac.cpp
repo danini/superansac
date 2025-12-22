@@ -4,17 +4,24 @@
 
 namespace superansac {
 
-SupeRansac::SupeRansac() : 
-    currentSample(nullptr), 
-    localOptimizer(nullptr), 
+SupeRansac::SupeRansac() :
+    currentSample(nullptr),
+    localOptimizer(nullptr),
     finalOptimizer(nullptr)
 {
-
+    // Reserve memory for inliers to avoid reallocations
+    inliers.reserve(10000);
+    tmpInliers.reserve(10000);
 }
 
-SupeRansac::~SupeRansac() 
+SupeRansac::~SupeRansac()
 {
-    
+    // Clean up current sample if it exists
+    if (currentSample != nullptr)
+    {
+        delete[] currentSample;
+        currentSample = nullptr;
+    }
 }
 
 void SupeRansac::run(const DataMatrix &kData_)
@@ -25,8 +32,8 @@ void SupeRansac::run(const DataMatrix &kData_)
 
     // Initialize the variables
     const double &kThreshold_ = scoring->getThreshold();
-    bool isModelUpdated,
-        immediateTermination = false;
+    bool isModelUpdated = false;  // Single declaration, initialized
+    bool immediateTermination = false;
     const size_t kStrickIterationLimit = settings.maxIterations;
     int unsuccessfulModelGenerations;
     size_t pointNumber;
@@ -35,9 +42,14 @@ void SupeRansac::run(const DataMatrix &kData_)
     maxIterations = kStrickIterationLimit; // The maximum number of iterations
     bestScore = scoring::Score(); // The best score
     currentModels.clear(); // Clearing the current models
-    inliers.reserve(kData_.rows()); // Reserve memory for the inliers
-    tmpInliers.reserve(kData_.rows()); // Reserve memory for the temporary inliers
+
+    // Reserve memory for the inliers if needed (already reserved in constructor)
+    if (inliers.capacity() < kData_.rows())
+        inliers.reserve(kData_.rows());
+    if (tmpInliers.capacity() < kData_.rows())
+        tmpInliers.reserve(kData_.rows());
     std::vector<const std::vector<size_t>*> potentialInlierSets; // The potential inlier sets from the inlier selector
+    std::vector<std::tuple<models::Model, std::vector<size_t>, scoring::Score>> bestModels;
 
     // Current sample
     const size_t kSampleSize = estimator->sampleSize();
@@ -102,8 +114,8 @@ void SupeRansac::run(const DataMatrix &kData_)
         }
 
         // Iterate through the models
-        bool isModelUpdated = false;
-        for (models::Model &model : currentModels)
+        isModelUpdated = false;  // Reset flag for this iteration
+        for (auto &model : currentModels) 
         {
             // Check if the model is valid
             if (!estimator->isValidModel(model, // The model parameters
@@ -153,10 +165,12 @@ void SupeRansac::run(const DataMatrix &kData_)
                 bestModel = model;
                 inliers.swap(tmpInliers);
                 isModelUpdated = true;
+                bestModels.emplace_back(std::make_tuple(model, inliers, currentScore));
             }
         }
 
-        if (isModelUpdated)
+        // Perform local optimization inside the loop if enabled
+        if (settings.localOptimizationInsideTheLoop && isModelUpdated)
         {
             // Perform local optimization if needed
             if (localOptimizer != nullptr)
@@ -206,6 +220,39 @@ void SupeRansac::run(const DataMatrix &kData_)
 
         // Increase the iteration number
         iterationNumber++;
+
+        if (settings.useSprt)
+            updateSprt(scoring, isModelUpdated, bestScore, iterationNumber, kData_.rows());
+    }
+
+    if (localOptimizer != nullptr)
+    {
+        const int kLastIdxToCheck = 
+            bestModels.size() >= settings.topKForLocalOptimization ? 
+                bestModels.size() - settings.topKForLocalOptimization : 0;
+        for (int idx = bestModels.size() - 1; idx >= kLastIdxToCheck; --idx)
+        {
+            const auto &[currModel, currInliers, currScore] = bestModels[idx];
+
+            tmpInliers.clear();
+            localOptimizer->run(kData_, // Data matrix
+                currInliers, // Inliers
+                currModel, // The best model
+                currScore, // The score of the best model
+                estimator, // Estimator
+                scoring, // Scoring object
+                locallyOptimizedModel, // The locally optimized model
+                currentScore, // The score of the current model
+                tmpInliers); // The inliers of the estimated model
+
+            if (bestScore < currentScore)
+            {
+                // Update the best model
+                bestScore = currentScore;
+                bestModel = locallyOptimizedModel;
+                inliers.swap(tmpInliers);
+            }
+        }
     }
 
     // Perform final optimization if needed
@@ -233,6 +280,27 @@ void SupeRansac::run(const DataMatrix &kData_)
 
     // Clean up
     delete[] currentSample;
+    currentSample = nullptr;
+}
+
+void SupeRansac::updateSprt(
+    scoring::AbstractScoring *scoring_, 
+    const bool kIsModelUpdated_, 
+    const scoring::Score &kBestScore_, 
+    const size_t kIterationNumber_, 
+    const size_t kPointNumber_)
+{
+    const static scoring::Score kEmptyScore = scoring::Score();
+    if (settings.scoring == scoring::ScoringType::MAGSAC)
+    {
+        if (kIsModelUpdated_) 
+            dynamic_cast<superansac::scoring::MAGSACSPRTScoring *>(scoring_)->updateSPRTParameters(kBestScore_, kIterationNumber_, kPointNumber_);
+        else
+            dynamic_cast<superansac::scoring::MAGSACSPRTScoring *>(scoring_)->updateSPRTParameters(kEmptyScore, kIterationNumber_, kPointNumber_);
+    } else
+    {
+        // TODO: implement
+    }
 }
 
 /*

@@ -48,12 +48,14 @@ bool check_cheirality(const CameraPose &pose, const Eigen::Vector3d &x1, const E
     const double b1 = -Rx1.dot(pose.t);
     const double b2 = x2.dot(pose.t);
 
-    // Note that we drop the factor 1.0/(1-a*a) since it is always positive.
-    const double lambda1 = b1 - a * b2;
-    const double lambda2 = -a * b1 + b2;
+    const double a_b2 = a * b2;
+    const double a_b1 = a * b1;
+    const double lambda1 = b1 - a_b2;
+    const double lambda2 = b2 - a_b1;
 
-    min_depth = min_depth * (1 - a * a);
-    return lambda1 > min_depth && lambda2 > min_depth;
+    const double a_sq = a * a;
+    const double min_depth_scaled = min_depth * (1.0 - a_sq);
+    return lambda1 > min_depth_scaled && lambda2 > min_depth_scaled;
 }
 
 bool check_cheirality(const CameraPose &pose, const Eigen::Vector3d &p1, const Eigen::Vector3d &x1,
