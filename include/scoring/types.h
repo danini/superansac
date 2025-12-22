@@ -39,6 +39,7 @@
 #include "ransac_scoring.h"
 #include "msac_scoring.h"
 #include "magsac_scoring.h"
+#include "magsac_sprt_scoring.h"
 #include "minpran_scoring.h"
 #include "acransac_scoring.h"
 #include "grid_scoring.h"
@@ -62,7 +63,8 @@ namespace scoring {
 
     // Factory function to create samplers
     template <size_t _DimensionNumber>
-    FORCE_INLINE std::unique_ptr<AbstractScoring> createScoring(const ScoringType kType_) 
+    FORCE_INLINE std::unique_ptr<AbstractScoring> createScoring(const ScoringType kType_, 
+        const bool kUseSPRT_ = true) 
     {
         switch (kType_) 
         {
@@ -81,7 +83,10 @@ namespace scoring {
             case ScoringType::GRID:
                 return std::make_unique<GridScoring<_DimensionNumber>>();
             case ScoringType::MAGSAC:
-                return std::make_unique<MAGSACScoring>();
+                if (kUseSPRT_)
+                    return std::make_unique<MAGSACSPRTScoring>();
+                else
+                    return std::make_unique<MAGSACScoring>();
             default:
                 throw std::invalid_argument("Unknown Sampler Type");
         }

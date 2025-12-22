@@ -257,12 +257,15 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
 
     // Create the scoring object
     std::unique_ptr<superansac::scoring::AbstractScoring> scorer = 
-        superansac::scoring::createScoring<5>(kScoring);
+        superansac::scoring::createScoring<5>(kScoring, settings_.useSprt);
     scorer->setThreshold(settings_.inlierThreshold); // Set the threshold
 
     if (kScoring == superansac::scoring::ScoringType::MAGSAC) // Initialize the scoring object if the scoring is MAGSAC
     {
-        dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
+        if (settings_.useSprt)
+            dynamic_cast<superansac::scoring::MAGSACSPRTScoring *>(scorer.get())->initialize(estimator.get());
+        else
+            dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
         solverOptions.loss_type = poselib::BundleOptions::LossType::MAGSACPlusPlus;
     } else if (kScoring == superansac::scoring::ScoringType::ACRANSAC) // Initialize the scoring object if the scoring is ACRANSAC
         throw std::invalid_argument("The ACRANSAC scoring is not implemented for the absolute pose estimation.");
@@ -446,7 +449,7 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
 
     // Create the scoring object
     std::unique_ptr<superansac::scoring::AbstractScoring> scorer = 
-        superansac::scoring::createScoring<6>(kScoring);
+        superansac::scoring::createScoring<6>(kScoring, settings_.useSprt);
     scorer->setThreshold(settings_.inlierThreshold); // Set the threshold
 
     // Set the image sizes if the scoring is ACRANSAC
@@ -468,7 +471,10 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
         dynamic_cast<superansac::scoring::GridScoring<6> *>(scorer.get())->setNeighborhood(gridNeighborhoodGraph);
     } else if (kScoring == superansac::scoring::ScoringType::MAGSAC) // Initialize the scoring object if the scoring is MAGSAC
     {
-        dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
+        if (settings_.useSprt)
+            dynamic_cast<superansac::scoring::MAGSACSPRTScoring *>(scorer.get())->initialize(estimator.get());
+        else
+            dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
     } else if (kScoring == superansac::scoring::ScoringType::ACRANSAC) // Initialize the scoring object if the scoring is ACRANSAC
         throw std::invalid_argument("The scoring type is not supported.");
 
@@ -662,7 +668,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
 
     // Create the scoring object
     std::unique_ptr<superansac::scoring::AbstractScoring> scorer = 
-        superansac::scoring::createScoring<4>(kScoring);
+        superansac::scoring::createScoring<4>(kScoring, settings_.useSprt);
     scorer->setThreshold(settings_.inlierThreshold); // Set the threshold
 
     // Set the image sizes if the scoring is ACRANSAC
@@ -686,7 +692,10 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
         dynamic_cast<superansac::scoring::GridScoring<4> *>(scorer.get())->setNeighborhood(gridNeighborhoodGraph);
     } else if (kScoring == superansac::scoring::ScoringType::MAGSAC) // Initialize the scoring object if the scoring is MAGSAC
     {
-        dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
+        if (settings_.useSprt)
+            dynamic_cast<superansac::scoring::MAGSACSPRTScoring *>(scorer.get())->initialize(estimator.get());
+        else
+            dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
         solverOptions.loss_type = poselib::BundleOptions::LossType::MAGSACPlusPlus;
     }
 
@@ -922,7 +931,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
 
     // Create the scoring object
     std::unique_ptr<superansac::scoring::AbstractScoring> scorer = 
-        superansac::scoring::createScoring<4>(kScoring);
+        superansac::scoring::createScoring<4>(kScoring, settings_.useSprt);
     scorer->setThreshold(settings_.inlierThreshold); // Set the threshold
 
     // Set the image sizes if the scoring is ACRANSAC
@@ -946,7 +955,10 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
         dynamic_cast<superansac::scoring::GridScoring<4> *>(scorer.get())->setNeighborhood(gridNeighborhoodGraph);
     } else if (kScoring == superansac::scoring::ScoringType::MAGSAC) // Initialize the scoring object if the scoring is MAGSAC
     {
-        dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
+        if (settings_.useSprt)
+            dynamic_cast<superansac::scoring::MAGSACSPRTScoring *>(scorer.get())->initialize(estimator.get());
+        else
+            dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
         solverOptions.loss_type = poselib::BundleOptions::LossType::MAGSACPlusPlus;
     }
 
@@ -1113,7 +1125,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
 
     // Create the scoring object
     std::unique_ptr<superansac::scoring::AbstractScoring> scorer = 
-        superansac::scoring::createScoring<4>(kScoring);
+        superansac::scoring::createScoring<4>(kScoring, settings_.useSprt);
     scorer->setThreshold(settings_.inlierThreshold); // Set the threshold
 
     // Set the image sizes if the scoring is ACRANSAC
@@ -1136,7 +1148,12 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
         // Set the neighborhood graph
         dynamic_cast<superansac::scoring::GridScoring<4> *>(scorer.get())->setNeighborhood(gridNeighborhoodGraph);
     } else if (kScoring == superansac::scoring::ScoringType::MAGSAC) // Initialize the scoring object if the scoring is MAGSAC
-        dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
+    {
+        if (settings_.useSprt)
+            dynamic_cast<superansac::scoring::MAGSACSPRTScoring *>(scorer.get())->initialize(estimator.get());
+        else
+            dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
+    }    
 
     // Create termination criterion object
     std::unique_ptr<superansac::termination::AbstractCriterion> terminationCriterion = 

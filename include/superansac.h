@@ -172,6 +172,12 @@ class SupeRansac
             bestScore; // The score of the best model
         models::Model bestModel, // The best model
             locallyOptimizedModel; // The locally optimized model
+
+    void updateSprt(scoring::AbstractScoring *scoring_, 
+        const bool kIsModelUpdated_, 
+        const scoring::Score &kBestScore_, 
+        const size_t kIterationNumber_, 
+        const size_t kPointNumber_);
 };
 
 }

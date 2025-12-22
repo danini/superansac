@@ -64,6 +64,13 @@ class MINPRANScoring : public AbstractScoring
             threshold = kThreshold_;
             squaredThreshold = threshold * threshold;
         }
+        
+        FORCE_INLINE void updateSPRTParameters(const Score& currentBest, 
+            int iterationIndex, 
+            size_t totalPoints)
+        {
+            
+        }
 
         // Function to calculate logarithm of factorial using Stirling's approximation
         double logFactorial(int n) const 

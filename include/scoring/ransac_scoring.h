@@ -52,6 +52,13 @@ class RANSACScoring : public AbstractScoring
 
         // Destructor
         ~RANSACScoring() {}
+        
+        FORCE_INLINE void updateSPRTParameters(const Score& currentBest, 
+            int iterationIndex, 
+            size_t totalPoints)
+        {
+            
+        }
 
         // Set the threshold
         FORCE_INLINE void setThreshold(const double kThreshold_)

@@ -64,10 +64,13 @@ namespace superansac {
 
     struct RANSACSettings 
     {
-        size_t minIterations = 1000, // Minimum number of iterations
+        size_t topKForLocalOptimization = 5, // Number of best models used for local optimization
+            minIterations = 1000, // Minimum number of iterations
             maxIterations = 5000; // Maximum number of iterations
         double inlierThreshold = 1.5; // Inlier threshold
         double confidence = 0.99; // Confidence
+        bool localOptimizationInsideTheLoop = false, // Whether to locally optimize models when you find a new best or later
+            useSprt = true; // Whether to use SPRT test to speed up
         
         scoring::ScoringType scoring = 
             scoring::ScoringType::MAGSAC; // Scoring type
