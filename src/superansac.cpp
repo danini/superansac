@@ -163,7 +163,7 @@ void SupeRansac::run(const DataMatrix &kData_)
                 // Update the best model
                 bestScore = currentScore;
                 bestModel = model;
-                inliers.swap(tmpInliers);
+                inliers = std::move(tmpInliers);  // Use move semantics instead of swap
                 isModelUpdated = true;
                 bestModels.emplace_back(std::make_tuple(model, inliers, currentScore));
             }
@@ -191,7 +191,7 @@ void SupeRansac::run(const DataMatrix &kData_)
                     // Update the best model
                     bestScore = currentScore;
                     bestModel = locallyOptimizedModel;
-                    inliers.swap(tmpInliers);
+                    inliers = std::move(tmpInliers);  // Use move semantics instead of swap
                 }
             }
 
@@ -250,7 +250,7 @@ void SupeRansac::run(const DataMatrix &kData_)
                 // Update the best model
                 bestScore = currentScore;
                 bestModel = locallyOptimizedModel;
-                inliers.swap(tmpInliers);
+                inliers = std::move(tmpInliers);  // Use move semantics instead of swap
             }
         }
     }
@@ -269,12 +269,12 @@ void SupeRansac::run(const DataMatrix &kData_)
             currentScore, // The score of the current model
             tmpInliers); // The inliers of the estimated model
 
-        // Update the best model
-        if (currentScore.getInlierNumber() > kSampleSize)
+        // Update the best model (check both inlier count AND score value)
+        if (currentScore.getInlierNumber() > kSampleSize && bestScore < currentScore)
         {
             bestScore = currentScore;
             bestModel = locallyOptimizedModel;
-            inliers.swap(tmpInliers);
+            inliers = std::move(tmpInliers);  // Use move semantics instead of swap
         }
     }
 
