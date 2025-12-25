@@ -29,16 +29,18 @@ namespace scoring {
 class MAGSACSPRTScoring : public AbstractScoring
 {
 protected:
-    // ====== MAGSAC core (unchanged from MAGSACScoring) ======
+    // ====== MAGSAC core (with optimizations) ======
     static constexpr bool kUseLookUpTable = true;
 
     size_t degreesOfFreedom = 0;
+    size_t dofIndex_ = 0;  // Cached DOF index for lookup table
     double k = 0.0;
     double Cn = 0.0;
     double squaredSigmaMax = 0.0;
     double squaredSigmaMaxPerTwo = 0.0;
     double squaredSigmaMaxPerFour = 0.0;
     double twoTimesSquaredSigmaMax = 0.0;
+    double invTwoTimesSquaredSigmaMax = 0.0;  // Precomputed inverse for optimization
     double zeroResidualLoss = 0.0;
     double nPlus1Per2 = 0.0;
     double nMinus1Per2 = 0.0;
@@ -52,13 +54,14 @@ protected:
     FORCE_INLINE std::pair<double,double> getGammaValues(double residual_) const {
         size_t idx = static_cast<size_t>(residual_ * lookupTableSize);
         if (idx >= lookupTableSize) idx = lookupTableSize - 1;
-        return { lowerIncompleteGammaLookupTable[degreesOfFreedom - 2][idx],
-                 upperIncompleteGammaLookupTable[degreesOfFreedom - 2][idx] };
+        // Use cached dofIndex_ instead of recomputing
+        return { lowerIncompleteGammaLookupTable[dofIndex_][idx],
+                 upperIncompleteGammaLookupTable[dofIndex_][idx] };
     }
     FORCE_INLINE double getUpperGammaValue(double residual_) const {
         size_t idx = static_cast<size_t>(residual_ * lookupTableSize);
         if (idx >= lookupTableSize) idx = lookupTableSize - 1;
-        return upperIncompleteGammaLookupTable[degreesOfFreedom - 2][idx];
+        return upperIncompleteGammaLookupTable[dofIndex_][idx];
     }
 
     static constexpr double getOutlierLoss(const size_t &dof)
@@ -105,10 +108,10 @@ protected:
         double A;        // LR threshold
     };
 
-    // Tunables
+    // Tunables (balanced for performance and accuracy)
     static constexpr bool   kUseRuntimeA   = false;  // set true to use K-based threshold
-    static constexpr double kDefaultAlpha  = 0.05;
-    static constexpr double kDefaultBeta   = 0.05;
+    static constexpr double kDefaultAlpha  = 0.02;  // Balanced false positive rate (was 0.05, tried 0.01)
+    static constexpr double kDefaultBeta   = 0.02;  // Balanced false negative rate (was 0.05, tried 0.01)
     static constexpr double kMinEpsilon    = 1e-3;
     static constexpr double kMinDelta      = 1e-4;
     static constexpr double kMaxDeltaFrac  = 0.5;
@@ -121,25 +124,15 @@ protected:
     SPRTHistory sprt_{0.05, 0.005, 0.0};
     size_t lastUpdateIteration_ = 0;
 
-    // Point order buffer
-    mutable std::vector<size_t> perm_;
-    mutable size_t permHead_ = 0;
-
     // Rejection statistics for delta update
     size_t rejectedCount_ = 0;
     double rejectedInlierFracSum_ = 0.0;
 
-    // Permutation management
-    void ensurePermutation(size_t N) const
-    {
-        if (perm_.size() != N) {
-            perm_.resize(N);
-            std::iota(perm_.begin(), perm_.end(), 0);
-            std::mt19937 rng(0xC0FFEE);
-            std::shuffle(perm_.begin(), perm_.end(), rng);
-            permHead_ = 0;
-        }
-        if (permHead_ >= perm_.size()) permHead_ = 0;
+    // Reset SPRT state (called from initialize to ensure clean state)
+    void resetSPRT() {
+        rejectedCount_ = 0;
+        rejectedInlierFracSum_ = 0.0;
+        lastUpdateIteration_ = 0;
     }
 
     static inline double clampProb(double x, double lo, double hi) {
@@ -197,7 +190,7 @@ protected:
     {
         if (kSquaredResidual_ < squaredThreshold)
         {
-            const double r = kSquaredResidual_ / twoTimesSquaredSigmaMax;
+            const double r = kSquaredResidual_ * invTwoTimesSquaredSigmaMax;
             double loss = 0.0;
             if constexpr (kUseLookUpTable) {
                 const auto g = getGammaValues(r);
@@ -210,7 +203,7 @@ protected:
     FORCE_INLINE double magsacWeight(const double &kSquaredResidual_) const
     {
         if (kSquaredResidual_ >= squaredThreshold) return 0.0;
-        const double r = kSquaredResidual_ / twoTimesSquaredSigmaMax;
+        const double r = kSquaredResidual_ * invTwoTimesSquaredSigmaMax;
         return weightPremultiplier * (getUpperGammaValue(r) - value0);
     }
 
@@ -233,12 +226,14 @@ public:
     void initialize(const size_t kDegreesOfFreedom_)
     {
         degreesOfFreedom = kDegreesOfFreedom_;
+        dofIndex_ = degreesOfFreedom - 2;  // Cache DOF index for lookup table optimization
         k  = getK(degreesOfFreedom);
         Cn = 1.0 / std::pow(2.0, degreesOfFreedom / 2.0) * boost::math::tgamma(degreesOfFreedom / 2.0);
         squaredSigmaMax         = threshold * threshold;
         squaredSigmaMaxPerTwo   = squaredSigmaMax / 2.0;
         squaredSigmaMaxPerFour  = squaredSigmaMaxPerTwo / 2.0;
         twoTimesSquaredSigmaMax = 2.0 * squaredSigmaMax;
+        invTwoTimesSquaredSigmaMax = 1.0 / twoTimesSquaredSigmaMax;  // Precomputed inverse
         nPlus1Per2  = (degreesOfFreedom + 1) / 2.0;
         nMinus1Per2 = (degreesOfFreedom - 1) / 2.0;
         twoNPlus1   = std::pow(2.0, nPlus1Per2);
@@ -251,6 +246,9 @@ public:
         const auto zeroGammaValues = getGammaValues(0.0);
         zeroResidualLoss = squaredSigmaMaxPerTwo * zeroGammaValues.first
                          + squaredSigmaMaxPerFour * (zeroGammaValues.second - value0);
+
+        // Reset SPRT state to ensure clean state between runs
+        resetSPRT();
     }
 
     // ====== AbstractScoring API ======
@@ -275,7 +273,7 @@ public:
         const int N = kData_.rows();
         if (N == 0) return Score();
 
-        ensurePermutation(static_cast<size_t>(N));
+        // Note: Removed permutation - sequential order is sufficient for SPRT
         if constexpr (kUseRuntimeA) {
             if (tM_ms <= 0.0) const_cast<MAGSACSPRTScoring*>(this)->microBenchmarkResiduals(kData_, kEstimator_, 128);
         }
@@ -318,10 +316,9 @@ public:
         };
 
         if (kPotentialInlierSets_ == nullptr) {
+            // Sequential iteration (permutation removed for performance)
             for (int i = 0; i < N; ++i) {
-                const size_t idx = perm_[permHead_];
-                permHead_ = (permHead_ + 1) % perm_.size();
-                if (!accumulate_point(i, idx))
+                if (!accumulate_point(i, i))
                     return kEmptyScore;
             }
         } else {

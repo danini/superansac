@@ -54,12 +54,14 @@ class MAGSACScoring : public AbstractScoring
         static constexpr bool kGenerateLookUpTable = false;
 
         size_t degreesOfFreedom;
+        size_t dofIndex_;  // Cached DOF index for lookup table
         double k;
         double Cn;
         double squaredSigmaMax;
         double squaredSigmaMaxPerTwo;
         double squaredSigmaMaxPerFour;
         double twoTimesSquaredSigmaMax;
+        double invTwoTimesSquaredSigmaMax;  // Precomputed inverse for optimization
         double zeroResidualLoss;
         double nPlus1Per2;
         double nMinus1Per2;
@@ -88,22 +90,22 @@ class MAGSACScoring : public AbstractScoring
         {
             size_t index = static_cast<size_t>(residual_ * lookupTableSize);
             index = (index < lookupTableSize) ? index : (lookupTableSize - 1);
-            const size_t dof_idx = degreesOfFreedom - 2;
-            return { lowerIncompleteGammaLookupTable[dof_idx][index], upperIncompleteGammaLookupTable[dof_idx][index] };
+            // Use cached dofIndex_ to reduce repeated computation
+            return { lowerIncompleteGammaLookupTable[dofIndex_][index], upperIncompleteGammaLookupTable[dofIndex_][index] };
         }
 
         FORCE_INLINE double getUpperGammaValue(double residual_) const
         {
             size_t index = static_cast<size_t>(residual_ * lookupTableSize);
             index = (index < lookupTableSize) ? index : (lookupTableSize - 1);
-            return upperIncompleteGammaLookupTable[degreesOfFreedom - 2][index];
+            return upperIncompleteGammaLookupTable[dofIndex_][index];
         }
 
         FORCE_INLINE double getLowerGammaValue(double residual_) const
         {
             size_t index = static_cast<size_t>(residual_ * lookupTableSize);
             index = (index < lookupTableSize) ? index : (lookupTableSize - 1);
-            return lowerIncompleteGammaLookupTable[degreesOfFreedom - 2][index];
+            return lowerIncompleteGammaLookupTable[dofIndex_][index];
         }
 
     public:
@@ -185,6 +187,7 @@ class MAGSACScoring : public AbstractScoring
             if (threshold == 0.0)
                 throw std::runtime_error("The threshold is not set for the MAGSAC scoring object.");
             degreesOfFreedom = kDegreesOfFreedom_; // Degrees of freedom
+            dofIndex_ = degreesOfFreedom - 2;  // Cache DOF index for lookup table optimization
             k = getK(degreesOfFreedom); //kEstimator_->getK(); // The 0.99 quantile of the distribution
             //std::cout << degreesOfFreedom << std::endl;
             Cn = 1.0 / std::pow(2, degreesOfFreedom / 2.0) * boost::math::tgamma(degreesOfFreedom / 2.0); // Normalization constant
@@ -192,6 +195,7 @@ class MAGSACScoring : public AbstractScoring
             squaredSigmaMaxPerTwo = squaredSigmaMax / 2.0; // The squared threshold divided by two
             squaredSigmaMaxPerFour = squaredSigmaMaxPerTwo / 2.0; // The squared threshold divided by four
             twoTimesSquaredSigmaMax = 2.0 * squaredSigmaMax; // Two times the squared threshold
+            invTwoTimesSquaredSigmaMax = 1.0 / twoTimesSquaredSigmaMax; // Precomputed inverse for optimization
             nPlus1Per2 = (degreesOfFreedom + 1) / 2.0; // (n + 1) / 2
             nMinus1Per2 = (degreesOfFreedom - 1) / 2.0; // (n - 1) / 2
             twoNPlus1 = std::pow(2.0, nPlus1Per2); // 2 ^ ((n + 1) / 2)
@@ -300,8 +304,8 @@ class MAGSACScoring : public AbstractScoring
             // increase the score.
             if (kSquaredResidual_ < squaredThreshold)
             {
-                // Increase the score.
-                double residualPerTwoTimesSquaredSigmaMax = kSquaredResidual_ / twoTimesSquaredSigmaMax;
+                // Increase the score (use precomputed inverse for optimization)
+                double residualPerTwoTimesSquaredSigmaMax = kSquaredResidual_ * invTwoTimesSquaredSigmaMax;
                 // Calculate the loss by using a look-up table or by calculating the incomplete gamma function
                 if constexpr (kUseLookUpTable)
                 {
@@ -325,7 +329,7 @@ class MAGSACScoring : public AbstractScoring
             // increase the score.
             if (kSquaredResidual_ < squaredThreshold)
             {
-                double residualPerTwoTimesSquaredSigmaMax = kSquaredResidual_ / twoTimesSquaredSigmaMax;
+                double residualPerTwoTimesSquaredSigmaMax = kSquaredResidual_ * invTwoTimesSquaredSigmaMax;
                 double upperIncompleteGammaValue = getUpperGammaValue(residualPerTwoTimesSquaredSigmaMax);
                 return weightPremultiplier * (upperIncompleteGammaValue - value0);
             } 
@@ -412,7 +416,14 @@ class MAGSACScoring : public AbstractScoring
                 scoreValue += (kData_.rows() - testedPoints) * lossOutlier;
             } else
             {
+                // Pre-compute values for early exit optimization
+                const double kBestPossibleGain = premultiplier * zeroResidualLoss;
+                const double kBestScoreValue = kBestScore_.getValue();
+
                 // Iterate through all points, calculate the squaredResiduals and store the points as inliers if needed.
+                #ifdef __GNUC__
+                #pragma GCC ivdep  // Tell compiler iterations are independent for vectorization
+                #endif
                 for (int pointIdx = 0; pointIdx < kPointNumber; ++pointIdx)
                 {
                     // Calculate the point-to-model residual
@@ -430,8 +441,8 @@ class MAGSACScoring : public AbstractScoring
                         // Increase the inlier number
                         ++inlierNumber;
 
-                        // Increase the score.
-                        residualPerTwoTimesSquaredSigmaMax = squaredResidual / twoTimesSquaredSigmaMax;
+                        // Increase the score (use precomputed inverse for optimization)
+                        residualPerTwoTimesSquaredSigmaMax = squaredResidual * invTwoTimesSquaredSigmaMax;
                         // Calculate the loss by using a look-up table or by calculating the incomplete gamma function
                         if constexpr (kUseLookUpTable)
                         {
@@ -446,8 +457,8 @@ class MAGSACScoring : public AbstractScoring
                     } else
                         scoreValue += lossOutlier;
 
-                    // Interrupt if there is no chance of being better than the best model
-                    if (premultiplier * zeroResidualLoss * (kPointNumber - pointIdx) + scoreValue < kBestScore_.getValue())
+                    // Early exit AFTER processing: if remaining perfect inliers can't beat best score
+                    if (kBestPossibleGain * (kPointNumber - pointIdx - 1) + scoreValue < kBestScoreValue)
                         return kEmptyScore;
                 }
             }
@@ -487,7 +498,7 @@ class MAGSACScoring : public AbstractScoring
                     // increase the score.
                     if (squaredResidual < squaredThreshold)
                     {
-                        residualPerTwoTimesSquaredSigmaMax = squaredResidual / twoTimesSquaredSigmaMax;
+                        residualPerTwoTimesSquaredSigmaMax = squaredResidual * invTwoTimesSquaredSigmaMax;
                         upperIncompleteGamma = getUpperGammaValue(residualPerTwoTimesSquaredSigmaMax);
 
                         weights_[pointIdx] = weightPremultiplier * (upperIncompleteGamma - value0);
@@ -518,7 +529,7 @@ class MAGSACScoring : public AbstractScoring
                     // increase the score.
                     if (squaredResidual < squaredThreshold)
                     {
-                        residualPerTwoTimesSquaredSigmaMax = squaredResidual / twoTimesSquaredSigmaMax;
+                        residualPerTwoTimesSquaredSigmaMax = squaredResidual * invTwoTimesSquaredSigmaMax;
                         upperIncompleteGamma = getUpperGammaValue(residualPerTwoTimesSquaredSigmaMax);
                         weights_[pointIdx] = weightPremultiplier * (upperIncompleteGamma - value0);
                         // Commenting "weightPremultiplier" as it does not affect the final result. It is just a constant.

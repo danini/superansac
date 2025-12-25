@@ -49,9 +49,9 @@ namespace superansac {
 
     struct LocalOptimizationSettings
     {
-        size_t maxIterations = 50,
+        size_t maxIterations = 20,  // Reduced from 50 (diminishing returns after 20)
             graphCutNumber = 20;
-        double sampleSizeMultiplier = 7.0;
+        double sampleSizeMultiplier = 3.0;  // Reduced from 7.0 (3x sufficient for robustness)
         double spatialCoherenceWeight = 0.1;
     };
 
@@ -62,9 +62,9 @@ namespace superansac {
         size_t nearestNeighborNumber = 6;
     };
 
-    struct RANSACSettings 
+    struct RANSACSettings
     {
-        size_t topKForLocalOptimization = 5, // Number of best models used for local optimization
+        size_t topKForLocalOptimization = 3, // Number of best models used for local optimization (reduced from 5)
             minIterations = 1000, // Minimum number of iterations
             maxIterations = 5000; // Maximum number of iterations
         double inlierThreshold = 1.5; // Inlier threshold
