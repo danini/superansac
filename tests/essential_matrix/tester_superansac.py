@@ -28,8 +28,8 @@ from datasets.seven_scenes import SevenScenes
 import pysuperansac
 
 def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
-    # Sort the matches by matching score
-    indices = np.argsort(scores)[::-1]
+    # Sort the matches by matching score (use negative to avoid reverse)
+    indices = np.argsort(-scores)
     matches = matches[indices, :]
     scores = scores[indices]
 
@@ -43,6 +43,8 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     config.min_iterations = args.minimum_iterations
     config.max_iterations = args.maximum_iterations
     config.confidence = args.confidence
+    config.local_opt_k = 10
+    config.use_sprt = True  # Enabled after SPRT optimizations
     if args.sampler == "Uniform":
         config.sampler = pysuperansac.SamplerType.Uniform
     elif args.sampler == "PROSAC":
@@ -96,26 +98,27 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     config.neighborhood_settings.neighborhood_size = args.neighborhood_size
     
     # If Importance sampler or ARSampler is used, the SNN ratios are converted as probabilities
-    probabilities = []
+    # Vectorized computation for speed
     point_number = matches.shape[0]
-    for i in range(point_number):
-        probabilities.append(1.0 - i / point_number)
+    probabilities = 1.0 - np.arange(point_number) / point_number
 
     # Run the homography estimation implemented in OpenCV
     tic = time.perf_counter()
     E_est, inliers, score, iterations = pysuperansac.estimateEssentialMatrix(
-        np.ascontiguousarray(matches).astype(np.float64), 
+        np.ascontiguousarray(matches, dtype=np.float64), 
         K1,
         K2,
-        [image_size1[2], image_size1[1], image_size2[2], image_size2[1]],
+        [2000, 2000, 2000, 2000],
         probabilities,
         config = config)
     toc = time.perf_counter()
     elapsed_time = toc - tic
     
-    norm_matches = np.zeros(matches.shape)
-    norm_matches[:, :2] = normalize_keypoints(matches[:, :2], K1)
-    norm_matches[:, 2:] = normalize_keypoints(matches[:, 2:], K2)
+    # Normalize matches (avoid zero initialization overhead)
+    norm_matches = np.column_stack([
+        normalize_keypoints(matches[:, :2], K1),
+        normalize_keypoints(matches[:, 2:], K2)
+    ])
 
     if E_est is None:
         return (np.inf, np.inf), 0, elapsed_time
@@ -136,9 +139,9 @@ if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running on essential matrix estimation with SupeRANSAC")
     parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA.", choices=["splg", "RoMA"], default="splg")
-    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2500)
+    parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=100000)
     parser.add_argument("--confidence", type=float, default=0.9999999)
-    parser.add_argument("--inlier_threshold", type=float, default=4.0)
+    parser.add_argument("--inlier_threshold", type=float, default=-1.0)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
     parser.add_argument("--maximum_iterations", type=int, default=1000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler"], default="PROSAC")
@@ -148,7 +151,7 @@ if __name__ == "__main__":
     parser.add_argument("--spatial_coherence_weight", type=float, default=0.2)
     parser.add_argument("--neighborhood_size", type=float, default=20)
     parser.add_argument("--neighborhood_grid_density", type=float, default=4)
-    parser.add_argument("--core_number", type=int, default=18)
+    parser.add_argument("--core_number", type=int, default=17)
     parser.add_argument("--device", type=str, default="cuda", help="Device used for feature detection and matching.")
     
     args = parser.parse_args()
@@ -163,6 +166,8 @@ if __name__ == "__main__":
         if args.inlier_threshold <= 0:
             args.inlier_threshold = 5.5 # 5.0
             print(f"Setting the threshold to {args.inlier_threshold} px as it works best for E estimation with SP-LG features.")
+
+        all_iters = [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]
     elif args.features == "RoMA":
         print("Initialize RoMA detector")
         detector = roma_outdoor(device = args.device)
@@ -171,17 +176,21 @@ if __name__ == "__main__":
         if args.inlier_threshold <= 0:
             args.inlier_threshold = 3.0
             print(f"Setting the threshold to {args.inlier_threshold} px as it works best for E estimation with RoMA features.")
+            
+        all_iters = [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500]
     
     # The output file
     out = f"tests/essential_matrix/results_testing_superansac_{args.features}.csv"
 
-    dataset_paths = ["/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
-                     "/media/hdd2tb/datasets/RANSAC-Tutorial-Data",
-                     "/media/hdd3tb/datasets/lamar/CAB/sessions/query_val_hololens",
-                     "/media/hdd2tb/datasets/7scenes",
-                     "/media/hdd3tb/datasets/kitti/dataset",
-                     "/media/hdd3tb/datasets/eth3d"]
-    datasets = [ScanNet, PhotoTourism, Lamar, SevenScenes, Kitti, ETH3D]
+    dataset_paths = [
+                     "/media/ssd4tb/datasets/eth3d",
+                     "/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
+                     "/media/ssd4tb/datasets/RANSAC-Tutorial-Data",
+                     "/media/ssd4tb/datasets/lamar/CAB/sessions/query_val_hololens",
+                     "/media/ssd4tb/datasets/7scenes",
+                     "/media/ssd4tb/datasets/kitti/dataset",
+                     ]
+    datasets = [ETH3D, ScanNet, PhotoTourism, Lamar, SevenScenes,  Kitti] #
 
     for idx, dataset_class in enumerate(datasets):
         if dataset_class == ScanNet:
@@ -221,7 +230,7 @@ if __name__ == "__main__":
             
             ## Running the estimators so we don't have too much things in the memory
             if len(processing_queue) >= args.batch_size or i == len(dataloader) - 1:
-                for iters in [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]:
+                for iters in all_iters: 
                     key = iters
                     if key not in pose_errors:
                         pose_errors[key] = []
@@ -238,8 +247,8 @@ if __name__ == "__main__":
                         data["K2"],
                         data["R_1_2"],
                         data["T_1_2"],
-                        data["img1"].shape,
-                        data["img2"].shape,
+                        None,
+                        None,
                         args) for data, matches, scores in tqdm(processing_queue))
                     
                     # Concatenating the results to the main lists
@@ -259,7 +268,7 @@ if __name__ == "__main__":
             with open(out, "w") as f:
                 f.write("method,features,dataset,threshold,maximum_iterations,confidence,spatial_weight,neighborhood_size,sampler,space_partitioning,sprt,auc_R5,auc_R10,auc_R20,auc_t5,auc_t10,auc_t20,auc_Rt5,auc_Rt10,auc_Rt20,avg_error,med_error,avg_time,median_time,avg_inliers,median_inliers,variance,solver,scoring\n")
         with open(out, "a") as f:
-            for iters in [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]:
+            for iters in all_iters: # 
                 key = iters
                 curr_pose_errors = np.array(pose_errors[key])
                 auc_R = 100 * np.r_[pose_auc(curr_pose_errors[:,0], thresholds=[5, 10, 20])]
