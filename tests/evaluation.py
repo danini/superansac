@@ -97,39 +97,66 @@ def qvec2rotmat(qvec):
          2 * qvec[2] * qvec[3] + 2 * qvec[0] * qvec[1],
          1 - 2 * qvec[1]**2 - 2 * qvec[2]**2]])
 
+def rotation_error_from_trace(R_gt, R, eps=1e-15):
+    """
+    Returns the rotation error in degrees using the trace of R_gt^T R.
+
+    Args:
+        R_gt: (..., 3, 3) array-like ground-truth rotation(s).
+        R:    (..., 3, 3) array-like estimated rotation(s).
+        eps:  small constant for numerical stability.
+
+    Returns:
+        err_R_deg: (...) ndarray of rotation errors in degrees.
+    """
+    R_gt = np.asarray(R_gt, dtype=np.float64)
+    R = np.asarray(R, dtype=np.float64)
+
+    # Relative rotation: R_rel = R_gt^T R
+    # angle = arccos( (trace(R_rel)-1)/2 )
+    R_rel = np.matmul(np.swapaxes(R_gt, -1, -2), R)
+    tr = np.trace(R_rel, axis1=-2, axis2=-1)
+
+    # Clamp to valid range for acos
+    c = (tr - 1.0) * 0.5
+    c = np.clip(c, -1.0 + eps, 1.0 - eps)
+
+    err_rad = np.arccos(c)
+    err_deg = np.degrees(err_rad)
+    return err_deg
 
 def evaluate_R_t(R_gt, t_gt, R, t, q_gt=None):
-    try:
-        if t is None or R is None:
-            return np.inf, np.inf 
-        t = t.flatten()
-        t_gt = t_gt.flatten()
+    if t is None or R is None:
+        return np.inf, np.inf 
+    t = t.flatten()
+    t_gt = t_gt.flatten()
 
-        eps = 1e-15
+    eps = 1e-15
 
-        if q_gt is None:
-            q_gt = quaternion_from_matrix(R_gt)
-        q = quaternion_from_matrix(R)
-        q = q / (np.linalg.norm(q) + eps)
-        q_gt = q_gt / (np.linalg.norm(q_gt) + eps)
-        loss_q = np.maximum(eps, (1.0 - np.sum(q * q_gt)**2))
-        err_q = np.rad2deg(np.arccos(1 - 2 * loss_q))
+    #if q_gt is None:
+    #    q_gt = quaternion_from_matrix(R_gt)
+    #q = quaternion_from_matrix(R)
+    #q = q / (np.linalg.norm(q) + eps)
+    #q_gt = q_gt / (np.linalg.norm(q_gt) + eps)
+    #loss_q = np.maximum(eps, (1.0 - np.sum(q * q_gt)**2))
+    err_q = rotation_error_from_trace(R_gt, R) #np.rad2deg(np.arccos(1 - 2 * loss_q))
 
-        t = t / (np.linalg.norm(t) + eps)
-        t_gt = t_gt / (np.linalg.norm(t_gt) + eps)
-        loss_t = np.maximum(eps, (1.0 - np.sum(t * t_gt)**2))
-        err_t = np.rad2deg(np.arccos(np.sqrt(1 - loss_t)))
+    t = t / (np.linalg.norm(t) + eps)
+    t_gt = t_gt / (np.linalg.norm(t_gt) + eps)
+    loss_t = np.maximum(eps, (1.0 - np.sum(t * t_gt)**2))
+    err_t = np.rad2deg(np.arccos(np.sqrt(1 - loss_t)))
 
-        if np.sum(np.isnan(err_q)) or np.sum(np.isnan(err_t)):
-            raise ValueError("NaN error.")
-    except:
-        return 180, 180        
+    if np.sum(np.isnan(err_q)):
+        err_q = 180
+    if np.sum(np.isnan(err_t)):
+        err_t = 180
     return err_q, err_t
 
 
 def pose_auc(errors, thresholds=[5, 10, 20]):
+    errors = np.asarray(errors)  # No copy if already array
     sort_idx = np.argsort(errors)
-    errors = np.array(errors.copy())[sort_idx]
+    errors = errors[sort_idx]
     recall = (np.arange(len(errors)) + 1) / len(errors)
     errors = np.r_[0., errors]
     recall = np.r_[0., recall]

@@ -8,12 +8,8 @@ from lightglue.utils import load_image, rbd
 
 def normalize_keypoints(keypoints, K):
     '''Normalize keypoints using the calibration data.'''
-    C_x = K[0, 2]
-    C_y = K[1, 2]
-    f_x = K[0, 0]
-    f_y = K[1, 1]
-    keypoints = (keypoints - np.array([[C_x, C_y]])) / np.array([[f_x, f_y]])
-    return keypoints
+    # Optimized: avoid array allocations
+    return (keypoints - K[[0, 1], 2]) / K[[0, 1], [0, 1]]
 
 def find_relative_pose_from_points(kp_matches, K1, K2, kp_scores=None):
     if kp_scores is not None:
