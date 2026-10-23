@@ -163,10 +163,14 @@ namespace superansac
 					}
 				}
 				
-				if (models_.size() == 0)
 				{
 					FundamentalMatrixEightPointSolver eightPointSolver;
-					eightPointSolver.estimateModel(kData_, kSample_, kSampleNumber_, models_);
+					std::vector<models::Model> eightPtModels;
+					if (eightPointSolver.estimateModel(kData_, kSample_, kSampleNumber_, eightPtModels, kWeights_))
+					{
+						for (auto &m : eightPtModels)
+							models_.push_back(std::move(m));
+					}
 
 					if (models_.size() == 0)
 						return false;
@@ -176,7 +180,7 @@ namespace superansac
 				if (kSample_ != nullptr)
 				{
 					tmpOptions.loss_scale = 0.5 * options.loss_scale;
-					tmpOptions.max_iterations = 100;
+					tmpOptions.max_iterations = (kWeights_ == nullptr) ? 15 : 35;
 					tmpOptions.loss_type = poselib::BundleOptions::LossType::CAUCHY;
 				}
 
@@ -194,7 +198,8 @@ namespace superansac
 						weights);
 
 					// Update the model
-					model.getMutableData().block<3, 3>(0, 0) = fundamentalMatrix;
+					if (fundamentalMatrix.allFinite())
+						model.getMutableData().block<3, 3>(0, 0) = fundamentalMatrix;
 				}
 
 				return true;

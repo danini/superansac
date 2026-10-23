@@ -111,10 +111,45 @@ namespace superansac
 
 				// Calculate the score of the estimated model
 				estimatedScore_ = kScoring_->score(kData_, estimatedModel_, kEstimator_, estimatedInliers_);
+				if (kScore_ > estimatedScore_ && !kInliers_.empty())
+				{
+					estimatedScore_ = kScore_;
+					estimatedInliers_ = kInliers_;
+				}
+
+				const size_t kMinSampleSize = std::max(kEstimator_->sampleSize(), kEstimator_->nonMinimalSampleSize());
+				if (estimatedInliers_.size() < kMinSampleSize)
+					return;
+
+				// First perform an all-inlier weighted fit to refine the initial model
+				std::vector<double> weights;
+				kScoring_->getWeights(kData_, estimatedModel_, kEstimator_, weights, &estimatedInliers_);
+				currentlyEstimatedModels.clear();
+				if (kEstimator_->estimateModelNonminimal(
+					kData_,
+					estimatedInliers_.data(),
+					estimatedInliers_.size(),
+					&currentlyEstimatedModels,
+					weights.data()))
+				{
+					for (const auto &model : currentlyEstimatedModels)
+					{
+						currentInliers.clear();
+						currentScore = kScoring_->score(kData_, model, kEstimator_, currentInliers);
+						if (currentScore > estimatedScore_)
+						{
+							estimatedModel_ = model;
+							estimatedScore_ = currentScore;
+							currentInliers.swap(estimatedInliers_);
+						}
+					}
+				}
+
+				if (estimatedInliers_.size() <= kMinSampleSize)
+					return;
+
 				sampler.initialize(estimatedInliers_.size() - 1);
 				bool isModelUpdated;
-
-				const size_t kMinSampleSize = kEstimator_->sampleSize();
 
 				// The inner RANSAC loop
 				for (size_t iteration = 0; iteration < maxIterations; ++iteration)
@@ -123,6 +158,8 @@ namespace superansac
 
 					// Calculate the current sample size
 					const size_t inlierCount = estimatedInliers_.size();
+					if (inlierCount <= kMinSampleSize)
+						break;
 					currentSampleSize = std::min(inlierCount - 1, kNonMinimalSampleSize);
 
 					// Break if the sample size is too small
@@ -178,7 +215,8 @@ namespace superansac
 							estimatedScore_ = currentScore;
 							currentInliers.swap(estimatedInliers_);
 							// Only reinitialize sampler if inlier count changed significantly
-							sampler.initialize(estimatedInliers_.size() - 1);
+							if (estimatedInliers_.size() > kMinSampleSize)
+								sampler.initialize(estimatedInliers_.size() - 1);
 						}
 					}
 

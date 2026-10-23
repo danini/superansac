@@ -88,7 +88,7 @@ namespace superansac
 				const size_t *kSample_, // The sample usd for the estimation
 				std::vector<models::Model>* models_) const override // The estimated model parameters
 			{
-				static const size_t kSampleSize = sampleSize();
+				const size_t kSampleSize = sampleSize();
 
 				// Estimate the model parameters by the minimal solver
 				minimalSolver->estimateModel(kData_, // The data points
@@ -236,6 +236,50 @@ namespace superansac
 				const double kThreshold_,
 				bool& modelUpdated_) const override
 			{ 
+				if (kMinimalSample_ != nullptr &&
+					!isOrientationValid(model_.getData().block<3, 3>(0, 0), kData_, kMinimalSample_, sampleSize()))
+					return false;
+				return true;
+			}
+
+			FORCE_INLINE void getEpipole(
+				Eigen::Vector3d &epipole_,
+				const Eigen::Matrix3d &kEssentialMatrix_) const
+			{
+				constexpr double epsilon = 1.9984e-15;
+				epipole_ = kEssentialMatrix_.row(0).cross(kEssentialMatrix_.row(2));
+				for (auto i = 0; i < 3; i++)
+					if ((epipole_(i) > epsilon) || (epipole_(i) < -epsilon))
+						return;
+				epipole_ = kEssentialMatrix_.row(1).cross(kEssentialMatrix_.row(2));
+			}
+
+			FORCE_INLINE double getOrientationSignum(
+				const Eigen::Matrix3d &kEssentialMatrix_,
+				const Eigen::Vector3d &kEpipole_,
+				const double* kPoint_) const
+			{
+				double signum1 = kEssentialMatrix_(0, 0) * kPoint_[2] + kEssentialMatrix_(1, 0) * kPoint_[3] + kEssentialMatrix_(2, 0),
+					signum2 = kEpipole_(1) - kEpipole_(2) * kPoint_[1];
+				return signum1 * signum2;
+			}
+
+			FORCE_INLINE bool isOrientationValid(
+				const Eigen::Matrix3d &kEssentialMatrix_,
+				const DataMatrix &kData_,
+				const size_t *kSample_,
+				size_t kSampleSize_) const
+			{
+				Eigen::Vector3d epipole;
+				getEpipole(epipole, kEssentialMatrix_);
+				double signum1, signum2;
+				signum2 = getOrientationSignum(kEssentialMatrix_, epipole, kData_.row(kSample_[0]).data());
+				for (size_t i = 1; i < kSampleSize_; i++)
+				{
+					signum1 = getOrientationSignum(kEssentialMatrix_, epipole, kData_.row(kSample_[i]).data());
+					if (signum2 * signum1 < 0)
+						return false;
+				}
 				return true;
 			}
 

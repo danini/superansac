@@ -141,6 +141,8 @@ namespace superansac
 			// Test the triplets for H-degeneracy
 			bool hDegenerateSample = false;
 			Eigen::Matrix3d bestHomography;
+			size_t bestTripletInliers = 0;
+			double bestTripletErrorSum = std::numeric_limits<double>::max();
 			for (size_t tripletIdx = 0; tripletIdx < kTripletNumber; ++tripletIdx)
 			{
 				const size_t kTripletOffset = tripletIdx * 3;
@@ -189,6 +191,7 @@ namespace superansac
 
 				// Count the sample points consistent with the implied homography
 				size_t inlierNumber = 3;
+				double errorSum = 0.0;
 				for (size_t i = 0; i < kSampleSize; ++i)
 				{
 					const size_t kIdx = kMinimalSample_[i];
@@ -197,25 +200,33 @@ namespace superansac
 						kIdx == kPoint3Idx)
 						continue;
 
-					if (squaredHomographyReprojectionError(
-							kDataPtr + kIdx * kColumns, homography) < kSquaredHomographyThreshold_)
+					const double sqErr = squaredHomographyReprojectionError(
+						kDataPtr + kIdx * kColumns, homography);
+					if (sqErr < kSquaredHomographyThreshold_)
+					{
 						++inlierNumber;
+						errorSum += sqErr;
+					}
 				}
 
 				// If at least 5 of the 7 points are consistent with the homography,
 				// the sample is H-degenerate.
-				if (inlierNumber >= 5)
+				if (inlierNumber >= 5 &&
+					(inlierNumber > bestTripletInliers ||
+					 (inlierNumber == bestTripletInliers && errorSum < bestTripletErrorSum)))
 				{
 					bestHomography = homography;
+					bestTripletInliers = inlierNumber;
+					bestTripletErrorSum = errorSum;
 					hDegenerateSample = true;
-					break;
 				}
 			}
 
 			if (!hDegenerateSample)
 				return true; // Not degenerate: the candidate may be accepted as-is
 
-			// Collect the homography's inliers among the inliers of F
+			// Collect the homography's inliers across all points (or candidateInliers_)
+			const size_t kPointNumber = kData_.rows();
 			std::vector<size_t> homographyInliers;
 			homographyInliers.reserve(candidateInliers_.size());
 			for (const size_t &kInlierIdx : candidateInliers_)
@@ -226,7 +237,7 @@ namespace superansac
 			// The homography must be estimable from its inliers
 			static const estimator::solver::HomographyFourPointSolver kHomographySolver;
 			if (homographyInliers.size() < kHomographySolver.sampleSize())
-				return false;
+				return true;
 
 			// Fit the homography to all of its inliers
 			std::vector<models::Model> homographies;
@@ -236,36 +247,34 @@ namespace superansac
 					homographies) ||
 				homographies.size() != 1 ||
 				!homographies[0].getData().allFinite())
-				return false;
+				return true;
+
+			const Eigen::Matrix3d kRefinedHomography = homographies[0].getData().block<3, 3>(0, 0);
 
 			// Re-estimate the fundamental matrix by the plane-and-parallax
-			// algorithm in a small inner RANSAC. The 2-point samples are drawn
-			// from the candidate's OFF-PLANE inliers (its inliers that are not
-			// consistent with the homography) -- that is where the parallax
-			// information lives. Drawing from all points (as the reference's
-			// full inner GC-RANSAC effectively affords) would need thousands of
-			// draws on outlier-heavy data to hit two off-plane inliers.
+			// algorithm in a small inner RANSAC. Crucially, the true off-plane
+			// correspondences are NOT in candidateInliers_ (since candidateModel_
+			// has a wrong epipole induced by the degenerate sample), so we sample
+			// from all points in kData_ that lie off the dominant plane H.
 			estimator::solver::FundamentalMatrixPlaneParallaxSolver planeParallaxSolver;
 			planeParallaxSolver.setHomography(&homographies[0].getData());
 
-			const size_t kPointNumber = kData_.rows();
 			if (kPointNumber < 2)
-				return false;
+				return true;
 
-			// The off-plane inliers of the candidate fundamental matrix
-			std::vector<size_t> offPlaneInliers;
-			offPlaneInliers.reserve(candidateInliers_.size());
+			std::vector<size_t> offPlanePool;
+			offPlanePool.reserve(kPointNumber);
+			for (size_t idx = 0; idx < kPointNumber; ++idx)
 			{
-				size_t hIdx = 0; // homographyInliers preserves candidateInliers_'s order
-				for (const size_t &kInlierIdx : candidateInliers_)
-					if (hIdx < homographyInliers.size() && homographyInliers[hIdx] == kInlierIdx)
-						++hIdx;
-					else
-						offPlaneInliers.emplace_back(kInlierIdx);
+				if (squaredHomographyReprojectionError(
+						kDataPtr + idx * kColumns, kRefinedHomography) >= kSquaredHomographyThreshold_)
+				{
+					offPlanePool.emplace_back(idx);
+				}
 			}
-			// Sample from the off-plane pool when possible; otherwise from all points
-			const bool kSampleOffPlane = offPlaneInliers.size() >= 2;
-			const size_t kPoolSize = kSampleOffPlane ? offPlaneInliers.size() : kPointNumber;
+
+			if (offPlanePool.size() < 2)
+				return true;
 
 			bool updated = false;
 			size_t sample[2];
@@ -275,16 +284,22 @@ namespace superansac
 			candidateInliers.reserve(kPointNumber);
 			bestCandidateInliers.reserve(kPointNumber);
 			models::Model bestCandidateModel;
-			scoring::Score runningBest = kRunningBest_;
+			scoring::Score runningBest = candidateScore_;
 
-			for (size_t iteration = 0; iteration < kInnerIterations_; ++iteration)
+			const size_t kTotalIters = std::max<size_t>(kInnerIterations_, 100);
+			for (size_t iteration = 0; iteration < kTotalIters; ++iteration)
 			{
-				rng_.generateUniqueRandomSet(sample, 2, kPoolSize - 1);
-				if (kSampleOffPlane)
+				// Hybrid PROSAC / uniform sampling over offPlanePool
+				size_t activePool = offPlanePool.size();
+				if (iteration * 2 < kTotalIters)
 				{
-					sample[0] = offPlaneInliers[sample[0]];
-					sample[1] = offPlaneInliers[sample[1]];
+					const double frac = static_cast<double>(iteration + 1) / static_cast<double>(kTotalIters / 2);
+					activePool = std::min(offPlanePool.size(),
+						std::max<size_t>(12, static_cast<size_t>(frac * std::min<size_t>(offPlanePool.size(), 120))));
 				}
+				rng_.generateUniqueRandomSet(sample, 2, activePool - 1);
+				sample[0] = offPlanePool[sample[0]];
+				sample[1] = offPlanePool[sample[1]];
 
 				candidateModels.clear();
 				if (!planeParallaxSolver.estimateModel(kData_, sample, 2, candidateModels))
@@ -307,7 +322,7 @@ namespace superansac
 			}
 
 			if (!updated)
-				return false; // Degenerate and not fixable: reject the candidate
+				return true; // Keep the candidate model if no better plane-and-parallax model was found
 
 			// Replace the candidate with the re-estimated model
 			candidateModel_ = bestCandidateModel;

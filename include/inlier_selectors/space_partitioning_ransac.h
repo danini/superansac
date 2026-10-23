@@ -43,9 +43,11 @@
 #include "../scoring/score.h"
 #include "../utils/types.h"
 
+#ifdef SUPERANSAC_HAS_OPENCV
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#endif
 
 namespace superansac 
 {
@@ -80,7 +82,9 @@ namespace superansac
                 size_t& pointNumber_);
 
 		public:
+#ifdef SUPERANSAC_HAS_OPENCV
             cv::Mat img1, img2;
+#endif
 
 			SpacePartitioningRANSAC() : scaleSrc(1.0), offsetXSrc(0.0), offsetYSrc(0.0), scaleDst(1.0), offsetXDst(0.0), offsetYDst(0.0)
 			{

@@ -54,7 +54,7 @@ class NAPSACSampler : public AbstractSampler
 
     public:
         // Constructor 
-        NAPSACSampler() : kMaximumAttemps(100) {}
+        NAPSACSampler() : neighborhood(nullptr), kMaximumAttemps(100), attempts(0) {}
         // Destructor
         ~NAPSACSampler() {}
 

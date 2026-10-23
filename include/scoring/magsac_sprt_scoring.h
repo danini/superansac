@@ -133,6 +133,8 @@ protected:
 
     // Reset SPRT state (called from initialize to ensure clean state)
     void resetSPRT() {
+        sprt_ = {0.05, 0.005, 0.0};
+        refreshA();
         rejectedCount_ = 0;
         rejectedInlierFracSum_ = 0.0;
         lastUpdateIteration_ = 0;
@@ -232,7 +234,7 @@ public:
         dofIndex_ = degreesOfFreedom - 2;  // Cache DOF index for lookup table optimization
         gammaTable_ = interleavedGammaLookupTable(dofIndex_); // Interleaved (lower, upper) row
         k  = getK(degreesOfFreedom);
-        Cn = 1.0 / std::pow(2.0, degreesOfFreedom / 2.0) * boost::math::tgamma(degreesOfFreedom / 2.0);
+        Cn = 1.0 / (std::pow(2.0, degreesOfFreedom / 2.0) * boost::math::tgamma(degreesOfFreedom / 2.0));
         squaredSigmaMax         = threshold * threshold;
         squaredSigmaMaxPerTwo   = squaredSigmaMax / 2.0;
         squaredSigmaMaxPerFour  = squaredSigmaMaxPerTwo / 2.0;
@@ -282,8 +284,9 @@ public:
             if (tM_ms <= 0.0) const_cast<MAGSACSPRTScoring*>(this)->microBenchmarkResiduals(kData_, kEstimator_, 128);
         }
 
-        const double eps = clampProb(sprt_.epsilon, kMinEpsilon, 1.0 - 1e-6);
-        const double del = clampProb(sprt_.delta,   kMinDelta,   kMaxDeltaFrac);
+        const int kSampleSize = static_cast<int>(kEstimator_->sampleSize());
+        const double eps = clampProb(sprt_.epsilon, 0.05, 1.0 - 1e-6);
+        const double del = clampProb(sprt_.delta,   kMinDelta,   std::min(kMaxDeltaFrac, 0.5 * eps));
         const double A   = std::max(1.0, sprt_.A);
 
         double lambdaLR = 1.0;
@@ -302,10 +305,13 @@ public:
             }
 
             if (lambdaLR > A) {
-                // record partial stats to refine delta
-                const double obsFrac = static_cast<double>(inlierCount) / static_cast<double>(iPos + 1);
-                const_cast<MAGSACSPRTScoring*>(this)->rejectedInlierFracSum_ += obsFrac;
-                const_cast<MAGSACSPRTScoring*>(this)->rejectedCount_ += 1;
+                // record partial stats to refine delta (discounting up to kSampleSize minimal-sample points)
+                if (iPos + 1 > kSampleSize) {
+                    const int nonSampleInliers = std::max(0, inlierCount - kSampleSize);
+                    const double obsFrac = static_cast<double>(nonSampleInliers) / static_cast<double>(iPos + 1 - kSampleSize);
+                    const_cast<MAGSACSPRTScoring*>(this)->rejectedInlierFracSum_ += obsFrac;
+                    const_cast<MAGSACSPRTScoring*>(this)->rejectedCount_ += 1;
+                }
                 return false;
             }
 
@@ -384,13 +390,13 @@ public:
         if (currentBest.getInlierNumber() > 0 && currentBest.getValue() > 0.0) {
             const double newEps = clampProb(
                 static_cast<double>(currentBest.getInlierNumber()) / static_cast<double>(std::max<size_t>(1, totalPoints)),
-                kMinEpsilon, 0.999);
+                0.05, 0.999);
 
             if (std::abs(newEps - sprt_.epsilon) / std::max(sprt_.epsilon, 1e-6) > kUpdateTolFrac) {
                 sprt_.epsilon = newEps;
                 if (rejectedCount_ > 0) {
                     const double avgBadInlier = rejectedInlierFracSum_ / static_cast<double>(rejectedCount_);
-                    sprt_.delta = clampProb(avgBadInlier, kMinDelta, kMaxDeltaFrac);
+                    sprt_.delta = clampProb(avgBadInlier, kMinDelta, std::min(kMaxDeltaFrac, 0.5 * sprt_.epsilon));
                 } else {
                     sprt_.delta = std::min(sprt_.delta, sprt_.epsilon / 10.0);
                 }
@@ -405,7 +411,7 @@ public:
         } else {
             if (rejectedCount_ >= 5) {
                 const double avgBadInlier = rejectedInlierFracSum_ / static_cast<double>(rejectedCount_);
-                const double newDelta = clampProb(avgBadInlier, kMinDelta, kMaxDeltaFrac);
+                const double newDelta = clampProb(avgBadInlier, kMinDelta, std::min(kMaxDeltaFrac, 0.5 * sprt_.epsilon));
                 if (std::abs(newDelta - sprt_.delta) / std::max(sprt_.delta, 1e-6) > kUpdateTolFrac) {
                     sprt_.delta = newDelta;
                     refreshA();

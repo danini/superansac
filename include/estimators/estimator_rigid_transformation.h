@@ -56,9 +56,17 @@ namespace superansac
 		// This is the estimator class for estimating a homography matrix between two images. A model estimation method and error calculation method are implemented
 		class RigidTransformationEstimator : public Estimator
 		{
+		protected:
+			double inlierThreshold = 0.05;
+
 		public:
 			RigidTransformationEstimator() {}
 			~RigidTransformationEstimator() {}
+
+			void setInlierThreshold(const double kThreshold_)
+			{
+				inlierThreshold = kThreshold_;
+			}
             
 			// A flag deciding if the points can be weighted when the non-minimal fitting is applied 
 			bool isWeightingApplicable() const override
@@ -88,7 +96,7 @@ namespace superansac
 				const size_t *kSample_, // The sample usd for the estimation
 				std::vector<models::Model>* models_) const override // The estimated model parameters
 			{
-				static const size_t kSampleSize = sampleSize();
+				const size_t kSampleSize = sampleSize();
 
 				// Estimate the model parameters by the minimal solver
 				minimalSolver->estimateModel(kData_, // The data points
@@ -203,6 +211,16 @@ namespace superansac
 				// Check if the determinant is close to +1 (indicating a proper rotation without mirroring)
 				if (std::abs(det - 1.0) > kProperRotationThreshold) 
 					return false; // Invalid model due to mirroring or improper rotation
+
+				if (kMinimalSample_ != nullptr)
+				{
+					const double maxSqRes = kThreshold_ * kThreshold_;
+					for (size_t i = 0; i < 3; ++i)
+					{
+						if (squaredResidual(kData_.row(kMinimalSample_[i]).data(), kTransformation) > maxSqRes)
+							return false;
+					}
+				}
 				return true;
 			}
 
@@ -227,6 +245,31 @@ namespace superansac
 				double v2x1 = p3[0] - p1[0], 
 					v2y1 = p3[1] - p1[1], 
 					v2z1 = p3[2] - p1[2];
+
+				// Calculate vectors in the second domain (x2, y2, z2)
+				double v1x2 = p2[3] - p1[3], v1y2 = p2[4] - p1[4], v1z2 = p2[5] - p1[5];
+				double v2x2 = p3[3] - p1[3], v2y2 = p3[4] - p1[4], v2z2 = p3[5] - p1[5];
+
+				// Isometric triangle edge-length congruence check: under any rigid transformation
+				// where all 3 sample points have residual <= inlierThreshold, each pairwise distance
+				// is preserved within 2 * inlierThreshold by the triangle inequality.
+				const double maxEdgeDiff = 2.0 * inlierThreshold;
+				const double d1_12 = std::sqrt(v1x1 * v1x1 + v1y1 * v1y1 + v1z1 * v1z1);
+				const double d2_12 = std::sqrt(v1x2 * v1x2 + v1y2 * v1y2 + v1z2 * v1z2);
+				if (std::abs(d1_12 - d2_12) > maxEdgeDiff)
+					return false;
+
+				const double d1_13 = std::sqrt(v2x1 * v2x1 + v2y1 * v2y1 + v2z1 * v2z1);
+				const double d2_13 = std::sqrt(v2x2 * v2x2 + v2y2 * v2y2 + v2z2 * v2z2);
+				if (std::abs(d1_13 - d2_13) > maxEdgeDiff)
+					return false;
+
+				const double v3x1 = p3[0] - p2[0], v3y1 = p3[1] - p2[1], v3z1 = p3[2] - p2[2];
+				const double v3x2 = p3[3] - p2[3], v3y2 = p3[4] - p2[4], v3z2 = p3[5] - p2[5];
+				const double d1_23 = std::sqrt(v3x1 * v3x1 + v3y1 * v3y1 + v3z1 * v3z1);
+				const double d2_23 = std::sqrt(v3x2 * v3x2 + v3y2 * v3y2 + v3z2 * v3z2);
+				if (std::abs(d1_23 - d2_23) > maxEdgeDiff)
+					return false;
 				
 				// Cross product in the first domain
 				double cross1_x = v1y1 * v2z1 - v1z1 * v2y1;
@@ -237,10 +280,6 @@ namespace superansac
 				if (std::abs(cross1_x) < kCollinearityThreshold && std::abs(cross1_y) < kCollinearityThreshold && std::abs(cross1_z) < kCollinearityThreshold) {
 					return false; // Collinear in the first domain
 				}
-
-				// Calculate vectors in the second domain (x2, y2, z2)
-				double v1x2 = p2[3] - p1[3], v1y2 = p2[4] - p1[4], v1z2 = p2[5] - p1[5];
-				double v2x2 = p3[3] - p1[3], v2y2 = p3[4] - p1[4], v2z2 = p3[5] - p1[5];
 				
 				// Cross product in the second domain
 				double cross2_x = v1y2 * v2z2 - v1z2 * v2y2;

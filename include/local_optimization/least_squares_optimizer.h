@@ -117,40 +117,50 @@ namespace superansac
 				estimatedModels.reserve(10);
 				estimatedModels.emplace_back(kModel_);
 
+				estimatedModel_ = kModel_;
+				estimatedScore_ = kScore_;
+				estimatedInliers_ = kInliers_;
+
 				scoring::Score currentScore;
+				std::vector<double> initWeights;
 
 				if (useInliers)
 				{
 					if (kInliers_.size() > 0)
 					{
+						const double *wPtr = nullptr;
+						if (weightedFit)
+						{
+							kScoring_->getWeights(kData_, kModel_, kEstimator_, initWeights, &kInliers_);
+							wPtr = initWeights.data();
+						}
 						// Estimate the model using the inliers
-						if (!kEstimator_->estimateModelNonminimal(
+						kEstimator_->estimateModelNonminimal(
 							kData_,  // The data points
 							kInliers_.data(),  // Use .data() instead of &[0]
 							kInliers_.size(),
 							&estimatedModels,
-							nullptr))
-						{
-							estimatedScore_ = kInvalidScore;
-							return;
-						}
+							wPtr);
 					}
 					else
 					{
 						// Calculate the score of the estimated model
 						currentScore = kScoring_->score(kData_, kModel_, kEstimator_, estimatedInliers_);
+						estimatedScore_ = currentScore;
 
+						const double *wPtr = nullptr;
+						if (weightedFit)
+						{
+							kScoring_->getWeights(kData_, kModel_, kEstimator_, initWeights, &estimatedInliers_);
+							wPtr = initWeights.data();
+						}
 						// Estimate the model using the inliers
-						if (!kEstimator_->estimateModelNonminimal(
+						kEstimator_->estimateModelNonminimal(
 							kData_,  // The data points
 							estimatedInliers_.data(),  // Use .data() instead of &[0]
 							estimatedInliers_.size(),
 							&estimatedModels,
-							nullptr))
-						{
-							estimatedScore_ = kInvalidScore;
-							return;
-						}
+							wPtr);
 					}
 				} else if (!kEstimator_->estimateModelNonminimal(
 					kData_,  // The data points
@@ -162,10 +172,6 @@ namespace superansac
 					estimatedScore_ = kInvalidScore;
 					return;
 				}
-
-				// Clear and reserve the estimated inliers
-				estimatedInliers_.clear();
-				estimatedInliers_.reserve(kData_.rows());
 
 				// Temp inliers for selecting the best model - reserve outside loop
 				std::vector<size_t> tmpInliers;
@@ -179,7 +185,7 @@ namespace superansac
 					currentScore = kScoring_->score(kData_, model, kEstimator_, tmpInliers);
 
 					// Check if the current model is better than the previous one
-					if (useInliers || estimatedScore_ < currentScore)
+					if (estimatedScore_ < currentScore)
 					{
 						// Update the estimated model
 						estimatedModel_ = model;

@@ -35,8 +35,10 @@
 
 #include <vector>
 #include <Eigen/Core>
+#ifdef SUPERANSAC_HAS_OPENCV
 #include "opencv2/core.hpp"
 #include "opencv2/calib3d/calib3d.hpp"
+#endif
 #include "abstract_local_optimizer.h"
 #include "../utils/types.h"
 #include "../models/model.h"
@@ -137,6 +139,7 @@ namespace superansac
 				// Divide the inliers into bins
 				const size_t binSize = wideInliers.size() / binNumber;
 				
+#ifdef SUPERANSAC_HAS_OPENCV
 				std::vector<cv::Point2d> sourceKeypoints, destinationKeypoints;
 				std::vector<uchar> mask;
 				mask.reserve(wideInliers.size());
@@ -199,6 +202,36 @@ namespace superansac
 						tmpInliers.swap(estimatedInliers_);
 					}
 				}
+#else
+				std::vector<size_t> subsetIndices;
+				subsetIndices.reserve(wideInliers.size());
+				for (size_t binIdx = 0; binIdx < binNumber; ++binIdx)
+				{
+					const size_t startIdx = binIdx * binSize;
+					const size_t endIdx = std::min((binIdx + 1) * binSize, wideInliers.size());
+					for (size_t inlierIdx = startIdx; inlierIdx < endIdx; ++inlierIdx)
+						subsetIndices.push_back(wideInliers[inlierIdx].second);
+
+					if (subsetIndices.size() < kEstimator_->nonMinimalSampleSize())
+						continue;
+
+					estimatedModels.clear();
+					if (!kEstimator_->estimateModelNonminimal(kData_, subsetIndices.data(), subsetIndices.size(), &estimatedModels, nullptr))
+						continue;
+
+					for (const auto &model : estimatedModels)
+					{
+						tmpInliers.clear();
+						currentScore = kScoring_->score(kData_, model, kEstimator_, tmpInliers);
+						if (currentScore > estimatedScore_)
+						{
+							estimatedModel_ = model;
+							estimatedScore_ = currentScore;
+							tmpInliers.swap(estimatedInliers_);
+						}
+					}
+				}
+#endif
 			}
 		};
 	}

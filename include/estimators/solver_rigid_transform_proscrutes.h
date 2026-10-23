@@ -33,6 +33,8 @@
 // Author: Daniel Barath (barath.daniel@sztaki.mta.hu)
 #pragma once
 
+#include <algorithm>
+#include <vector>
 #include <unsupported/Eigen/Polynomials>
 
 #include "abstract_solver.h"
@@ -100,130 +102,96 @@ namespace superansac
 				std::vector<models::Model> &models_, // The estimated model parameters
 				const double *kWeights_) const // The weight for each point
 			{				
-				Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
-				Eigen::Vector3d t = Eigen::Vector3d::Zero();
-				double weight = 1.0;
-
-				// Calculate the center of gravity for both point clouds
-				double centroid0x = 0.0,
-					centroid0y = 0.0,
-					centroid0z = 0.0,
-					centroid1x = 0.0,
-					centroid1y = 0.0,
-					centroid1z = 0.0;
-
-				for (size_t i = 0; i < kSampleNumber_; i++)
-				{
-					const size_t idx =
-						kSample_ == nullptr ? i : kSample_[i];
-
-					const double
-						&x0 = kData_(idx, 0),
-						&y0 = kData_(idx, 1),
-						&z0 = kData_(idx, 2),
-						&x1 = kData_(idx, 3),
-						&y1 = kData_(idx, 4),
-						&z1 = kData_(idx, 5);
-
-					centroid0x += x0;
-					centroid0y += y0;
-					centroid0z += z0;
-					centroid1x += x1;
-					centroid1y += y1;
-					centroid1z += z1;
-				}
-				
-				centroid0x /= kSampleNumber_;
-				centroid0y /= kSampleNumber_;
-				centroid0z /= kSampleNumber_;
-				centroid1x /= kSampleNumber_;
-				centroid1y /= kSampleNumber_;
-				centroid1z /= kSampleNumber_;
-				
-				Eigen::MatrixXd coefficients0(3, kSampleNumber_);
-				Eigen::MatrixXd coefficients1(3, kSampleNumber_);
-
-				double avgDistance0 = 0.0,
-					avgDistance1 = 0.0;
-
-				for (size_t i = 0; i < kSampleNumber_; i++)
-				{
-					const size_t idx =
-						kSample_ == nullptr ? i : kSample_[i];
-					if (kWeights_ != nullptr)
-						weight = kWeights_[idx];
-
-					const double
-						&x0 = kData_(idx, 0),
-						&y0 = kData_(idx, 1),
-						&z0 = kData_(idx, 2),
-						&x1 = kData_(idx, 3),
-						&y1 = kData_(idx, 4),
-						&z1 = kData_(idx, 5);
-
-					coefficients0(0, i) = x0 - centroid0x;
-					coefficients0(1, i) = y0 - centroid0y;
-					coefficients0(2, i) = z0 - centroid0z;
-					coefficients1(0, i) = x1 - centroid1x;
-					coefficients1(1, i) = y1 - centroid1y;
-					coefficients1(2, i) = z1 - centroid1z;
-
-					avgDistance0 +=
-						std::sqrt(coefficients0(0, i) * coefficients0(0, i) +
-							coefficients0(1, i) * coefficients0(1, i) +
-							coefficients0(2, i) * coefficients0(2, i));
-
-					avgDistance1 +=
-						std::sqrt(coefficients1(0, i) * coefficients1(0, i) +
-							coefficients1(1, i) * coefficients1(1, i) +
-							coefficients1(2, i) * coefficients1(2, i));
-
-					coefficients0(0, i) *= weight;
-					coefficients0(1, i) *= weight;
-					coefficients0(2, i) *= weight;
-					coefficients1(0, i) *= weight;
-					coefficients1(1, i) *= weight;
-					coefficients1(2, i) *= weight;
-					 
-				}
-
-				avgDistance0 /= kSampleNumber_;
-				avgDistance1 /= kSampleNumber_;
-
-				static const double sqrt_3 = std::sqrt(3.0);
-				const double ratio0 = sqrt_3 / avgDistance0,
-					ratio1 = sqrt_3 / avgDistance1;
-
-				coefficients0 *= ratio0;
-				coefficients1 *= ratio1;
-				
-				// 3x3 cross-covariance: fixed-size to avoid heap allocation.
-				const Eigen::Matrix3d covariance =
-					coefficients0 * coefficients1.transpose();
-				
-				if (covariance.hasNaN())
+				if (kSampleNumber_ < 3)
 					return false;
 
-				// A*(f11 f12 ... f33)' = 0 is singular (7 equations for 9 variables), so
-				// the solution is linear subspace of dimensionality 2.
-				// => use the last two singular std::vectors as a basis of the space
-				// (according to SVD properties)
-				Eigen::JacobiSVD<Eigen::Matrix3d> svd(
-					covariance,
-					Eigen::ComputeFullV | Eigen::ComputeFullU);
-
-				R = svd.matrixV() * svd.matrixU().transpose();
-
-				if (R.determinant() < 0)
+				auto solveWeightedProcrustes = [&](const double *weights, Eigen::Matrix3d &R_out, Eigen::Vector3d &t_out) -> bool
 				{
-					Eigen::Matrix3d V = svd.matrixV();
-					V.col(2) = -V.col(2);
-					R = V * svd.matrixU().transpose();
-				}
+					double centroid0x = 0.0, centroid0y = 0.0, centroid0z = 0.0;
+					double centroid1x = 0.0, centroid1y = 0.0, centroid1z = 0.0;
+					double weightSum = 0.0;
 
-				t(0) = -R(0, 0) * centroid0x - R(0, 1) * centroid0y - R(0, 2) * centroid0z + centroid1x;
-				t(1) = -R(1, 0) * centroid0x - R(1, 1) * centroid0y - R(1, 2) * centroid0z + centroid1y;
-				t(2) = -R(2, 0) * centroid0x - R(2, 1) * centroid0y - R(2, 2) * centroid0z + centroid1z;
+					for (size_t i = 0; i < kSampleNumber_; ++i)
+					{
+						const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
+						const double w = (weights == nullptr) ? 1.0 : weights[i];
+						if (w <= 0.0)
+							continue;
+
+						centroid0x += w * kData_(idx, 0);
+						centroid0y += w * kData_(idx, 1);
+						centroid0z += w * kData_(idx, 2);
+						centroid1x += w * kData_(idx, 3);
+						centroid1y += w * kData_(idx, 4);
+						centroid1z += w * kData_(idx, 5);
+						weightSum += w;
+					}
+
+					if (weightSum <= 1e-12)
+						return false;
+
+					const double invWeightSum = 1.0 / weightSum;
+					centroid0x *= invWeightSum;
+					centroid0y *= invWeightSum;
+					centroid0z *= invWeightSum;
+					centroid1x *= invWeightSum;
+					centroid1y *= invWeightSum;
+					centroid1z *= invWeightSum;
+
+					Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+					for (size_t i = 0; i < kSampleNumber_; ++i)
+					{
+						const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
+						const double w = (weights == nullptr) ? 1.0 : weights[i];
+						if (w <= 0.0)
+							continue;
+
+						const double dx0 = kData_(idx, 0) - centroid0x;
+						const double dy0 = kData_(idx, 1) - centroid0y;
+						const double dz0 = kData_(idx, 2) - centroid0z;
+						const double dx1 = kData_(idx, 3) - centroid1x;
+						const double dy1 = kData_(idx, 4) - centroid1y;
+						const double dz1 = kData_(idx, 5) - centroid1z;
+
+						covariance(0, 0) += w * dx0 * dx1;
+						covariance(0, 1) += w * dx0 * dy1;
+						covariance(0, 2) += w * dx0 * dz1;
+						covariance(1, 0) += w * dy0 * dx1;
+						covariance(1, 1) += w * dy0 * dy1;
+						covariance(1, 2) += w * dy0 * dz1;
+						covariance(2, 0) += w * dz0 * dx1;
+						covariance(2, 1) += w * dz0 * dy1;
+						covariance(2, 2) += w * dz0 * dz1;
+					}
+
+					covariance *= invWeightSum;
+					if (covariance.hasNaN())
+						return false;
+
+					Eigen::JacobiSVD<Eigen::Matrix3d> svd(
+						covariance,
+						Eigen::ComputeFullV | Eigen::ComputeFullU);
+
+					Eigen::Matrix3d V = svd.matrixV();
+					const Eigen::Matrix3d &U = svd.matrixU();
+					R_out = V * U.transpose();
+
+					if (R_out.determinant() < 0.0)
+					{
+						V.col(2) = -V.col(2);
+						R_out = V * U.transpose();
+					}
+
+					t_out(0) = -R_out(0, 0) * centroid0x - R_out(0, 1) * centroid0y - R_out(0, 2) * centroid0z + centroid1x;
+					t_out(1) = -R_out(1, 0) * centroid0x - R_out(1, 1) * centroid0y - R_out(1, 2) * centroid0z + centroid1y;
+					t_out(2) = -R_out(2, 0) * centroid0x - R_out(2, 1) * centroid0y - R_out(2, 2) * centroid0z + centroid1z;
+					return true;
+				};
+
+				Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+				Eigen::Vector3d t = Eigen::Vector3d::Zero();
+				if (!solveWeightedProcrustes(kWeights_, R, t))
+					return false;
 				
 				models::Model model;
 				auto &modelData = model.getMutableData();

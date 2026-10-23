@@ -69,7 +69,7 @@ protected:
             subsetSize = std::min(subsetSize, pointNumber);
             largestSampleSize = std::max(largestSampleSize, subsetSize);
 
-            randomGenerator->resetGenerator(0, subsetSize - 2);
+            randomGenerator->resetGenerator(0, subsetSize > 1 ? subsetSize - 2 : 0);
         }
     }
 
@@ -127,7 +127,7 @@ public:
         pointNumber = kPointNumber_;
         growthFunction.resize(pointNumber, 0);
 
-        double T_n = ransacConvergenceIterations;
+        double T_n = (sampleSize <= 3) ? 25000.0 : std::max<double>(200000.0, static_cast<double>(ransacConvergenceIterations));
         for (size_t i = 0; i < sampleSize; i++)
         {
             T_n *= static_cast<double>(sampleSize - i) / (pointNumber - i);
@@ -156,7 +156,7 @@ public:
         subsetSize = sampleSize;
 
         randomGenerator = std::make_unique<utils::UniformRandomGenerator<size_t>>();
-        randomGenerator->resetGenerator(0, subsetSize - 1);
+        randomGenerator->resetGenerator(0, subsetSize > 1 ? subsetSize - 2 : 0);
     }
 
     FORCE_INLINE void update(const size_t* const subset_, const size_t& sampleSize_, const size_t& iteration_number_, const double& inlier_ratio_)
@@ -169,7 +169,7 @@ public:
         kthSampleNumber = 1;
         largestSampleSize = sampleSize;
         subsetSize = sampleSize;
-        randomGenerator->resetGenerator(0, subsetSize - 1);
+        randomGenerator->resetGenerator(0, subsetSize > 1 ? subsetSize - 2 : 0);
     }
 
     FORCE_INLINE bool sample(const DataMatrix& kData_, const int kNumSamples_, size_t* samples_)

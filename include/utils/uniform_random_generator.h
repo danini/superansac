@@ -100,7 +100,6 @@ public:
     FORCE_INLINE void generateUniqueRandomSet(_Type* sample,
                                               const _Type& k,
                                               const _Type& maxv) {
-        resetGenerator(0, maxv);
         choose_without_replacement(sample, k, (uint64_t)maxv + 1);
     }
 
@@ -108,7 +107,6 @@ public:
                                               const _Type k,
                                               const _Type maxv,
                                               const _Type toSkip) {
-        resetGenerator(0, maxv);
         // draw k+1 then drop toSkip if present
         std::vector<_Type> tmp((size_t)k + 1);
         choose_without_replacement(tmp.data(), (uint64_t)k + 1, (uint64_t)maxv + 1);

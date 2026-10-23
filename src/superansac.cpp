@@ -2,15 +2,21 @@
 
 #include "estimators/degensac.h"
 #include "estimators/estimator_fundamental_matrix.h"
+#include "estimators/estimator_rigid_transformation.h"
 
 #include <iostream>
 
 namespace superansac {
 
 SupeRansac::SupeRansac() :
-    currentSample(nullptr),
+    sampler(nullptr),
+    estimator(nullptr),
+    scoring(nullptr),
     localOptimizer(nullptr),
-    finalOptimizer(nullptr)
+    finalOptimizer(nullptr),
+    terminationCriterion(nullptr),
+    inlierSelector(nullptr),
+    currentSample(nullptr)
 {
     // Reserve memory for inliers to avoid reallocations
     inliers.reserve(10000);
@@ -44,6 +50,9 @@ void SupeRansac::run(const DataMatrix &kData_)
     minIterations = settings.minIterations; // The minimum number of iterations
     maxIterations = kStrickIterationLimit; // The maximum number of iterations
     bestScore = scoring::Score(); // The best score
+    bestModel = models::Model(); // Reset the best model
+    inliers.clear(); // Reset the best inliers
+    tmpInliers.clear();
     currentModels.clear(); // Clearing the current models
 
     // Reserve memory for the inliers if needed (already reserved in constructor)
@@ -79,12 +88,16 @@ void SupeRansac::run(const DataMatrix &kData_)
     // epipolar distance as well.
     const bool kUseSymmetricValidation =
         settings.fundamentalSymmetricValidation && kFundamentalEstimator != nullptr;
+    const estimator::RigidTransformationEstimator *kRigidEstimator =
+        dynamic_cast<const estimator::RigidTransformationEstimator *>(estimator);
     const double kSquaredThreshold = kThreshold_ * kThreshold_;
+    const double kFourSquaredThreshold = 4.0 * kSquaredThreshold;
 
     // Iterate until the maximum number of iterations is reached and the minimum number of iterations is exceeded
     while (iterationNumber < maxIterations || iterationNumber < minIterations)
     {
         unsuccessfulModelGenerations = -1; 
+        currentModels.clear();
 
         // Select a minimal sample and estimate the implied model parameters if possible.
         // If, after a certain number of sample selections, there is no success, terminate.
@@ -197,6 +210,31 @@ void SupeRansac::run(const DataMatrix &kData_)
                             break;
                     if (passing < kRequired)
                         continue; // Reject this model; keep the previous best
+                }
+
+                // 3D surface concentration (halo) check for rigid transformation:
+                // a genuine surface alignment concentrates inliers inside r < tau with
+                // a sparse outer shell [tau, 2*tau), whereas a false mode inside a
+                // diffuse 3D outlier cloud has more points in [tau, 2*tau) than [0, tau).
+                if (kRigidEstimator != nullptr && tmpInliers.size() >= 12)
+                {
+                    const auto &kDescriptor = model.getData();
+                    const size_t kMaxHalo = (tmpInliers.size() * 2) / 3;
+                    size_t haloCount = 0;
+                    const int kRows = kData_.rows();
+                    const int kCols = kData_.cols();
+                    const double *rowPtr = kData_.data();
+                    for (int rIdx = 0; rIdx < kRows; ++rIdx, rowPtr += kCols)
+                    {
+                        const double sqRes = kRigidEstimator->squaredResidual(rowPtr, kDescriptor);
+                        if (sqRes >= kSquaredThreshold && sqRes < kFourSquaredThreshold)
+                        {
+                            if (++haloCount > kMaxHalo)
+                                break;
+                        }
+                    }
+                    if (haloCount > kMaxHalo)
+                        continue;
                 }
 
                 // DEGENSAC: test the candidate minimal-sample model for
@@ -341,6 +379,27 @@ void SupeRansac::run(const DataMatrix &kData_)
 
             if (bestScore < currentScore)
             {
+                if (kRigidEstimator != nullptr && tmpInliers.size() >= 12)
+                {
+                    const auto &kDescriptor = locallyOptimizedModel.getData();
+                    const size_t kMaxHalo = tmpInliers.size() / 2;
+                    size_t haloCount = 0;
+                    const int kRows = kData_.rows();
+                    const int kCols = kData_.cols();
+                    const double *rowPtr = kData_.data();
+                    for (int rIdx = 0; rIdx < kRows; ++rIdx, rowPtr += kCols)
+                    {
+                        const double sqRes = kRigidEstimator->squaredResidual(rowPtr, kDescriptor);
+                        if (sqRes >= kSquaredThreshold && sqRes < kFourSquaredThreshold)
+                        {
+                            if (++haloCount > kMaxHalo)
+                                break;
+                        }
+                    }
+                    if (haloCount > kMaxHalo)
+                        continue;
+                }
+
                 // Update the best model
                 bestScore = currentScore;
                 bestModel = locallyOptimizedModel;

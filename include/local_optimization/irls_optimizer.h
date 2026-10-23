@@ -111,51 +111,53 @@ namespace superansac
 
 				// Calculate the score of the estimated model
 				estimatedScore_ = kScoring_->score(kData_, estimatedModel_, kEstimator_, estimatedInliers_);
+				if (kScore_ > estimatedScore_ && !kInliers_.empty())
+				{
+					estimatedScore_ = kScore_;
+					estimatedInliers_ = kInliers_;
+				}
 
 				for (size_t iteration = 0; iteration < maxIterations; ++iteration)
 				{
 					// If the model has not been updated in the previous iteration, break
 					updated = false; 
 					
-					// Calculate the MSAC weights for the data points
-					kScoring_->getWeights(kData_, estimatedModel_, kEstimator_, weights, &estimatedInliers_);
-					
 					estimatedModels.clear();
 
 					if (useInliers)
 					{
-						// Use the provided inliers only for the first fit; afterwards
-						// refit from the inliers re-collected from the refined model.
-						// (Previously every iteration refit from the same kInliers_,
-						// so all iterations after the first produced the same model.)
 						const std::vector<size_t> &kFitInliers =
-							(iteration == 0 && kInliers_.size() > 0) ? kInliers_ : estimatedInliers_;
+							(iteration == 0 && estimatedInliers_.empty() && kInliers_.size() > 0) ? kInliers_ : estimatedInliers_;
 
 						if (kFitInliers.size() < kEstimator_->nonMinimalSampleSize())
 							break;
 
-						// Estimate the model using the inliers
+						// Calculate the MSAC/MAGSAC weights for the fit inliers
+						kScoring_->getWeights(kData_, estimatedModel_, kEstimator_, weights, &kFitInliers);
+
+						// Estimate the model using the weighted inliers
 						if (!kEstimator_->estimateModelNonminimal(
 							kData_,  // The data points
 							kFitInliers.data(),
 							kFitInliers.size(),
 							&estimatedModels,
-							nullptr))
+							weights.data()))
 						{
-							if (iteration == 0)
-							{
-								estimatedScore_ = kInvalidScore;
-								return;
-							}
 							break;
 						}
-					} else if (!kEstimator_->estimateModelNonminimal( // Estimate the model using the inliers
-						kData_,  // The data points
-						&estimatedInliers_[0],
-						estimatedInliers_.size(),
-						&estimatedModels,
-						&weights[0]))
-						break;
+					} else
+					{
+						if (estimatedInliers_.size() < kEstimator_->nonMinimalSampleSize())
+							break;
+						kScoring_->getWeights(kData_, estimatedModel_, kEstimator_, weights, &estimatedInliers_);
+						if (!kEstimator_->estimateModelNonminimal( // Estimate the model using the inliers
+							kData_,  // The data points
+							&estimatedInliers_[0],
+							estimatedInliers_.size(),
+							&estimatedModels,
+							&weights[0]))
+							break;
+					}
 
 					// Calculate the scoring of the estimated model
 					for (const auto &model : estimatedModels)

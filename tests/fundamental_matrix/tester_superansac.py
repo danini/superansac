@@ -14,7 +14,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
-from utils import read_h5, append_h5
+from utils import read_h5, append_h5, detect_and_load_data
 from functions import point_matching, normalize_keypoints
 from evaluation import evaluate_R_t, pose_auc
 
@@ -26,29 +26,6 @@ from datasets.phototourism import PhotoTourism
 from datasets.seven_scenes import SevenScenes
 
 import pysuperansac
-
-def detect_and_load_data(data, args, detector, matcher):
-    img1 = data["img1"]
-    img2 = data["img2"]
-
-    # Database labels
-    label1 = "-".join(data["id1"].split("/")[-3:])
-    label2 = "-".join(data["id2"].split("/")[-3:])
-
-    # Try loading the point matches from the database file
-    matches = read_h5(f"{args.features.lower()}-{label1}-{label2}", args.output_db_path)
-    scores = read_h5(f"{args.features.lower()}-{label1}-{label2}-scores", args.output_db_path)
-    if matches is None:
-        start_time = time.time()
-        # Detect keypoints by SuperPoint + SuperGlue, LoFTR, or GlueStick
-        matches, scores = point_matching(img1, img2, args.features, detector, matcher, args.device)
-        # Saving to the database
-        append_h5({f"{args.features.lower()}-{label1}-{label2}": matches}, args.output_db_path)
-        append_h5({f"{args.features.lower()}-{label1}-{label2}-scores": scores}, args.output_db_path)
-        end_time = time.time()
-        print(f"Point matching took {end_time - start_time:.2f} seconds")
-
-    return matches, scores
 
 def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     # Sort the matches by matching score
@@ -127,27 +104,22 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         
     config.neighborhood_settings.neighborhood_grid_density = args.neighborhood_grid_density
     config.neighborhood_settings.neighborhood_size = args.neighborhood_size
+    config.use_sprt = True
+    config.degensac_settings.enabled = True
 
-    # If Importance sampler or ARSampler is used, the SNN ratios are converted as probabilities
-    probabilities = []
-    if args.sampler == "Importance" or args.sampler == "ARSampler":
-        point_number = matches.shape[0]
-        for i in range(point_number):
-            probabilities.append(1.0 - i / point_number)
+    probabilities = np.ascontiguousarray(scores, dtype=np.float64)
 
-    probabilities = scores
-
-    # Run the homography estimation implemented in OpenCV
+    # Run the fundamental matrix estimation implemented in SupeRANSAC
     tic = time.perf_counter()
     F_est, inliers, score, iterations = pysuperansac.estimateFundamentalMatrix(
-        np.ascontiguousarray(matches), 
-        [image_size1[2], image_size1[1], image_size2[2], image_size2[1]],
+        np.ascontiguousarray(matches, dtype=np.float64), 
+        [float(image_size1[0]), float(image_size1[1]), float(image_size2[0]), float(image_size2[1])],
         probabilities,
         config = config)
     toc = time.perf_counter()
     elapsed_time = toc - tic
 
-    if F_est is None:
+    if F_est is None or len(inliers) < 7:
         return evaluate_R_t(R_gt, t_gt, np.eye(3), np.zeros((3, 1))), 0, elapsed_time
 
     # Convert the fundamental matrix to essential matrix if the estimation is successful
@@ -158,8 +130,11 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     norm_matches[:, 2:] = normalize_keypoints(matches[:, 2:], K2)
 
     # Decompose the essential matrix to get the relative pose
-    if len(inliers) > 0:
-        _, R, t, _ = cv2.recoverPose(E_est, norm_matches[inliers, :2], norm_matches[inliers, 2:])
+    if len(inliers) >= 5:
+        _, R, t, _ = cv2.recoverPose(
+            E_est,
+            norm_matches[inliers, :2].reshape(-1, 1, 2),
+            norm_matches[inliers, 2:].reshape(-1, 1, 2))
     else:
         R = np.eye(3)
         t = np.zeros((3, 1))
@@ -172,20 +147,20 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
 if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running on fundamental matrix estimation with SupeRANSAC")
-    parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA.", choices=["splg", "RoMA"], default="splg")
+    parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA, LoMa.", choices=["splg", "RoMA", "LoMa"], default="splg")
     parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2500)
-    parser.add_argument("--confidence", type=float, default=0.9999999)
-    parser.add_argument("--inlier_threshold", type=float, default=-1.0)
+    parser.add_argument("--confidence", type=float, default=0.99)
+    parser.add_argument("--inlier_threshold", type=float, default=1.5)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
-    parser.add_argument("--maximum_iterations", type=int, default=1000)
+    parser.add_argument("--maximum_iterations", type=int, default=5000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler", "NAPSAC"], default="PROSAC")
     parser.add_argument("--scoring", type=str, help="Choose from: RANSAC, MSAC, MAGSAC, ACRANSAC.", choices=["RANSAC", "MSAC", "MAGSAC", "ACRANSAC"], default="MAGSAC")
-    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "CrossValidation", "Nothing"], default="GCRANSAC")
-    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "CrossValidation", "Nothing"], default="LSQ")
-    parser.add_argument("--spatial_coherence_weight", type=float, default=0.4)
-    parser.add_argument("--neighborhood_size", type=float, default=20)
-    parser.add_argument("--neighborhood_grid_density", type=float, default=3)
-    parser.add_argument("--core_number", type=int, default=16)
+    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "CrossValidation", "Nothing"], default="NestedRANSAC")
+    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "CrossValidation", "Nothing"], default="IRLS")
+    parser.add_argument("--spatial_coherence_weight", type=float, default=0.1)
+    parser.add_argument("--neighborhood_size", type=float, default=20.0)
+    parser.add_argument("--neighborhood_grid_density", type=float, default=4.0)
+    parser.add_argument("--core_number", type=int, default=40)
     parser.add_argument("--device", type=str, default="cuda")
     
     args = parser.parse_args()
@@ -197,15 +172,23 @@ if __name__ == "__main__":
         detector = SuperPoint(max_num_keypoints=2048).eval().to(args.device)  # load the extractor
         matcher = LightGlue(features='superpoint').eval().to(args.device)  # load the matcher
         if args.inlier_threshold <= 0:
-            args.inlier_threshold = 2.0
+            args.inlier_threshold = 1.5
             print(f"Setting the threshold to {args.inlier_threshold} px as it works best for F estimation with SP-LG features.")
     elif args.features == "RoMA":
         print("Initialize RoMA detector")
         detector = roma_outdoor(device = args.device)
         matcher = None
         if args.inlier_threshold <= 0:
-            args.inlier_threshold = 2.0
+            args.inlier_threshold = 1.5
             print(f"Setting the threshold to {args.inlier_threshold} px as it works best for F estimation with RoMA features.")
+    elif args.features == "LoMa":
+        print("Initialize LoMa detector")
+        from loma import LoMa, LoMaB
+        detector = LoMa(LoMaB())
+        matcher = None
+        if args.inlier_threshold <= 0:
+            args.inlier_threshold = 1.5
+            print(f"Setting the threshold to {args.inlier_threshold} px as it works best for F estimation with LoMa features.")
     
     # The output file
     out = f"tests/fundamental_matrix/results_testing_superansac_{args.features}.csv"

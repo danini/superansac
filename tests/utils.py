@@ -314,9 +314,26 @@ def detect_and_load_data(data, args, detector, matcher):
         kptsA, kptsB = detector.to_pixel_coordinates(matches, H_A, W_A, H_B, W_B)
 
         matches = np.hstack((kptsA.cpu().numpy(), kptsB.cpu().numpy()))
-        scores = np.ones(matches.shape[0])
+        scores = certainty.cpu().numpy()
 
         # Saving to the database
+        append_h5({f"{args.features.lower()}-{label1}-{label2}": matches}, args.output_db_path, replace=False)
+        append_h5({f"{args.features.lower()}-{label1}-{label2}-scores": scores}, args.output_db_path, replace=False)
+        end_time = time.time()
+        print(f"Point matching took {end_time - start_time:.2f} seconds")
+    elif args.features == "LoMa":
+        from loma.loma import filter_matches, to_pixel_coords
+        start_time = time.time()
+        kpts_A, desc_A, h1, w1 = detector.detect_and_describe(data['path1'])
+        kpts_B, desc_B, h2, w2 = detector.detect_and_describe(data['path2'])
+        with torch.inference_mode():
+            score_mat = detector(kpts_A, kpts_B, desc_A, desc_B)["scores"]
+        m0, _, mscores0, _ = filter_matches(score_mat, detector.cfg.filter_threshold)
+        valid = m0[0] > -1
+        kptsA = to_pixel_coords(kpts_A[0][torch.where(valid)[0]], h1, w1).cpu().numpy()
+        kptsB = to_pixel_coords(kpts_B[0][m0[0][valid]], h2, w2).cpu().numpy()
+        matches = np.hstack((kptsA, kptsB))
+        scores = mscores0[0][valid].cpu().numpy()
         append_h5({f"{args.features.lower()}-{label1}-{label2}": matches}, args.output_db_path, replace=False)
         append_h5({f"{args.features.lower()}-{label1}-{label2}-scores": scores}, args.output_db_path, replace=False)
         end_time = time.time()

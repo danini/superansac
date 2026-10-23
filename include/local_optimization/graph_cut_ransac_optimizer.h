@@ -60,7 +60,8 @@ namespace superansac
 			double spatialCoherenceWeight;
 
 		public:
-			GraphCutRANSACOptimizer() : maxIterations(50),
+			GraphCutRANSACOptimizer() : neighborhoodGraph(nullptr),
+				maxIterations(50),
 				graphCutNumber(20),
 				sampleSizeMultiplier(7),
 				spatialCoherenceWeight(0.1)  // Initialize to default value
@@ -117,6 +118,12 @@ namespace superansac
 
 				// Initialize the estimated model and score
 				estimatedModel_ = kModel_;
+				estimatedScore_ = kScoring_->score(kData_, estimatedModel_, kEstimator_, estimatedInliers_);
+				if (kScore_ > estimatedScore_ && !kInliers_.empty())
+				{
+					estimatedScore_ = kScore_;
+					estimatedInliers_ = kInliers_;
+				}
 
 				// The size of the non-minimal samples
 				const size_t kNonMinimalSampleSize = sampleSizeMultiplier * kEstimator_->sampleSize();
@@ -172,6 +179,38 @@ namespace superansac
 						&problemGraph, // The reusable problem graph
 						currentInliers); // The selected inliers
 
+					if (currentInliers.size() <= kEstimator_->sampleSize())
+						break;
+
+					// First try a weighted non-minimal fit on the full graph-cut inlier pool
+					if (currentInliers.size() >= kEstimator_->nonMinimalSampleSize())
+					{
+						std::vector<double> gcWeights;
+						kScoring_->getWeights(kData_, estimatedModel_, kEstimator_, gcWeights, &currentInliers);
+						currentlyEstimatedModels.clear();
+						currentlyEstimatedModels.emplace_back(estimatedModel_);
+						if (kEstimator_->estimateModelNonminimal(
+							kData_,
+							currentInliers.data(),
+							currentInliers.size(),
+							&currentlyEstimatedModels,
+							gcWeights.data()))
+						{
+							for (const auto &model : currentlyEstimatedModels)
+							{
+								tmpInliers.clear();
+								currentScore = kScoring_->score(kData_, model, kEstimator_, tmpInliers);
+								if (currentScore > estimatedScore_)
+								{
+									estimatedModel_ = model;
+									estimatedScore_ = currentScore;
+									estimatedInliers_.swap(tmpInliers);
+									updated = true;
+								}
+							}
+						}
+					}
+
 					// Calculate the current sample size
 					currentSampleSize = currentInliers.size() - 1;
 					if (currentSampleSize >= kNonMinimalSampleSize)
@@ -190,7 +229,8 @@ namespace superansac
 						// Remove the previous models
 						currentlyEstimatedModels.clear();
 						// Add the previous model to the list of models so that if iterative optimization is applied, it can use it as a starting point
-						currentlyEstimatedModels.emplace_back(estimatedModel_);
+						if (innerIterations % 2 == 0)
+							currentlyEstimatedModels.emplace_back(estimatedModel_);
 
 						// If there are enough inliers to estimate the model, use all of them
 						if (currentSampleSize == currentInliers.size())
@@ -211,8 +251,12 @@ namespace superansac
 								currentSample)) // Sample indices
 								continue;
 
+							for (size_t sIdx = 0; sIdx < currentSampleSize; ++sIdx)
+								currentSample[sIdx] = currentInliers[currentSample[sIdx]];
+
 							// Estimate the model
 							if (currentSampleSize > kEstimator_->sampleSize())
+							{
 								if (!kEstimator_->estimateModelNonminimal(
 									kData_,  // The data points
 									currentSample, // Selected minimal sample
@@ -220,12 +264,15 @@ namespace superansac
 									&currentlyEstimatedModels, // The estimated models
 									nullptr)) // The indices of the inliers
 									continue;
+							}
 							else
+							{
 								if (!kEstimator_->estimateModel(
 									kData_,  // The data points
 									currentSample, // Selected minimal sample
 									&currentlyEstimatedModels)) // The estimated models
 									continue;
+							}
 						}
 
 						// Calculate the scoring of the estimated model

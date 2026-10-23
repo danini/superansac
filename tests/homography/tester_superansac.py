@@ -84,28 +84,24 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     elif args.fo == "NestedRANSAC":
         config.final_optimization = pysuperansac.LocalOptimizationType.NestedRANSAC
     elif args.fo == "GCRANSAC":
-        config.local_optimization = pysuperansac.LocalOptimizationType.GCRANSAC
+        config.final_optimization = pysuperansac.LocalOptimizationType.GCRANSAC
     elif args.fo == "IteratedLMEDS":
-        config.local_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
+        config.final_optimization = pysuperansac.LocalOptimizationType.IteratedLMEDS
     elif args.fo == "Nothing":
         config.final_optimization = pysuperansac.LocalOptimizationType.Nothing
         
-    config.neighborhood_settings.neighborhood_grid_density = 6
+    config.neighborhood_settings.neighborhood_grid_density = args.neighborhood_grid_density
     config.neighborhood_settings.neighborhood_size = args.neighborhood_size
+    config.use_sprt = True
     
-    # If Importance sampler or ARSampler is used, the SNN ratios are converted as probabilities
-    probabilities = []
-    if args.sampler == "Importance" or args.sampler == "ARSampler":
-        point_number = matches.shape[0]
-        for i in range(point_number):
-            probabilities.append(1.0 - i / point_number)
+    probabilities = np.ascontiguousarray(scores, dtype=np.float64)
 
-    # Run the homography estimation implemented in OpenCV
+    # Run the homography estimation implemented in SupeRANSAC
     tic = time.perf_counter()
     H_est, inliers, score, iterations = pysuperansac.estimateHomography(
-        np.ascontiguousarray(matches), 
+        np.ascontiguousarray(matches, dtype=np.float64), 
+        [float(image_size1[0]), float(image_size1[1]), float(image_size2[0]), float(image_size2[1])],
         probabilities,
-        [image_size1[2], image_size1[1], image_size2[2], image_size2[1]],
         config = config)
     toc = time.perf_counter()
     elapsed_time = toc - tic
@@ -130,20 +126,20 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
 if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running homography estimation with SupeRANSAC")
-    parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA.", choices=["splg", "RoMA"], default="splg")
+    parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA, LoMa.", choices=["splg", "RoMA", "LoMa"], default="splg")
     parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2000)
-    parser.add_argument("--confidence", type=float, default=0.9999999)
-    parser.add_argument("--inlier_threshold", type=float, default=-1)
+    parser.add_argument("--confidence", type=float, default=0.99)
+    parser.add_argument("--inlier_threshold", type=float, default=4.0)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
-    parser.add_argument("--maximum_iterations", type=int, default=1000)
+    parser.add_argument("--maximum_iterations", type=int, default=5000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler"], default="PROSAC")
     parser.add_argument("--scoring", type=str, help="Choose from: RANSAC, MSAC, MAGSAC, ACRANSAC.", choices=["RANSAC", "MSAC", "MAGSAC", "ACRANSAC"], default="MAGSAC")
-    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="GCRANSAC")
+    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="NestedRANSAC")
     parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="IRLS")
-    parser.add_argument("--spatial_coherence_weight", type=float, default=0.8)
-    parser.add_argument("--neighborhood_size", type=float, default=20)
-    parser.add_argument("--neighborhood_grid_density", type=float, default=5)
-    parser.add_argument("--core_number", type=int, default=18)
+    parser.add_argument("--spatial_coherence_weight", type=float, default=0.1)
+    parser.add_argument("--neighborhood_size", type=float, default=20.0)
+    parser.add_argument("--neighborhood_grid_density", type=float, default=4.0)
+    parser.add_argument("--core_number", type=int, default=40)
     parser.add_argument("--device", type=str, default="cuda")
     
     args = parser.parse_args()
@@ -168,6 +164,14 @@ if __name__ == "__main__":
         if args.inlier_threshold <= 0:
             args.inlier_threshold = 2.0
             print(f"Setting the threshold to {args.inlier_threshold} px as it works best for H estimation with RoMA features.")
+    elif args.features == "LoMa":
+        print("Initialize LoMa detector")
+        from loma import LoMa, LoMaB
+        detector = LoMa(LoMaB())
+        matcher = None
+        if args.inlier_threshold <= 0:
+            args.inlier_threshold = 4.0
+            print(f"Setting the threshold to {args.inlier_threshold} px as it works best for H estimation with LoMa features.")
     
     dataset_paths = ["/media/hdd3tb/datasets/scannet/scannet_lines_project/ScanNet_test", 
                      "/media/hdd2tb/datasets/RANSAC-Tutorial-Data",

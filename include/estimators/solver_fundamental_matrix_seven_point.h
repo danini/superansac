@@ -111,17 +111,19 @@ namespace superansac
 				double b = (2.0 * c2 * c2 * c2 - 9.0 * c2 * c1) / 27.0 + c0;
 				double c = b * b / 4.0 + a * a * a / 27.0;
 				int n_roots;
-				if (c > 0) {
-					c = std::sqrt(c);
+				if (c > 0 || a >= -1e-14) {
+					c = std::sqrt(std::max(0.0, c));
 					b *= -0.5;
 					roots[0] = std::cbrt(b + c) + std::cbrt(b - c) - c2 / 3.0;
 					n_roots = 1;
 				} else {
 					c = 3.0 * b / (2.0 * a) * std::sqrt(-3.0 / a);
+					c = std::max(-1.0, std::min(1.0, c));
 					double d = 2.0 * std::sqrt(-a / 3.0);
-					roots[0] = d * std::cos(std::acos(c) / 3.0) - c2 / 3.0;
-					roots[1] = d * std::cos(std::acos(c) / 3.0 - 2.09439510239319526263557236234192) - c2 / 3.0; // 2*pi/3
-					roots[2] = d * std::cos(std::acos(c) / 3.0 - 4.18879020478639052527114472468384) - c2 / 3.0; // 4*pi/3
+					const double acos_c_3 = std::acos(c) / 3.0;
+					roots[0] = d * std::cos(acos_c_3) - c2 / 3.0;
+					roots[1] = d * std::cos(acos_c_3 - 2.09439510239319526263557236234192) - c2 / 3.0; // 2*pi/3
+					roots[2] = d * std::cos(acos_c_3 - 4.18879020478639052527114472468384) - c2 / 3.0; // 4*pi/3
 					n_roots = 3;
 				}
 
@@ -130,8 +132,11 @@ namespace superansac
 					double x = roots[i];
 					double x2 = x * x;
 					double x3 = x * x2;
-					double dx = -(x3 + c2 * x2 + c1 * x + c0) / (3 * x2 + 2 * c2 * x + c1);
-					roots[i] += dx;
+					double deriv = 3.0 * x2 + 2.0 * c2 * x + c1;
+					if (std::abs(deriv) > 1e-12) {
+						double dx = -(x3 + c2 * x2 + c1 * x + c0) / deriv;
+						roots[i] += dx;
+					}
 				}
 				return n_roots;
 			}
@@ -176,7 +181,7 @@ namespace superansac
 					else
 					{
 						// If weighted least-squares is applied
-						weight = kWeights_[idx];
+						weight = kWeights_[i];
 
 						// Precalculate these values to avoid calculating them multiple times
 						const double
@@ -232,6 +237,8 @@ namespace superansac
 								N(1, 1) * N(5, 1) * N(6, 1) + N(2, 1) * N(3, 1) * N(7, 1) - N(2, 1) * N(4, 1) * N(6, 1);
 
 				// Solve the cubic
+				if (std::abs(c3) < 1e-14)
+					return false;
 				double inv_c3 = 1.0 / c3;
 				double roots[3];
 				int n_roots = solveCubicReal(c2 * inv_c3, c1 * inv_c3, c0 * inv_c3, roots);
@@ -296,7 +303,7 @@ namespace superansac
 					else
 					{
 						// If weighted least-squares is applied
-						weight = kWeights_[idx];
+						weight = kWeights_[i];
 
 						// Precalculate these values to avoid calculating them multiple times
 						const double

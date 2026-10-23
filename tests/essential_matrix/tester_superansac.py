@@ -43,7 +43,7 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     config.min_iterations = args.minimum_iterations
     config.max_iterations = args.maximum_iterations
     config.confidence = args.confidence
-    config.local_opt_k = 10
+    config.local_opt_k = 3
     config.use_sprt = True  # Enabled after SPRT optimizations
     if args.sampler == "Uniform":
         config.sampler = pysuperansac.SamplerType.Uniform
@@ -97,18 +97,19 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     config.neighborhood_settings.neighborhood_grid_density = args.neighborhood_grid_density
     config.neighborhood_settings.neighborhood_size = args.neighborhood_size
     
-    # If Importance sampler or ARSampler is used, the SNN ratios are converted as probabilities
-    # Vectorized computation for speed
-    point_number = matches.shape[0]
-    probabilities = 1.0 - np.arange(point_number) / point_number
+    probabilities = np.ascontiguousarray(scores, dtype=np.float64)
+    if image_size1 is not None and image_size2 is not None:
+        img_sizes = [float(image_size1[0]), float(image_size1[1]), float(image_size2[0]), float(image_size2[1])]
+    else:
+        img_sizes = [2000.0, 2000.0, 2000.0, 2000.0]
 
-    # Run the homography estimation implemented in OpenCV
+    # Run the essential matrix estimation implemented in SupeRANSAC
     tic = time.perf_counter()
     E_est, inliers, score, iterations = pysuperansac.estimateEssentialMatrix(
         np.ascontiguousarray(matches, dtype=np.float64), 
         K1,
         K2,
-        [2000, 2000, 2000, 2000],
+        img_sizes,
         probabilities,
         config = config)
     toc = time.perf_counter()
@@ -120,12 +121,15 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         normalize_keypoints(matches[:, 2:], K2)
     ])
 
-    if E_est is None:
+    if E_est is None or len(inliers) < 5:
         return (np.inf, np.inf), 0, elapsed_time
 
     # Decompose the essential matrix to get the relative pose
-    if len(inliers) > 0:
-        _, R, t, _ = cv2.recoverPose(E_est, norm_matches[inliers, :2], norm_matches[inliers, 2:])
+    if len(inliers) >= 5:
+        _, R, t, _ = cv2.recoverPose(
+            E_est,
+            norm_matches[inliers, :2].reshape(-1, 1, 2),
+            norm_matches[inliers, 2:].reshape(-1, 1, 2))
     else:
         R = np.eye(3)
         t = np.zeros((3, 1))
@@ -138,20 +142,20 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
 if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running on essential matrix estimation with SupeRANSAC")
-    parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA.", choices=["splg", "RoMA"], default="splg")
+    parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA, LoMa.", choices=["splg", "RoMA", "LoMa"], default="splg")
     parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=100000)
-    parser.add_argument("--confidence", type=float, default=0.9999999)
-    parser.add_argument("--inlier_threshold", type=float, default=-1.0)
+    parser.add_argument("--confidence", type=float, default=0.99)
+    parser.add_argument("--inlier_threshold", type=float, default=1.5)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
-    parser.add_argument("--maximum_iterations", type=int, default=1000)
+    parser.add_argument("--maximum_iterations", type=int, default=5000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler"], default="PROSAC")
     parser.add_argument("--scoring", type=str, help="Choose from: RANSAC, MSAC, MAGSAC, ACRANSAC.", choices=["RANSAC", "MSAC", "MAGSAC", "ACRANSAC"], default="MAGSAC")
     parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="NestedRANSAC")
-    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="LSQ")
-    parser.add_argument("--spatial_coherence_weight", type=float, default=0.2)
-    parser.add_argument("--neighborhood_size", type=float, default=20)
-    parser.add_argument("--neighborhood_grid_density", type=float, default=4)
-    parser.add_argument("--core_number", type=int, default=17)
+    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="IRLS")
+    parser.add_argument("--spatial_coherence_weight", type=float, default=0.1)
+    parser.add_argument("--neighborhood_size", type=float, default=20.0)
+    parser.add_argument("--neighborhood_grid_density", type=float, default=4.0)
+    parser.add_argument("--core_number", type=int, default=40)
     parser.add_argument("--device", type=str, default="cuda", help="Device used for feature detection and matching.")
     
     args = parser.parse_args()
@@ -164,7 +168,7 @@ if __name__ == "__main__":
         matcher = LightGlue(features='superpoint').eval().to(args.device)  # load the matcher
         
         if args.inlier_threshold <= 0:
-            args.inlier_threshold = 5.5 # 5.0
+            args.inlier_threshold = 1.5
             print(f"Setting the threshold to {args.inlier_threshold} px as it works best for E estimation with SP-LG features.")
 
         all_iters = [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]
@@ -174,10 +178,19 @@ if __name__ == "__main__":
         matcher = None
         
         if args.inlier_threshold <= 0:
-            args.inlier_threshold = 3.0
+            args.inlier_threshold = 1.5
             print(f"Setting the threshold to {args.inlier_threshold} px as it works best for E estimation with RoMA features.")
             
         all_iters = [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500]
+    elif args.features == "LoMa":
+        print("Initialize LoMa detector")
+        from loma import LoMa, LoMaB
+        detector = LoMa(LoMaB())
+        matcher = None
+        if args.inlier_threshold <= 0:
+            args.inlier_threshold = 1.5
+            print(f"Setting the threshold to {args.inlier_threshold} px as it works best for E estimation with LoMa features.")
+        all_iters = [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2500, 5000, 7500, 10000]
     
     # The output file
     out = f"tests/essential_matrix/results_testing_superansac_{args.features}.csv"

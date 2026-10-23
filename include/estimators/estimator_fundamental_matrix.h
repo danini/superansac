@@ -99,7 +99,7 @@ namespace superansac
 				const size_t *kSample_, // The sample usd for the estimation
 				std::vector<models::Model>* models_) const override // The estimated model parameters
 			{
-				static const size_t kSampleSize = sampleSize();
+				const size_t kSampleSize = sampleSize();
 
 				// Estimate the model parameters by the minimal solver
 				minimalSolver->estimateModel(kData_, // The data points

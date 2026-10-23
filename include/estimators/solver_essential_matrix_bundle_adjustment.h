@@ -173,13 +173,36 @@ namespace superansac
 					}
 				}
 				
-				// Estimating the essential matrix using the five-point algorithm if no model is provided
-				if (models_.size() == 0)
+				// Estimating the essential matrix using the five-point and/or weighted eight-point
+				// algorithms if no model is provided
 				{
 					// Initializing the five-point solver
 					EssentialMatrixFivePointNisterSolver fivePointSolver;
-					// Estimating the essential matrix
-					fivePointSolver.estimateModel(kData_, kSample_, kSampleNumber_, models_);
+					std::vector<models::Model> fivePtModels;
+					if (fivePointSolver.estimateModel(kData_, kSample_, kSampleNumber_, fivePtModels, kWeights_))
+					{
+						for (auto &m : fivePtModels)
+							models_.push_back(std::move(m));
+					}
+
+					if (kSampleNumber_ >= 8)
+					{
+						FundamentalMatrixEightPointSolver eightPointSolver;
+						std::vector<models::Model> eightPtModels;
+						if (eightPointSolver.estimateModel(kData_, kSample_, kSampleNumber_, eightPtModels, kWeights_) && !eightPtModels.empty())
+						{
+							Eigen::Matrix3d E8 = eightPtModels[0].getData().block<3, 3>(0, 0);
+							Eigen::JacobiSVD<Eigen::Matrix3d> svd(E8, Eigen::ComputeFullU | Eigen::ComputeFullV);
+							Eigen::Matrix3d U = svd.matrixU();
+							Eigen::Matrix3d V = svd.matrixV();
+							if (U.determinant() < 0) U.col(2) = -U.col(2);
+							if (V.determinant() < 0) V.col(2) = -V.col(2);
+							Eigen::Vector3d s(1.0, 1.0, 0.0);
+							models::Model m8;
+							m8.getMutableData() = U * s.asDiagonal() * V.transpose();
+							models_.push_back(m8);
+						}
+					}
 
 					// If the estimation failed, return false
 					if (models_.size() == 0)
@@ -192,20 +215,19 @@ namespace superansac
 				if (kSample_ != nullptr) 
 				{
 					tmpOptions.loss_scale = 0.5 * options.loss_scale;
-					tmpOptions.max_iterations = 100;
+					tmpOptions.max_iterations = 50;
 					tmpOptions.loss_type = poselib::BundleOptions::LossType::CAUCHY;
 				}
+
+				poselib::BundleOptions tightOptions = tmpOptions;
+				tightOptions.loss_scale = 0.25 * options.loss_scale;
+				tightOptions.max_iterations = 25;
 				
 				// Build the (normalized) bearing vectors used to disambiguate the
-				// four essential-matrix decompositions by cheirality. The sample is
-				// score-sorted (PROSAC), so the first points are the highest
-				// confidence. Using several points and a robust majority VOTE --
-				// instead of the previous single-point all-or-nothing filter --
-				// reliably selects the correct pose without being defeated by one
-				// bad correspondence (the old all-AND filter degraded as the point
-				// count grew, since a single outlier rejected the true pose).
+				// four essential-matrix decompositions by cheirality. Use up to 64
+				// sample points for reliable majority voting.
 				const size_t kPointNumberForCheck = std::max<size_t>(1,
-					std::min(pointNumberForCheiralityCheck, kSampleNumber_));
+					std::min<size_t>(std::max<size_t>(pointNumberForCheiralityCheck, 64), kSampleNumber_));
 				static thread_local std::vector<Eigen::Vector3d> x1CheiralityCheck, x2CheiralityCheck;
 				x1CheiralityCheck.resize(kPointNumberForCheck);
 				x2CheiralityCheck.resize(kPointNumberForCheck);
@@ -221,66 +243,106 @@ namespace superansac
 				// Empty filter so motion_from_essential returns all four candidate poses.
 				static const std::vector<Eigen::Vector3d> kEmptyCheck;
 
-				// The selected pose: prefer more cheirality votes, then lower BA cost.
-				size_t bestVotes = 0;
+				struct CandidatePose
+				{
+					poselib::CameraPose pose;
+					double weightedVotes;
+					double initialCost;
+				};
+				std::vector<CandidatePose> candidates;
+				candidates.reserve(models_.size() * 2);
+
+				const double scaleSq = std::max(1e-12, tmpOptions.loss_scale * tmpOptions.loss_scale);
+
+				// First pass: evaluate all candidate models and their 4 pose decompositions cheaply
+				// using weighted cheirality + Sampson residual cost, so we only run expensive LM
+				// bundle adjustment on the top candidate poses across all models.
+				for (auto& model : models_)
+				{
+					const Eigen::Matrix3d E = model.getData().block<3, 3>(0, 0);
+					if (!E.allFinite())
+						continue;
+
+					double sampsonCost = 0.0;
+					for (size_t i = 0; i < kPointNumberForCheck; ++i)
+					{
+						const Eigen::Vector3d p1(x1[i](0), x1[i](1), 1.0);
+						const Eigen::Vector3d p2(x2[i](0), x2[i](1), 1.0);
+						const Eigen::Vector3d Ep1 = E * p1;
+						const Eigen::Vector3d Etp2 = E.transpose() * p2;
+						const double r = p2.dot(Ep1);
+						const double denom = Ep1(0) * Ep1(0) + Ep1(1) * Ep1(1) + Etp2(0) * Etp2(0) + Etp2(1) * Etp2(1) + 1e-15;
+						const double sqErr = (r * r) / denom;
+						const double w = weights.empty() ? 1.0 : weights[i];
+						sampsonCost += w * std::log(1.0 + sqErr / scaleSq);
+					}
+
+					poselib::CameraPoseVector poses;
+					poselib::motion_from_essential(
+						E,
+						kEmptyCheck, kEmptyCheck,
+						&poses);
+
+					double maxModelVotes = 0.0;
+					int bestPoseIdx = -1;
+					for (size_t pIdx = 0; pIdx < poses.size(); ++pIdx)
+					{
+						double votes = 0.0;
+						for (size_t i = 0; i < kPointNumberForCheck; ++i)
+						{
+							if (poselib::check_cheirality(poses[pIdx], x1CheiralityCheck[i], x2CheiralityCheck[i]))
+							{
+								votes += (weights.empty() ? 1.0 : weights[i]);
+							}
+						}
+						if (votes > maxModelVotes)
+						{
+							maxModelVotes = votes;
+							bestPoseIdx = static_cast<int>(pIdx);
+						}
+					}
+
+					if (bestPoseIdx >= 0 && maxModelVotes > 0.0)
+					{
+						candidates.push_back({poses[bestPoseIdx], maxModelVotes, sampsonCost});
+					}
+				}
+
+				if (candidates.empty())
+					return false;
+
+				std::sort(candidates.begin(), candidates.end(), [](const CandidatePose &a, const CandidatePose &b) {
+					if (std::abs(a.weightedVotes - b.weightedVotes) > 1e-6)
+						return a.weightedVotes > b.weightedVotes;
+					return a.initialCost < b.initialCost;
+				});
+
+				const size_t kMaxRefinements = std::min<size_t>(2, candidates.size());
 				double bestCost = std::numeric_limits<double>::max();
 				poselib::CameraPose bestPose;
 				bool haveBestPose = false;
 
-				// Iterating through the potential models.
-				for (auto& model : models_)
+				for (size_t cIdx = 0; cIdx < kMaxRefinements; ++cIdx)
 				{
-					// Decompose the essential matrix to all four candidate poses
-					poselib::CameraPoseVector poses;
-					poselib::motion_from_essential(
-						model.getData().block<3, 3>(0, 0), // The essential matrix
-						kEmptyCheck, kEmptyCheck, // No internal filtering; vote below
-						&poses); // The decomposed poses
+					poselib::CameraPose pose = candidates[cIdx].pose;
+					poselib::BundleStats stats = poselib::refine_relpose(
+						x1,
+						x2,
+						&pose,
+						tmpOptions,
+						weights);
+					stats = poselib::refine_relpose(
+						x1,
+						x2,
+						&pose,
+						tightOptions,
+						weights);
 
-					// Robust cheirality vote: count the points in front of both
-					// cameras for each candidate pose.
-					size_t maxVotes = 0;
-					for (const auto& pose : poses)
+					if (!haveBestPose || stats.cost < bestCost)
 					{
-						size_t votes = 0;
-						for (size_t i = 0; i < kPointNumberForCheck; ++i)
-							if (poselib::check_cheirality(pose, x1CheiralityCheck[i], x2CheiralityCheck[i]))
-								++votes;
-						if (votes > maxVotes)
-							maxVotes = votes;
-					}
-
-					// Refine the pose(s) with the most cheirality votes and keep the
-					// best by (votes, then BA cost). Refining only the top-voted
-					// pose(s) is typically a single refinement -- fewer than before.
-					for (auto& pose : poses)
-					{
-						size_t votes = 0;
-						for (size_t i = 0; i < kPointNumberForCheck; ++i)
-							if (poselib::check_cheirality(pose, x1CheiralityCheck[i], x2CheiralityCheck[i]))
-								++votes;
-						if (votes < maxVotes)
-							continue;
-
-						// Perform the bundle adjustment.
-						// NOTE: the returned BundleStats must be captured; previously the
-						// return value was discarded and the uninitialized local `stats.cost`
-						// was read, making the best-pose selection undefined behavior.
-						poselib::BundleStats stats = poselib::refine_relpose(
-							x1,
-							x2,
-							&pose,
-							tmpOptions,
-							weights);
-
-						if (!haveBestPose || votes > bestVotes ||
-							(votes == bestVotes && stats.cost < bestCost))
-						{
-							bestVotes = votes;
-							bestCost = stats.cost;
-							bestPose = pose;
-							haveBestPose = true;
-						}
+						bestCost = stats.cost;
+						bestPose = pose;
+						haveBestPose = true;
 					}
 				}
 				

@@ -294,7 +294,7 @@ namespace solver
 				const size_t idx = (kSample_ ? kSample_[i] : i);
 				const double x0 = kData_(idx, 0), y0 = kData_(idx, 1),
 				             x1 = kData_(idx, 2), y1 = kData_(idx, 3);
-				const double w  = kWeights_[idx];
+				const double w  = kWeights_[i];
 				if (kSampleNumber_ == 5) fill_row_w(coefficients_min, rowIdx, x0, y0, x1, y1, w);
 				else                      fill_row_w(coefficients_dyn, rowIdx, x0, y0, x1, y1, w);
 				++rowIdx;
@@ -308,7 +308,8 @@ namespace solver
 			if (lu.dimensionOfKernel() != 4) return false;
 			nullSpace = lu.kernel().transpose();
 		} else {
-			const Eigen::JacobiSVD<RowMatX9> svd(coefficients_dyn, Eigen::ComputeFullV);
+			const Eigen::Matrix<double, 9, 9> normalMatrix = coefficients_dyn.transpose() * coefficients_dyn;
+			const Eigen::JacobiSVD<Eigen::Matrix<double, 9, 9>> svd(normalMatrix, Eigen::ComputeFullV);
 			nullSpace = svd.matrixV().rightCols<4>().transpose();
 		}
 
@@ -528,7 +529,7 @@ namespace solver
 		Eigen::Matrix<double, 3, 2> B;
 		Eigen::Vector3d b;
 		Eigen::Vector2d xz;
-		Eigen::Matrix3d E;
+		Eigen::Matrix<double, 3, 3, Eigen::RowMajor> E;
 		Eigen::Map<Eigen::Matrix<double, 1, 9>> e(E.data());
 
 		models_.clear();

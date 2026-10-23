@@ -4,8 +4,8 @@ find_package(Eigen3 REQUIRED)
 # Find Boost
 find_package(Boost REQUIRED COMPONENTS system)
 
-# Find OpenCV
-find_package(OpenCV REQUIRED)
+# Find OpenCV (optional)
+find_package(OpenCV QUIET)
 
 # Recursively find all .cc and .cpp files
 file(GLOB_RECURSE SOURCE_FILES
@@ -33,15 +33,19 @@ target_include_directories(SupeRANSAC PUBLIC
   ${PROJECT_SOURCE_DIR}/include
   ${EIGEN3_INCLUDE_DIR}
   ${Boost_INCLUDE_DIRS}
-  ${OpenCV_INCLUDE_DIRS}
 )
 
 # Link deps
 target_link_libraries(SupeRANSAC
   Eigen3::Eigen
   Boost::system
-  ${OpenCV_LIBS}
 )
+
+if(OpenCV_FOUND)
+  target_compile_definitions(SupeRANSAC PUBLIC SUPERANSAC_HAS_OPENCV)
+  target_include_directories(SupeRANSAC PUBLIC ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(SupeRANSAC ${OpenCV_LIBS})
+endif()
 
 # Install next to the Python module
 install(TARGETS SupeRANSAC

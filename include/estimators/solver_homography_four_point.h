@@ -164,7 +164,7 @@ namespace superansac
 							&x2 = kData_(idx, 2),
 							&y2 = kData_(idx, 3);
 
-						const double weight = kWeights_[idx];
+						const double weight = kWeights_[i];
 						const double
 							wx1 = weight * x1,
 							wy1 = weight * y1,
@@ -226,15 +226,12 @@ namespace superansac
                 const double *kWeights_) const // The weight for each point
 			{
 				constexpr size_t kEquationNumber = 2;
-				const size_t columns = kData_.cols();
 				const size_t kRowNumber = kEquationNumber * kSampleNumber_;
 				// Thread-local scratch (this solver runs in the local-optimization
 				// inner loops); fully overwritten below.
 				static thread_local DataMatrix coefficients;
-				static thread_local DataMatrix inhomogeneous;
-				coefficients.resize(kRowNumber, 8);
-				inhomogeneous.resize(kRowNumber, 1);
-    			coefficients.setZero(); // Initialize the matrix with zeros
+				coefficients.resize(kRowNumber, 9);
+				coefficients.setZero();
 
 				size_t rowIdx = 0;
 				double weight = 1.0;
@@ -251,7 +248,7 @@ namespace superansac
 						& y2 = kData_(idx, 3);
 
 					if (kWeights_ != nullptr)
-						weight = kWeights_[idx];
+						weight = kWeights_[i];
 
 					const double
 						minusWeightTimesX1 = -weight * x1,
@@ -264,7 +261,7 @@ namespace superansac
 					coefficients(rowIdx, 2) = -weight;
 					coefficients(rowIdx, 6) = weightTimesX2 * x1;
 					coefficients(rowIdx, 7) = weightTimesX2 * y1;
-					inhomogeneous(rowIdx) = -weightTimesX2;
+					coefficients(rowIdx, 8) = weightTimesX2;
 					++rowIdx;
 
 					coefficients(rowIdx, 3) = minusWeightTimesX1;
@@ -272,20 +269,31 @@ namespace superansac
 					coefficients(rowIdx, 5) = -weight;
 					coefficients(rowIdx, 6) = weightTimesY2 * x1;
 					coefficients(rowIdx, 7) = weightTimesY2 * y1;
-					inhomogeneous(rowIdx) = -weightTimesY2;
+					coefficients(rowIdx, 8) = weightTimesY2;
 					++rowIdx;
 				}
 
-				// Applying SVD to solve the problem
-				Eigen::Matrix<double, 8, 1> 
-					h = coefficients.colPivHouseholderQr().solve(inhomogeneous);
+				// Homogeneous Total Least Squares (SVD of 9x9 normal matrix) avoids the
+				// Errors-in-Variables attenuation bias of fixing h(8) = 1.0 on foreshortened views.
+				const Eigen::Matrix<double, 9, 9> kNormalMatrix =
+					coefficients.transpose() * coefficients;
+				Eigen::JacobiSVD<Eigen::Matrix<double, 9, 9>> svd(
+					kNormalMatrix,
+					Eigen::ComputeFullV);
+				const Eigen::Matrix<double, 9, 1> h =
+					svd.matrixV().rightCols<1>();
+
+				if (!h.allFinite())
+					return false;
 
 				models::Model model;
 				auto &data = model.getMutableData();
 				data.resize(3, 3);
 				data << h(0), h(1), h(2),
 					h(3), h(4), h(5),
-					h(6), h(7), 1.0;
+					h(6), h(7), h(8);
+				if (std::abs(data(2, 2)) > 1e-12)
+					data /= data(2, 2);
 				models_.emplace_back(model);
 				return true;
 			}

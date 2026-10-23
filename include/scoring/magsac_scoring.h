@@ -195,7 +195,7 @@ class MAGSACScoring : public AbstractScoring
             gammaTable_ = interleavedGammaLookupTable(dofIndex_); // Interleaved (lower, upper) row
             k = getK(degreesOfFreedom); //kEstimator_->getK(); // The 0.99 quantile of the distribution
             //std::cout << degreesOfFreedom << std::endl;
-            Cn = 1.0 / std::pow(2, degreesOfFreedom / 2.0) * boost::math::tgamma(degreesOfFreedom / 2.0); // Normalization constant
+            Cn = 1.0 / (std::pow(2.0, degreesOfFreedom / 2.0) * boost::math::tgamma(degreesOfFreedom / 2.0)); // Normalization constant
             squaredSigmaMax = threshold * threshold; // The squared threshold
             squaredSigmaMaxPerTwo = squaredSigmaMax / 2.0; // The squared threshold divided by two
             squaredSigmaMaxPerFour = squaredSigmaMaxPerTwo / 2.0; // The squared threshold divided by four

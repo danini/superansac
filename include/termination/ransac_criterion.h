@@ -71,13 +71,38 @@ class RANSACCriterion : public AbstractCriterion
             size_t &iterationNumber_, /// Number of iterations
             bool &immediateTermination_) // Immediate termination flag
         {
-            const double q = pow(static_cast<double>(kScore_.getInlierNumber()) / kData_.rows(), kSampleSize_);
-            const double log2 = log(1 - q);
-
-            if (abs(log2) < std::numeric_limits<double>::epsilon())
+            const double inlierRatio = static_cast<double>(kScore_.getInlierNumber()) /
+                static_cast<double>(std::max<Eigen::Index>(1, kData_.rows()));
+            if (inlierRatio <= 0.0)
+            {
                 iterationNumber_ = std::numeric_limits<size_t>::max();
+                return;
+            }
+            if (inlierRatio >= 1.0 - 1e-9)
+            {
+                iterationNumber_ = 1;
+                return;
+            }
+            const double q = std::pow(inlierRatio, static_cast<double>(kSampleSize_));
+            if (q <= 1e-12)
+            {
+                iterationNumber_ = std::numeric_limits<size_t>::max();
+                return;
+            }
+            const double log2 = std::log(1.0 - q);
+            if (log2 >= -std::numeric_limits<double>::epsilon())
+            {
+                iterationNumber_ = std::numeric_limits<size_t>::max();
+                return;
+            }
 
             const double iter = logConfidence / log2;
+            if (!std::isfinite(iter) || iter < 0.0 ||
+                iter >= static_cast<double>(std::numeric_limits<size_t>::max() - 1))
+            {
+                iterationNumber_ = std::numeric_limits<size_t>::max();
+                return;
+            }
             iterationNumber_ = static_cast<size_t>(iter) + 1;
         }
        

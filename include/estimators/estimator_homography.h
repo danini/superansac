@@ -104,10 +104,30 @@ namespace superansac
 				const size_t *kSample_, // The sample usd for the estimation
 				std::vector<models::Model>* models_) const override // The estimated model parameters
 			{
-				return minimalSolver->estimateModel(kData_, // The data points
-					kSample_, // The sample used for the estimation
-					sampleSize(), // The size of a minimal sample
-					*models_); // The estimated model parameters
+				static thread_local DataMatrix normalizedPoints;
+				normalizedPoints.resize(sampleSize(), kData_.cols());
+				Eigen::Matrix3d normalizingTransformSource,
+					normalizingTransformDestination;
+
+				if (!normalizePoints(kData_,
+					kSample_,
+					sampleSize(),
+					normalizedPoints,
+					normalizingTransformSource,
+					normalizingTransformDestination))
+					return false;
+
+				if (!minimalSolver->estimateModel(normalizedPoints,
+					nullptr,
+					sampleSize(),
+					*models_))
+					return false;
+
+				const Eigen::Matrix3d kNormalizingTransformDestinationInverse =
+					normalizingTransformDestination.inverse();
+				for (auto &model : *models_)
+					model.setData(kNormalizingTransformDestinationInverse * model.getData() * normalizingTransformSource);
+				return true;
 			}
 
 			// Estimating the model from a non-minimal sample
@@ -139,6 +159,8 @@ namespace superansac
 					normalizingTransformDestination)) // The normalizing transformation in the second image
 					return false;
 				
+				const size_t kInitialModelCount = models_->size();
+
 				// The four point fundamental matrix fitting algorithm
 				if (!nonMinimalSolver->estimateModel(normalizedPoints,
 					nullptr,
@@ -147,10 +169,10 @@ namespace superansac
 					kWeights_))
 					return false;
 
-				// Denormalizing the estimated fundamental matrices
+				// Denormalizing the newly estimated homography matrices
 				const Eigen::Matrix3d kNormalizingTransformDestinationInverse = normalizingTransformDestination.inverse();
-				for (auto &model : *models_)
-					model.setData(kNormalizingTransformDestinationInverse * model.getData() * normalizingTransformSource);
+				for (size_t i = kInitialModelCount; i < models_->size(); ++i)
+					(*models_)[i].setData(kNormalizingTransformDestinationInverse * (*models_)[i].getData() * normalizingTransformSource);
 
 				// Nonlinear refinement: polish the (denormalized) DLT homography by
 				// minimizing the robust reprojection error in pixel space. The DLT
@@ -221,8 +243,11 @@ namespace superansac
 
 				// Compute intermediate terms
 				const double t3 = descriptor20 * x1 + descriptor21 * y1 + descriptor22;
-				const double t1 = (descriptor00 * x1 + descriptor01 * y1 + descriptor02) / t3;
-				const double t2 = (descriptor10 * x1 + descriptor11 * y1 + descriptor12) / t3;
+				if (std::abs(t3) < 1e-12)
+					return 1e18;
+				const double invT3 = 1.0 / t3;
+				const double t1 = (descriptor00 * x1 + descriptor01 * y1 + descriptor02) * invT3;
+				const double t2 = (descriptor10 * x1 + descriptor11 * y1 + descriptor12) * invT3;
 
 				// Compute differences
 				const double d1 = x2 - t1;
@@ -300,7 +325,7 @@ namespace superansac
 				for (size_t i = 0; i < kSampleNumber_; ++i)
 				{
 					// Get index of the current point
-					const size_t &idx = kSample_[i];
+					const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
 
 					// Add the coordinates to that of the mass points
 					massPointSrc[0] += kData_(idx, 0);
@@ -321,7 +346,7 @@ namespace superansac
 				for (size_t i = 0; i < kSampleNumber_; ++i)
 				{
 					// Get index of the current point
-					const size_t &idx = kSample_[i];
+					const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
 
 					const double &x1 = kData_(idx, 0);
 					const double &y1 = kData_(idx, 1);
@@ -339,6 +364,8 @@ namespace superansac
 
 				average_distance_src /= kSampleNumber_;
 				average_distance_dst /= kSampleNumber_;
+				if (average_distance_src < 1e-9 || average_distance_dst < 1e-9)
+					return false;
 
 				// Calculate the sqrt(2) / MeanDistance ratios
 				const double ratioSrc = M_SQRT2 / average_distance_src;
@@ -348,7 +375,7 @@ namespace superansac
 				for (size_t i = 0; i < kSampleNumber_; ++i)
 				{
 					// Get index of the current point
-					const size_t &idx = kSample_[i];
+					const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
 
 					const double &x1 = kData_(idx, 0);
 					const double &y1 = kData_(idx, 1);
@@ -360,8 +387,8 @@ namespace superansac
                     kNormalizedPoints_(i, 2) = (x2 - massPointDst[0]) * ratioDst;
                     kNormalizedPoints_(i, 3) = (y2 - massPointDst[1]) * ratioDst;
 
-					for (size_t i = 4; i < cols; ++i)
-						kNormalizedPoints_(idx, i) = kData_(idx, i);
+					for (size_t c = 4; c < static_cast<size_t>(cols); ++c)
+						kNormalizedPoints_(i, c) = kData_(idx, c);
 				}
 
 				// Creating the normalizing transformations
@@ -400,17 +427,18 @@ namespace superansac
 				const double kThreshold_,
 				bool& modelUpdated_) const override
 			{ 
-				// Calculate the determinant of the homography
-				const double kDeterminant =
-					abs(model_.getData().determinant());
+				const auto &H = model_.getData();
+				if (!H.allFinite())
+					return false;
 
-				// Check if the homography has a small determinant.
-				constexpr double kMinimumDeterminant = 1e-4;
-				constexpr double kMaximumDeterminant = 10000;
-				if (kDeterminant < kMinimumDeterminant)
+				const double fNorm = H.norm();
+				if (fNorm < 1e-12)
 					return false;
-				if (kDeterminant > kMaximumDeterminant)
+
+				const double kDeterminant = std::abs(H.determinant()) / (fNorm * fNorm * fNorm);
+				if (kDeterminant < 1e-13)
 					return false;
+
 				return true;
 			}
 

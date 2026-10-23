@@ -68,7 +68,7 @@ namespace superansac {
     // plane-and-parallax algorithm if degenerate.
     struct DegensacSettings
     {
-        bool enabled = false; // Off by default
+        bool enabled = true; // Enabled by default for F estimation
         double homographyThreshold = 2.0; // H-consistency threshold (pixels; scaled with the data normalization)
         size_t innerRansacIterations = 50; // Plane-and-parallax draws per degenerate event
     };
@@ -85,13 +85,13 @@ namespace superansac {
         double confidence = 0.99; // Confidence
         bool localOptimizationInsideTheLoop = false, // Whether to locally optimize models when you find a new best or later
             useSprt = true, // Whether to use SPRT test to speed up
-            fundamentalOrientationCheck = false, // Reject minimal F models violating the oriented epipolar constraint
-            fundamentalSymmetricValidation = false, // Validate new-best F models with the symmetric epipolar distance
+            fundamentalOrientationCheck = true, // Reject minimal F models violating the oriented epipolar constraint
+            fundamentalSymmetricValidation = true, // Validate new-best F models with the symmetric epipolar distance
             finalRefinementSchedule = false, // Use a shrinking-threshold schedule in the final refinement rounds
             finalPolishTopK = false, // Run the final optimizer on every top-K LO candidate before selecting the best
             finalRefinementWeighted = false; // Feed per-point confidences into the final-refinement bundle adjustment
         size_t essentialCheiralityPointNumber = 1; // Cheirality-vote points for E pose disambiguation (raise to ~25 for dense/RoMA matches; splg gains nothing as cv2.recoverPose redoes cheirality)
-        bool homographyBundleRefinement = true; // Nonlinear (LM) reprojection-error refinement of the non-minimal homography fit (H only)
+        bool homographyBundleRefinement = false; // Nonlinear (LM) reprojection-error refinement of the non-minimal homography fit (H only)
         size_t homographyBundleMaxIterations = 5; // LM iterations: early stopping regularizes (full convergence over-fits the plane) and stays within the runtime budget
         
         scoring::ScoringType scoring = 

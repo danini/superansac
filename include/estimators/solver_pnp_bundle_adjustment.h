@@ -204,10 +204,8 @@ namespace superansac
 					poselib::CameraPose pose(R, t);
 					
 					// Perform the bundle adjustment
-					poselib::BundleStats stats;
-
-					//if (kSample_ != nullptr) 
-					poselib::bundle_adjust(points2d, points3d, &pose, tmpOptions);
+					poselib::BundleStats stats =
+						poselib::bundle_adjust(points2d, points3d, &pose, tmpOptions);
 					/*else
 					{
 						poselib::Camera dummyCamera;

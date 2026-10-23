@@ -159,6 +159,8 @@ namespace superansac
 				// Single sqrt instead of N sqrts - major optimization
 				const double average_distance_src = std::sqrt(sum_squared_dist_src / kSampleNumber_);
 				const double average_distance_dst = std::sqrt(sum_squared_dist_dst / kSampleNumber_);
+				if (average_distance_src < 1e-9 || average_distance_dst < 1e-9)
+					return false;
 
 				// Calculate the sqrt(2) / MeanDistance ratios
 				const double ratioSrc = M_SQRT2 / average_distance_src;
@@ -181,8 +183,8 @@ namespace superansac
                     kNormalizedPoints_(i, 2) = (x2 - massPointDst[0]) * ratioDst;
                     kNormalizedPoints_(i, 3) = (y2 - massPointDst[1]) * ratioDst;
 
-					for (size_t i = 4; i < cols; ++i)
-						kNormalizedPoints_(idx, i) = kData_(idx, i);
+					for (size_t c = 4; c < static_cast<size_t>(cols); ++c)
+						kNormalizedPoints_(i, c) = kData_(idx, c);
 				}
 
 				// Creating the normalizing transformations
@@ -304,11 +306,22 @@ namespace superansac
 					kNullSpace(3), kNullSpace(4), kNullSpace(5),
 					kNullSpace(6), kNullSpace(7), kNullSpace(8);
 
+				// Enforce the rank-2 singularity constraint (det(F) = 0) in normalized space
+				Eigen::JacobiSVD<Eigen::Matrix3d> fSvd(
+					normalizedModel,
+					Eigen::ComputeFullU | Eigen::ComputeFullV);
+				Eigen::Vector3d singularValues = fSvd.singularValues();
+				singularValues(2) = 0.0;
+				normalizedModel = fSvd.matrixU() * singularValues.asDiagonal() * fSvd.matrixV().transpose();
+
 				models::Model model;
 				auto &modelData = model.getMutableData();
 				
 				// Transform the estimated fundamental matrix back to the not normalized space
 				modelData = normalizingTransformDestination.transpose() * normalizedModel * normalizingTransformSource;
+				const double fNorm = modelData.norm();
+				if (fNorm > 1e-12)
+					modelData /= fNorm;
 
 				models_.emplace_back(model);
 				return true;
