@@ -214,6 +214,11 @@ def run(matches, scores, K1, K2, R_gt, t_gt, args):
     if F_est is None:
         return (np.inf, np.inf), 0, elapsed_time
 
+    inliers = np.asarray(inliers).ravel().astype(bool)
+    inlier_number = int(inliers.sum())
+    if inlier_number < 5 or F_est.shape != (3, 3):
+        return (180.0, 180.0), inlier_number, elapsed_time
+
     # Convert the fundamental matrix to essential matrix if the estimation is successful
     E_est = K2.T @ F_est @ K1
 
@@ -222,10 +227,10 @@ def run(matches, scores, K1, K2, R_gt, t_gt, args):
     norm_matches[:, 2:] = normalize_keypoints(matches[:, 2:], K2)
 
     # Decompose the essential matrix to get the relative pose
-    _, R, t, _ = cv2.recoverPose(E_est, norm_matches[inliers, :2], norm_matches[inliers, 2:])
-    
-    # Count the inliers
-    inlier_number = inliers.sum()
+    _, R, t, _ = cv2.recoverPose(
+        E_est,
+        norm_matches[inliers, :2].reshape(-1, 1, 2),
+        norm_matches[inliers, 2:].reshape(-1, 1, 2))
     
     return evaluate_R_t(R_gt, t_gt, R, t), inlier_number, elapsed_time
 

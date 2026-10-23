@@ -147,16 +147,16 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
 if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running on fundamental matrix estimation with SupeRANSAC")
-    parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA, LoMa.", choices=["splg", "RoMA", "LoMa"], default="splg")
+    parser.add_argument('--features', type=str, help="Choose from: splg, LightGlue, RoMA, LoMa.", choices=["splg", "LightGlue", "RoMA", "LoMa"], default="splg")
     parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2500)
-    parser.add_argument("--confidence", type=float, default=0.99)
+    parser.add_argument("--confidence", type=float, default=0.999999)
     parser.add_argument("--inlier_threshold", type=float, default=1.5)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
     parser.add_argument("--maximum_iterations", type=int, default=5000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler", "NAPSAC"], default="PROSAC")
     parser.add_argument("--scoring", type=str, help="Choose from: RANSAC, MSAC, MAGSAC, ACRANSAC.", choices=["RANSAC", "MSAC", "MAGSAC", "ACRANSAC"], default="MAGSAC")
-    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "CrossValidation", "Nothing"], default="NestedRANSAC")
-    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "CrossValidation", "Nothing"], default="IRLS")
+    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, GCRANSAC, IteratedLMEDS, CrossValidation, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "CrossValidation", "Nothing"], default="GCRANSAC")
+    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, GCRANSAC, IteratedLMEDS, CrossValidation, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "CrossValidation", "Nothing"], default="LSQ")
     parser.add_argument("--spatial_coherence_weight", type=float, default=0.1)
     parser.add_argument("--neighborhood_size", type=float, default=20.0)
     parser.add_argument("--neighborhood_grid_density", type=float, default=4.0)
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     
     print(f"Testing SupeRANSAC")
 
-    if args.features == "splg":
+    if args.features in ("splg", "LightGlue"):
         print("Initialize SP+LG detector")
         detector = SuperPoint(max_num_keypoints=2048).eval().to(args.device)  # load the extractor
         matcher = LightGlue(features='superpoint').eval().to(args.device)  # load the matcher

@@ -6,16 +6,15 @@ import time
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from lightglue import LightGlue, SuperPoint
-from utils import detect_and_load_data
 from romatch import roma_outdoor
-from errors import homography_pose_error
 
 # Add the parent directory (../) to the Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
-from evaluation import pose_auc
+from utils import detect_and_load_data
+from evaluation import pose_auc, homography_pose_error
 
 from datasets.scannet import ScanNet
 from datasets.lamar import Lamar
@@ -33,8 +32,8 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
     scores = scores[indices]
 
     # Return if there are fewer than 4 correspondences
-    if matches.shape[0] < 8:
-        return (np.inf, np.inf), 0, 0
+    if matches.shape[0] < 4:
+        return (180.0, 180.0), 0, 0
     
     # Set up the configuration
     config = pysuperansac.RANSACSettings()
@@ -59,10 +58,6 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
         config.scoring = pysuperansac.ScoringType.MAGSAC
     elif args.scoring == "ACRANSAC":
         config.scoring = pysuperansac.ScoringType.ACRANSAC
-    elif args.scoring == "GaU":
-        config.scoring = pysuperansac.ScoringType.GAU
-    elif args.scoring == "ML":
-        config.scoring = pysuperansac.ScoringType.ML
         
     if args.lo == "LSQ":
         config.local_optimization = pysuperansac.LocalOptimizationType.LSQ
@@ -126,16 +121,16 @@ def run(matches, scores, K1, K2, R_gt, t_gt, image_size1, image_size2, args):
 if __name__ == "__main__":
     # Passing the arguments
     parser = argparse.ArgumentParser(description="Running homography estimation with SupeRANSAC")
-    parser.add_argument('--features', type=str, help="Choose from: SP+LG, RoMA, LoMa.", choices=["splg", "RoMA", "LoMa"], default="splg")
+    parser.add_argument('--features', type=str, help="Choose from: splg, LightGlue, RoMA, LoMa.", choices=["splg", "LightGlue", "RoMA", "LoMa"], default="splg")
     parser.add_argument('--batch_size', type=int, help="Batch size for multi-CPU processing", default=2000)
-    parser.add_argument("--confidence", type=float, default=0.99)
+    parser.add_argument("--confidence", type=float, default=0.999999)
     parser.add_argument("--inlier_threshold", type=float, default=4.0)
     parser.add_argument("--minimum_iterations", type=int, default=1000)
     parser.add_argument("--maximum_iterations", type=int, default=5000)
     parser.add_argument("--sampler", type=str, help="Choose from: Uniform, PROSAC, PNAPSAC, Importance, ARSampler.", choices=["Uniform", "PROSAC", "PNAPSAC", "Importance", "ARSampler"], default="PROSAC")
     parser.add_argument("--scoring", type=str, help="Choose from: RANSAC, MSAC, MAGSAC, ACRANSAC.", choices=["RANSAC", "MSAC", "MAGSAC", "ACRANSAC"], default="MAGSAC")
-    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="NestedRANSAC")
-    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="IRLS")
+    parser.add_argument("--lo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, GCRANSAC, IteratedLMEDS, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="GCRANSAC")
+    parser.add_argument("--fo", type=str, help="Choose from: LSQ, IRLS, NestedRANSAC, GCRANSAC, IteratedLMEDS, Nothing.", choices=["LSQ", "IRLS", "NestedRANSAC", "GCRANSAC", "IteratedLMEDS", "Nothing"], default="LSQ")
     parser.add_argument("--spatial_coherence_weight", type=float, default=0.1)
     parser.add_argument("--neighborhood_size", type=float, default=20.0)
     parser.add_argument("--neighborhood_grid_density", type=float, default=4.0)
@@ -148,7 +143,7 @@ if __name__ == "__main__":
     
     print(f"Testing SupeRANSAC")
 
-    if args.features == "splg":
+    if args.features in ("splg", "LightGlue"):
         print("Initialize SP+LG detector")
         detector = SuperPoint(max_num_keypoints=2048).eval().to(args.device)  # load the extractor
         matcher = LightGlue(features='superpoint').eval().to(args.device)  # load the matcher
@@ -159,8 +154,6 @@ if __name__ == "__main__":
         print("Initialize RoMA detector")
         detector = roma_outdoor(device = args.device)
         matcher = None
-        if args.lo == "GCRANSAC":
-            args.lo = "NestedRANSAC"
         if args.inlier_threshold <= 0:
             args.inlier_threshold = 2.0
             print(f"Setting the threshold to {args.inlier_threshold} px as it works best for H estimation with RoMA features.")

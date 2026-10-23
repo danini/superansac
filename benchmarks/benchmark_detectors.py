@@ -1,4 +1,4 @@
-"""Multicore (40-worker) multi-detector benchmark for SupeRANSAC vs. Original SupeRANSAC vs. PoseLib.
+"""Multicore (40-worker) multi-detector benchmark for SupeRANSAC vs. PoseLib (Section 3 of README).
 
 Evaluates 7 feature detectors/matchers across real image pairs for Fundamental (F), Essential (E), and Homography (H):
 1. LoMa (Nordstrom & Edstedt et al., ECCV 2026 Oral - DaD + DeDoDe-G + LoMa-B)
@@ -32,10 +32,15 @@ import poselib
 cv2.setNumThreads(1)
 
 ROOT_DIR = "/usr/local/google/home/dbarath/ransac"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MAGSAC_DATA = os.path.join(ROOT_DIR, "magsac_data", "data")
 EXAMPLES_DIR = os.path.join(ROOT_DIR, "superansac", "examples")
-CACHE_PATH = os.path.join(ROOT_DIR, "benchmark", "detector_matches_cache.pkl")
-OUT_JSON_PATH = os.path.join(ROOT_DIR, "benchmark", "detector_benchmark_results.json")
+CACHE_PATH = (
+    os.path.join(SCRIPT_DIR, "detector_matches_cache.pkl")
+    if os.path.exists(os.path.join(SCRIPT_DIR, "detector_matches_cache.pkl"))
+    else os.path.join(ROOT_DIR, "benchmark", "detector_matches_cache.pkl")
+)
+OUT_JSON_PATH = os.path.join(SCRIPT_DIR, "detector_benchmark_results.json")
 
 EXCLUDED_F_SCENES = {
     "Brussels", "Dresden", "Leuven1", "Leuven2", "dino1", "dino2", "temple1", "temple2", "neem"
@@ -492,7 +497,7 @@ def build_real_scenes():
 
 
 def expand_regime_matches(cache, scenes_f, scenes_e, scenes_h):
-    """Populate cluttered and multi-plane regime entries from cached detector matches."""
+    """Populate cluttered and multi-plane regime entries strictly from each detector's cached matches."""
     for det in DETECTORS:
         rng_f = np.random.default_rng(1001)
         for s in scenes_f:
@@ -503,45 +508,43 @@ def expand_regime_matches(cache, scenes_f, scenes_e, scenes_h):
                 continue
             corrs, scores = cache[base_key][det]
             h1, w1, h2, w2 = s["image_sizes"]
-            val_pts = s["val_pts"]
             F_gt = s["F_gt"]
             r_det = sampson_errors(corrs, F_gt) if len(corrs) >= 8 else np.array([])
-            det_inl = corrs[r_det < 2.0] if len(corrs) >= 8 else np.empty((0, 4))
+            det_inl = corrs[r_det < 2.2] if len(corrs) >= 8 else np.empty((0, 4))
             det_out = corrs[r_det >= 3.5] if len(corrs) >= 8 else np.empty((0, 4))
 
-            target_inl = min(max(24, len(det_inl) // 3), 90)
-            n_val = min(len(val_pts), 20)
-            if len(det_inl) >= target_inl:
-                use_inl = np.vstack([det_inl[:target_inl], val_pts[:n_val]])
-            elif len(det_inl) >= 8:
-                use_inl = np.vstack([det_inl, val_pts[:min(len(val_pts), max(20, 34 - len(det_inl)))]])
+            target_inl = min(max(36, len(det_inl) // 2), 110)
+            if len(det_inl) > target_inl:
+                idx_sub = np.linspace(0, len(det_inl) - 1, target_inl, dtype=int)
+                use_inl = det_inl[idx_sub]
             else:
-                use_inl = val_pts[:min(len(val_pts), 28)]
+                use_inl = det_inl
 
             if regime == "ord1":
-                n_bg = max(140, int(1.6 * len(use_inl)))
+                n_bg = max(140, int(1.6 * max(len(use_inl), 20)))
                 extra = np.column_stack([
                     rng_f.uniform(0, w1, n_bg),
                     rng_f.uniform(0, h1, n_bg),
                     rng_f.uniform(0, w2, n_bg),
                     rng_f.uniform(0, h2, n_bg),
                 ])
-                c_out = np.vstack([use_inl, det_out[:80] if len(det_out) > 0 else extra[:40], extra])
+                parts_f = [x for x in (use_inl, det_out[:80] if len(det_out) > 0 else extra[:40], extra) if len(x) > 0]
+                c_out = np.vstack(parts_f)
                 sc_out = np.zeros(len(c_out), dtype=np.float64)
                 sc_out[:len(use_inl)] = rng_f.beta(2.1, 1.9, size=len(use_inl))
                 sc_out[len(use_inl):] = rng_f.beta(1.6, 2.2, size=len(c_out) - len(use_inl))
                 ord_i = np.argsort(-sc_out)
                 c_out, sc_out = c_out[ord_i], sc_out[ord_i]
             else:
-                use_inl2 = use_inl[:min(len(use_inl), 75)]
-                n_extra2 = max(180, int(2.5 * len(use_inl2)))
+                use_inl2 = use_inl[:min(len(use_inl), 85)]
+                n_extra2 = max(180, int(2.5 * max(len(use_inl2), 20)))
                 extra2 = np.column_stack([
                     rng_f.uniform(0, w1, n_extra2),
                     rng_f.uniform(0, h1, n_extra2),
                     rng_f.uniform(0, w2, n_extra2),
                     rng_f.uniform(0, h2, n_extra2),
                 ])
-                c_out = np.vstack([use_inl2, extra2])
+                c_out = np.vstack([use_inl2, extra2]) if len(use_inl2) > 0 else extra2
                 c_out = c_out[rng_f.permutation(len(c_out))]
                 sc_out = np.linspace(1.0, 0.01, len(c_out))
 
@@ -559,7 +562,6 @@ def expand_regime_matches(cache, scenes_f, scenes_e, scenes_h):
             corrs, scores = cache[base_key][det]
             h1, w1, h2, w2 = s["image_sizes"]
             H_gt = s["H_gt"]
-            val_pts = s["val_pts"]
             if len(corrs) >= 4:
                 p1_h = np.hstack([corrs[:, :2], np.ones((len(corrs), 1))])
                 p2_h = p1_h @ H_gt.T
@@ -576,25 +578,23 @@ def expand_regime_matches(cache, scenes_f, scenes_e, scenes_h):
                 if len(det_inl) >= target_h:
                     sub_inl = det_inl[rng_h.choice(len(det_inl), target_h, replace=False)]
                 else:
-                    sub_inl = det_inl if len(det_inl) >= 8 else val_pts[:16]
-                n_extra = max(140, len(sub_inl) * 9)
+                    sub_inl = det_inl
+                n_extra = max(140, max(len(sub_inl), 12) * 9)
                 extra = np.column_stack([
                     rng_h.uniform(0, w1, n_extra),
                     rng_h.uniform(0, h1, n_extra),
                     rng_h.uniform(0, w2, n_extra),
                     rng_h.uniform(0, h2, n_extra),
                 ])
-                c_out = np.vstack([sub_inl, extra])
+                c_out = np.vstack([sub_inl, extra]) if len(sub_inl) > 0 else extra
                 c_out = c_out[rng_h.permutation(len(c_out))]
                 sc_out = np.linspace(1.0, 0.01, len(c_out))
             else:
                 target_pl = min(max(20, len(det_inl) // 6), 36)
                 if len(det_inl) >= target_pl:
                     sub_inl = det_inl[rng_h.choice(len(det_inl), target_pl, replace=False)]
-                elif len(det_inl) >= 10:
-                    sub_inl = det_inl
                 else:
-                    sub_inl = val_pts[:20]
+                    sub_inl = det_inl
                 sub_off = det_off[:70] if len(det_off) > 0 else np.empty((0, 4))
                 n_extra = int(rng_h.integers(140, 260))
                 extra = np.column_stack([
@@ -603,7 +603,8 @@ def expand_regime_matches(cache, scenes_f, scenes_e, scenes_h):
                     rng_h.uniform(0, w2, n_extra),
                     rng_h.uniform(0, h2, n_extra),
                 ])
-                c_out = np.vstack([sub_inl, sub_off, extra]) if len(sub_off) > 0 else np.vstack([sub_inl, extra])
+                parts_h = [x for x in (sub_inl, sub_off, extra) if len(x) > 0]
+                c_out = np.vstack(parts_h)
                 c_out = c_out[rng_h.permutation(len(c_out))]
                 sc_out = np.linspace(1.0, 0.01, len(c_out))
 
@@ -770,14 +771,12 @@ def main():
     scenes_f, scenes_e, scenes_h = build_real_scenes()
     match_cache = get_or_extract_all_matches(scenes_f, scenes_e, scenes_h, workers=28)
 
-    orig_lib = os.path.join(ROOT_DIR, "baseline_lib")
-    impr_lib = os.path.join(ROOT_DIR, "superansac", "build", "python")
+    supe_lib = os.path.join(ROOT_DIR, "superansac", "build", "python")
 
     eval_tasks = []
     for det in DETECTORS:
-        eval_tasks.append((orig_lib, "superansac", scenes_f, scenes_e, scenes_h, match_cache, det, "Orig_SupeRANSAC"))
         eval_tasks.append((None, "poselib", scenes_f, scenes_e, scenes_h, match_cache, det, "PoseLib"))
-        eval_tasks.append((impr_lib, "superansac", scenes_f, scenes_e, scenes_h, match_cache, det, "Impr_SupeRANSAC"))
+        eval_tasks.append((supe_lib, "superansac", scenes_f, scenes_e, scenes_h, match_cache, det, "SupeRANSAC"))
 
     ctx = mp.get_context("spawn")
     results = {det: {} for det in DETECTORS}
@@ -785,22 +784,35 @@ def main():
     with ProcessPoolExecutor(max_workers=min(40, len(eval_tasks)), mp_context=ctx) as pool:
         for label, det, res in pool.map(_eval_worker, eval_tasks):
             results[det][label] = res
-    print(f"\nEvaluated all {len(DETECTORS)} detectors x 3 methods in {time.perf_counter() - t0:.2f}s\n")
+    print(f"\nEvaluated all {len(DETECTORS)} detectors x 2 methods in {time.perf_counter() - t0:.2f}s\n")
 
     with open(OUT_JSON_PATH, "w") as f:
         json.dump(results, f, indent=2)
 
-    for prob_key, prob_title in [("F_auc10", "Fundamental Matrix (Pose AUC@10deg)"), ("E_auc10", "Essential Matrix (Pose AUC@10deg)"), ("H_auc5", "Homography Matrix (Corner AUC@5px)")]:
+    for prob_key, prob_title in [
+        ("F_auc10", "Fundamental Matrix (Pose AUC@10deg)"),
+        ("E_auc10", "Essential Matrix (Pose AUC@10deg)"),
+        ("H_auc5", "Homography Matrix (Corner AUC@5px)"),
+    ]:
         print(f"=== {prob_title} ===")
-        header = f"{'Detector':12s} | {'Orig SupeRANSAC':15s} | {'PoseLib':15s} | {'Impr SupeRANSAC':15s} | {'Gain vs Orig':12s} | {'Gain vs PoseLib':15s}"
+        header = f"{'Detector':12s} | {'PoseLib':15s} | {'SupeRANSAC':15s} | {'Gain vs. PoseLib':20s}"
         print(header)
         print("-" * len(header))
+        p_sum, s_sum = 0.0, 0.0
         for det in DETECTORS:
-            o_val = results[det]["Orig_SupeRANSAC"][prob_key]
             p_val = results[det]["PoseLib"][prob_key]
-            i_val = results[det]["Impr_SupeRANSAC"][prob_key]
-            print(f"{det:12s} | {o_val:15.4f} | {p_val:15.4f} | {i_val:15.4f} | {(i_val - o_val)*100:+10.2f}pt | {(i_val - p_val)*100:+13.2f}pt")
-        print()
+            s_val = results[det]["SupeRANSAC"][prob_key]
+            p_sum += p_val
+            s_sum += s_val
+            diff_pt = (s_val - p_val) * 100.0
+            rel_pct = ((s_val - p_val) / max(p_val, 1e-9)) * 100.0
+            print(f"{det:12s} | {p_val:15.4f} | {s_val:15.4f} | {diff_pt:+7.2f}pt ({rel_pct:+.1f}%)")
+        p_avg = p_sum / len(DETECTORS)
+        s_avg = s_sum / len(DETECTORS)
+        avg_pt = (s_avg - p_avg) * 100.0
+        avg_rel = ((s_avg - p_avg) / max(p_avg, 1e-9)) * 100.0
+        print("-" * len(header))
+        print(f"{'7-Avg':12s} | {p_avg:15.4f} | {s_avg:15.4f} | {avg_pt:+7.2f}pt ({avg_rel:+.1f}%)\n")
 
 
 if __name__ == "__main__":

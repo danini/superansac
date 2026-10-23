@@ -1,4 +1,4 @@
-"""Multicore (40-worker) benchmark comparing PoseLib vs. Original SupeRANSAC vs. Improved SupeRANSAC."""
+"""Multicore (40-worker) benchmark comparing SupeRANSAC vs. PoseLib (Section 1 of README)."""
 
 from concurrent.futures import ProcessPoolExecutor
 import json
@@ -18,10 +18,14 @@ import poselib
 cv2.setNumThreads(1)
 
 ROOT_DIR = "/usr/local/google/home/dbarath/ransac"
-BENCHMARK_DATA_PATH = os.path.join(ROOT_DIR, "benchmark", "benchmark_data.pkl")
-BASELINE_RESULTS_PATH = os.path.join(ROOT_DIR, "benchmark", "baseline_results.json")
-FINAL_RESULTS_PATH = os.path.join(ROOT_DIR, "benchmark", "final_results.json")
-POSELIB_RESULTS_PATH = os.path.join(ROOT_DIR, "benchmark", "poselib_results.json")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BENCHMARK_DATA_PATH = (
+    os.path.join(SCRIPT_DIR, "benchmark_data.pkl")
+    if os.path.exists(os.path.join(SCRIPT_DIR, "benchmark_data.pkl"))
+    else os.path.join(ROOT_DIR, "benchmark", "benchmark_data.pkl")
+)
+FINAL_RESULTS_PATH = os.path.join(SCRIPT_DIR, "final_results.json")
+POSELIB_RESULTS_PATH = os.path.join(SCRIPT_DIR, "poselib_results.json")
 
 
 def compute_auc(errors, thresholds):
@@ -144,14 +148,14 @@ def _eval_one_essential_poselib(args):
     x2 = np.ascontiguousarray(corrs[:, 2:4], dtype=np.float64)
     cam1 = {
         "model": "PINHOLE",
-        "width": int(img_sizes[1]),
-        "height": int(img_sizes[0]),
+        "width": int(max(img_sizes[0], K1[0, 2] * 2)),
+        "height": int(max(img_sizes[1], K1[1, 2] * 2)),
         "params": [float(K1[0, 0]), float(K1[1, 1]), float(K1[0, 2]), float(K1[1, 2])],
     }
     cam2 = {
         "model": "PINHOLE",
-        "width": int(img_sizes[3]),
-        "height": int(img_sizes[2]),
+        "width": int(max(img_sizes[2], K2[0, 2] * 2)),
+        "height": int(max(img_sizes[3], K2[1, 2] * 2)),
         "params": [float(K2[0, 0]), float(K2[1, 1]), float(K2[0, 2]), float(K2[1, 2])],
     }
     ransac_opt = {
@@ -277,12 +281,10 @@ def eval_homography_poselib(pairs, pool, max_reproj_error=4.0, progressive=False
 def main():
     with open(BENCHMARK_DATA_PATH, "rb") as f:
         data = pickle.load(f)
-    with open(BASELINE_RESULTS_PATH, "r") as f:
-        base_res = json.load(f)
     with open(FINAL_RESULTS_PATH, "r") as f:
         super_res = json.load(f)
 
-    workers = 40
+    workers = min(40, os.cpu_count() or 40)
     ctx = mp.get_context("fork")
     t0 = time.perf_counter()
     poselib_variants = {}
@@ -326,25 +328,24 @@ def main():
     with open(POSELIB_RESULTS_PATH, "w") as f:
         json.dump({"variants": poselib_variants, "best": best_poselib}, f, indent=2)
 
-    print("\n=== Head-to-Head Summary: Original SupeRANSAC vs. PoseLib (Best) vs. Improved SupeRANSAC ===")
-    header = f"{'Problem':14s} | {'Primary Metric':20s} | {'Orig SupeRANSAC':15s} | {'PoseLib (Best)':15s} | {'Impr SupeRANSAC':15s} | {'vs Orig':10s} | {'vs PoseLib':10s}"
+    print("\n=== Section 1 Head-to-Head Summary: PoseLib (Best) vs. SupeRANSAC ===")
+    header = f"{'Problem':14s} | {'Primary Metric':20s} | {'PoseLib (Best)':18s} | {'SupeRANSAC':18s} | {'Gain vs PoseLib':18s}"
     print(header)
     print("-" * len(header))
     for prob in ["fundamental", "essential", "homography", "rigid_pose"]:
         m_name = super_res[prob]["primary_metric"]
-        b_auc = base_res[prob]["primary_auc"]
         s_auc = super_res[prob]["primary_auc"]
-        vs_orig = f"+{(s_auc - b_auc) * 100:.2f}pt"
+        s_str = f"{s_auc:.4f} ({super_res[prob]['mean_time_ms']:5.2f}ms)"
         if prob in best_poselib:
             p_auc = best_poselib[prob]["primary_auc"]
-            p_str = f"{p_auc:.4f} ({best_poselib[prob]['mean_time_ms']:5.1f}ms)"
-            vs_pl = f"{(s_auc - p_auc) * 100:+.2f}pt"
+            p_str = f"{p_auc:.4f} ({best_poselib[prob]['mean_time_ms']:5.2f}ms)"
+            diff_pt = (s_auc - p_auc) * 100.0
+            rel_pct = ((s_auc - p_auc) / max(p_auc, 1e-9)) * 100.0
+            vs_pl = f"{diff_pt:+.2f}pt ({rel_pct:+.1f}%)"
         else:
             p_str = "N/A (no 3D-3D)"
             vs_pl = "N/A"
-        b_str = f"{b_auc:.4f} ({base_res[prob]['mean_time_ms']:5.1f}ms)"
-        s_str = f"{s_auc:.4f} ({super_res[prob]['mean_time_ms']:5.1f}ms)"
-        print(f"{prob:14s} | {m_name:20s} | {b_str:15s} | {p_str:15s} | {s_str:15s} | {vs_orig:10s} | {vs_pl:10s}")
+        print(f"{prob:14s} | {m_name:20s} | {p_str:18s} | {s_str:18s} | {vs_pl:18s}")
 
 
 if __name__ == "__main__":

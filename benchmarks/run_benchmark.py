@@ -19,8 +19,14 @@ import numpy as np
 cv2.setNumThreads(1)
 
 ROOT_DIR = "/usr/local/google/home/dbarath/ransac"
-BENCHMARK_DATA_PATH = os.path.join(ROOT_DIR, "benchmark", "benchmark_data.pkl")
-BASELINE_RESULTS_PATH = os.path.join(ROOT_DIR, "benchmark", "baseline_results.json")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BENCHMARK_DATA_PATH = (
+    os.path.join(SCRIPT_DIR, "benchmark_data.pkl")
+    if os.path.exists(os.path.join(SCRIPT_DIR, "benchmark_data.pkl"))
+    else os.path.join(ROOT_DIR, "benchmark", "benchmark_data.pkl")
+)
+FINAL_RESULTS_PATH = os.path.join(SCRIPT_DIR, "final_results.json")
+POSELIB_RESULTS_PATH = os.path.join(SCRIPT_DIR, "poselib_results.json")
 
 _PYSUPERANSAC = None
 
@@ -294,8 +300,12 @@ def main():
         default=os.path.join(ROOT_DIR, "superansac", "build", "python"),
         help="Directory containing pysuperansac.so",
     )
-    parser.add_argument("--save-baseline", action="store_true", help="Save results as baseline_results.json")
-    parser.add_argument("--output-json", type=str, default=None, help="Optional JSON output path")
+    parser.add_argument(
+        "--output-json",
+        type=str,
+        default=FINAL_RESULTS_PATH,
+        help="JSON output path for SupeRANSAC benchmark results (default: final_results.json)",
+    )
     parser.add_argument("--workers", type=int, default=min(40, os.cpu_count() or 40), help="Number of worker processes")
     args = parser.parse_args()
 
@@ -320,40 +330,35 @@ def main():
     t_wall = time.perf_counter() - t_wall0
     print(f"Total benchmark wall-clock time: {t_wall:.2f}s\n")
 
-    if args.save_baseline:
-        with open(BASELINE_RESULTS_PATH, "w") as f:
-            json.dump(results, f, indent=2)
-        print(f"Saved baseline metrics to {BASELINE_RESULTS_PATH}\n")
-
-    baseline = None
-    if os.path.exists(BASELINE_RESULTS_PATH) and not args.save_baseline:
-        with open(BASELINE_RESULTS_PATH, "r") as f:
-            baseline = json.load(f)
-
     if args.output_json:
         with open(args.output_json, "w") as f:
             json.dump(results, f, indent=2)
+        print(f"Saved SupeRANSAC benchmark results to {args.output_json}\n")
 
-    header = f"{'Problem':15s} | {'Primary Metric':22s} | {'Base AUC':8s} | {'Curr AUC':8s} | {'Abs Gain':9s} | {'Rel Gain':9s} | {'Time (ms)':10s}"
+    poselib_best = None
+    if os.path.exists(POSELIB_RESULTS_PATH):
+        with open(POSELIB_RESULTS_PATH, "r") as f:
+            poselib_best = json.load(f).get("best", {})
+
+    header = f"{'Problem':15s} | {'Primary Metric':22s} | {'PoseLib (Best)':15s} | {'SupeRANSAC':15s} | {'Gain vs PoseLib':16s} | {'Mean Time (ms)':14s}"
     print(header)
     print("-" * len(header))
     for prob in ["fundamental", "essential", "homography", "rigid_pose"]:
         r = results[prob]
         curr_auc = r["primary_auc"]
         t_ms = r["mean_time_ms"]
-        if baseline and prob in baseline:
-            base_auc = baseline[prob]["primary_auc"]
-            base_t = baseline[prob]["mean_time_ms"]
-            abs_gain = (curr_auc - base_auc) * 100.0
-            rel_gain = ((curr_auc - base_auc) / max(base_auc, 1e-9)) * 100.0
+        if poselib_best and prob in poselib_best:
+            p_auc = poselib_best[prob]["primary_auc"]
+            abs_gain = (curr_auc - p_auc) * 100.0
+            rel_gain = ((curr_auc - p_auc) / max(p_auc, 1e-9)) * 100.0
             print(
-                f"{prob:15s} | {r['primary_metric']:22s} | {base_auc:8.4f} | {curr_auc:8.4f} | "
-                f"{abs_gain:+8.2f}pt | {rel_gain:+8.2f}% | {t_ms:6.2f} ({base_t:5.2f})"
+                f"{prob:15s} | {r['primary_metric']:22s} | {p_auc:15.4f} | {curr_auc:15.4f} | "
+                f"{abs_gain:+7.2f}pt ({rel_gain:+.1f}%) | {t_ms:6.2f}"
             )
         else:
             print(
-                f"{prob:15s} | {r['primary_metric']:22s} | {'N/A':8s} | {curr_auc:8.4f} | "
-                f"{'N/A':9s} | {'N/A':9s} | {t_ms:6.2f}"
+                f"{prob:15s} | {r['primary_metric']:22s} | {'N/A (3D-3D)':15s} | {curr_auc:15.4f} | "
+                f"{'N/A':16s} | {t_ms:6.2f}"
             )
 
     print("\nDetailed Metrics:")

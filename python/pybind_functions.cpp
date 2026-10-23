@@ -1120,6 +1120,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     // When PROSAC finds very few inliers (<= 35) on a larger correspondence set,
     // run a Uniform-sampling fallback so low-inlier pairs outside the prefix are recovered.
     if (kSampler == superansac::samplers::SamplerType::PROSAC &&
+        settings_.maxIterations >= 500 &&
         finalInliers.size() <= 35 &&
         kCorrespondences_.rows() > 35)
     {
@@ -1138,10 +1139,17 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
                 dynamic_cast<superansac::scoring::MAGSACScoring *>(unifScorer.get())->initialize(estimator.get());
         }
 
+        superansac::RANSACSettings unifSettings = settings_;
+        if (settings_.maxIterations < 5000)
+        {
+            unifSettings.minIterations = std::max<size_t>(50, settings_.minIterations / 2);
+            unifSettings.maxIterations = std::max<size_t>(50, settings_.maxIterations / 2);
+        }
+
         std::unique_ptr<superansac::termination::AbstractCriterion> unifTermination =
             superansac::termination::createTerminationCriterion(kTerminationCriterion);
         if (kTerminationCriterion == superansac::termination::TerminationType::RANSAC)
-            dynamic_cast<superansac::termination::RANSACCriterion *>(unifTermination.get())->setConfidence(settings_.confidence);
+            dynamic_cast<superansac::termination::RANSACCriterion *>(unifTermination.get())->setConfidence(unifSettings.confidence);
 
         superansac::SupeRansac unifEstimator;
         unifEstimator.setEstimator(estimator.get());
@@ -1152,7 +1160,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
             unifEstimator.setLocalOptimizer(localOptimizer.get());
         if (finalOptimizer != nullptr)
             unifEstimator.setFinalOptimizer(finalOptimizer.get());
-        unifEstimator.setSettings(settings_);
+        unifEstimator.setSettings(unifSettings);
         unifEstimator.run(normalizedCorrespondences);
         totalIterations += unifEstimator.getIterationNumber();
 
@@ -1211,6 +1219,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
 
     // Post-loop Plane-and-Parallax rescue and off-plane epipole cleaning in pixel space
     if (kCalibratedPriorBand &&
+        settings_.maxIterations >= 500 &&
         settings_.degensacSettings.enabled &&
         finalInliers.size() >= 10 && finalInliers.size() <= 160)
     {
@@ -2122,6 +2131,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     // leading prefix. Run a non-SPRT Uniform-sampling fallback (first over the top-80
     // prefix, then over the full correspondence set) and keep the best model.
     if (kSampler == superansac::samplers::SamplerType::PROSAC &&
+        settings_.maxIterations >= 500 &&
         finalInliers.size() < 25 &&
         kCorrespondences_.rows() > 25)
     {
@@ -2149,8 +2159,10 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
         for (const int poolRows : kPoolSizes)
         {
             unifSampler->initialize(kCorrespondences_.topRows(poolRows));
-            const size_t kTargetIters = (poolRows == 80 && kTotalRows > 80) ? 1500 : 2500;
-            unifSettings.minIterations = std::min<size_t>(settings_.maxIterations, kTargetIters);
+            const size_t kTargetIters = (poolRows == 80 && kTotalRows > 80)
+                ? (1500 * std::min<size_t>(settings_.maxIterations, 5000)) / 5000
+                : (2500 * std::min<size_t>(settings_.maxIterations, 5000)) / 5000;
+            unifSettings.minIterations = std::max<size_t>(50, std::min<size_t>(settings_.maxIterations, kTargetIters));
             unifSettings.maxIterations = unifSettings.minIterations;
 
             std::unique_ptr<superansac::termination::AbstractCriterion> unifTermination =
@@ -2260,7 +2272,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
         // wider 6.25x (25px) pool and refitting across an expand-and-shrink schedule
         // (2.25x -> 1.25x -> 1.0x threshold, i.e., 9px -> 5px -> 4px) pulls in the far-side
         // true inliers and sheds the outliers.
-        if (finalInliers.size() <= 22 && kRows > 22)
+        if (settings_.maxIterations >= 500 && finalInliers.size() <= 22 && kRows > 22)
         {
             estimator->setBundleRefinement(false, settings_.inlierThreshold, settings_.homographyBundleMaxIterations);
             const double kSqThresh4 = settings_.inlierThreshold * settings_.inlierThreshold;
@@ -2291,6 +2303,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
             std::vector<size_t> stepInliers;
             stepInliers.reserve(64);
             bool rescued = false;
+            const int kMaxRescueIters = static_cast<int>(std::min<size_t>(400, std::max<size_t>(40, (400 * settings_.maxIterations) / 5000)));
 
             for (const std::vector<size_t>* poolPtr : kPools)
             {
@@ -2299,7 +2312,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
                     continue;
 
                 hRng.resetGenerator(0, pool.size() - 1);
-                for (int iter = 0; iter < 400; ++iter)
+                for (int iter = 0; iter < kMaxRescueIters; ++iter)
                 {
                     hRng.generateUniqueRandomSet(sampleIdx, 4);
                     const size_t globalSample[4] = {

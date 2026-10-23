@@ -83,11 +83,7 @@ def loftr_matching(img1, img2, loftr_matcher, device):
     return np.concatenate([mkpts0, mkpts1], axis=1), mconf
 
 def point_matching(img1, img2, feature_type, detector, matcher, device = "cuda"):
-    if feature_type == "splg":
+    if feature_type in ("splg", "LightGlue"):
         return splg_matching(img1, img2, detector, matcher, device = device)
-    #elif matcher == "LoFTR":
-    #    return loftr_matching(img1, img2, net, device)
-    #elif matcher == "GS":
-    #    return gs_matching(img1, img2, net)
     else:
-        raise ValueError("Unknown matcher: " + matcher)
+        raise ValueError("Unknown matcher: " + str(feature_type))

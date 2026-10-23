@@ -260,11 +260,18 @@ def run(matches, scores, K1, K2, R_gt, t_gt, args):
     norm_matches[:, 2:] = normalize_keypoints(matches[:, 2:], K2)
 
     # Count the inliers
-    inlier_number = inliers.sum()
+    inliers = np.asarray(inliers).ravel().astype(bool)
+    inlier_number = int(inliers.sum())
     
     # Decompose the essential matrix to get the relative pose
     if E_est is not None:
-        _, R, t, _ = cv2.recoverPose(E_est, norm_matches[inliers, :2], norm_matches[inliers, 2:])
+        if inlier_number >= 5 and E_est.shape == (3, 3):
+            _, R, t, _ = cv2.recoverPose(
+                E_est,
+                norm_matches[inliers, :2].reshape(-1, 1, 2),
+                norm_matches[inliers, 2:].reshape(-1, 1, 2))
+        else:
+            return (180.0, 180.0), inlier_number, elapsed_time
     elif pose_est is not None:
         
         q = pose_est.q

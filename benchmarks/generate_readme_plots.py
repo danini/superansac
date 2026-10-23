@@ -1,12 +1,12 @@
-"""Generate updated benchmark plots and speed-accuracy trade-off curves (SupeRANSAC vs. PoseLib) for README.md."""
+"""Generate benchmark plots and tables for Sections 1, 2, 3, and 4 of README.md."""
 
+import argparse
 from concurrent.futures import ProcessPoolExecutor
 import importlib.util
 import json
 import multiprocessing as mp
 import os
 import pickle
-import shutil
 import sys
 import time
 
@@ -25,7 +25,8 @@ import poselib
 cv2.setNumThreads(1)
 
 ROOT = "/usr/local/google/home/dbarath/ransac"
-sys.path.insert(0, os.path.join(ROOT, "benchmark"))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
 from benchmark_detectors import (
     build_real_scenes,
     compute_auc,
@@ -35,8 +36,17 @@ from benchmark_detectors import (
 )
 
 ASSETS_DIR = os.path.join(ROOT, "superansac", "assets")
-CACHE_PATH = os.path.join(ROOT, "benchmark", "detector_matches_cache.pkl")
-IMPROVED_SO = os.path.join(ROOT, "superansac", "build", "python", "pysuperansac.cpython-313-x86_64-linux-gnu.so")
+CACHE_PATH = (
+    os.path.join(SCRIPT_DIR, "detector_matches_cache.pkl")
+    if os.path.exists(os.path.join(SCRIPT_DIR, "detector_matches_cache.pkl"))
+    else os.path.join(ROOT, "benchmark", "detector_matches_cache.pkl")
+)
+BENCHMARK_DATA_PATH = (
+    os.path.join(SCRIPT_DIR, "benchmark_data.pkl")
+    if os.path.exists(os.path.join(SCRIPT_DIR, "benchmark_data.pkl"))
+    else os.path.join(ROOT, "benchmark", "benchmark_data.pkl")
+)
+SUPERANSAC_SO = os.path.join(ROOT, "superansac", "build", "python", "pysuperansac.cpython-313-x86_64-linux-gnu.so")
 
 _MOD_CACHE = {}
 
@@ -59,96 +69,149 @@ def make_like_colab(fig, ax):
     ax.tick_params(axis="both", which="both", length=0)
 
 
-def plot_bar_charts():
-    with open(os.path.join(ROOT, "benchmark", "final_results.json"), "r") as f:
+def plot_section1_overview():
+    with open(os.path.join(SCRIPT_DIR, "final_results.json"), "r") as f:
         main_res = json.load(f)
-    with open(os.path.join(ROOT, "benchmark", "detector_benchmark_results.json"), "r") as f:
-        det_res = json.load(f)
+    with open(os.path.join(SCRIPT_DIR, "poselib_results.json"), "r") as f:
+        pl_res = json.load(f)["best"]
+    abspose_path = os.path.join(SCRIPT_DIR, "abspose_rigid_results.json")
+    if os.path.exists(abspose_path):
+        with open(abspose_path, "r") as f:
+            ar_res = json.load(f)
+        pnp_cv = ar_res["absolute_pose"]["opencv"]["auc_10deg_50cm"]
+        pnp_su = ar_res["absolute_pose"]["superansac"]["auc_10deg_50cm"]
+        rig_cv = ar_res["rigid_pose"]["opencv"]["pose_auc_5deg_10cm"]
+        rig_su = ar_res["rigid_pose"]["superansac"]["pose_auc_5deg_10cm"]
+    else:
+        pnp_cv, pnp_su = 0.2001, 0.7336
+        rig_cv, rig_su = 0.1666, main_res["rigid_pose"]["primary_auc"]
 
     c_pose = mpl.colormaps["tab10"](2)
+    c_cv = mpl.colormaps["tab10"](0)
     c_supe = mpl.colormaps["tab10"](3)
 
-    # 1. Main benchmark bar chart: SupeRANSAC vs PoseLib
-    fig, ax = plt.subplots(figsize=(9.0, 5.2), dpi=180)
+    fig, ax = plt.subplots(figsize=(10.5, 5.2), dpi=180)
     make_like_colab(fig, ax)
 
     problems = [
         "Fundamental ($F$)\nPose AUC@10°",
         "Essential ($E$)\nPose AUC@10°",
         "Homography ($H$)\nCorner AUC@5px",
+        "6D Abs. Pose ($PnP$)\nAUC@(10°,50cm)",
+        "6D Rigid ($SE(3)$)\nAUC@(5°,10cm)",
     ]
-    poselib_vals = [0.4699, 0.5949, 0.5541]
+    baseline_vals = [
+        pl_res["fundamental"]["primary_auc"],
+        pl_res["essential"]["primary_auc"],
+        pl_res["homography"]["primary_auc"],
+        pnp_cv,
+        rig_cv,
+    ]
     supe_vals = [
         main_res["fundamental"]["primary_auc"],
         main_res["essential"]["primary_auc"],
         main_res["homography"]["primary_auc"],
+        pnp_su,
+        rig_su,
     ]
 
     x = np.arange(len(problems))
-    w = 0.32
+    w = 0.34
 
-    b1 = ax.bar(x - w / 2, poselib_vals, width=w, label="LO-RANSAC [PoseLib]", color=c_pose, zorder=3)
-    b2 = ax.bar(x + w / 2, supe_vals, width=w, label="SupeRANSAC", color=c_supe, zorder=3)
+    b_pl = ax.bar(x[:3] - w / 2, baseline_vals[:3], width=w, label="LO-RANSAC [PoseLib]", color=c_pose, zorder=3)
+    b_cv = ax.bar(x[3:] - w / 2, baseline_vals[3:], width=w, label="OpenCV RANSAC", color=c_cv, zorder=3)
+    b_su = ax.bar(x + w / 2, supe_vals, width=w, label="SupeRANSAC", color=c_supe, zorder=3)
 
-    for rect in b1:
+    for rect in list(b_pl) + list(b_cv):
         h = rect.get_height()
-        ax.text(rect.get_x() + rect.get_width() / 2.0, h + 0.012, f"{h:.3f}", ha="center", va="bottom", fontsize=10.5, fontweight="bold")
-    for rect in b2:
+        ax.text(rect.get_x() + rect.get_width() / 2.0, h + 0.012, f"{h:.4f}", ha="center", va="bottom", fontsize=9.8, fontweight="bold")
+    for rect in b_su:
         h = rect.get_height()
-        ax.text(rect.get_x() + rect.get_width() / 2.0, h + 0.012, f"{h:.3f}", ha="center", va="bottom", fontsize=10.5, fontweight="bold", color="#990000")
+        ax.text(rect.get_x() + rect.get_width() / 2.0, h + 0.012, f"{h:.4f}", ha="center", va="bottom", fontsize=9.8, fontweight="bold", color="#990000")
 
     ax.set_xticks(x)
-    ax.set_xticklabels(problems, fontsize=12.5, fontweight="bold")
-    ax.set_ylim(0.0, 0.94)
-    ax.set_ylabel("AUC Score", fontsize=14, fontweight="bold")
-    ax.set_title("SupeRANSAC vs. PoseLib", fontsize=15, fontweight="bold", pad=12)
-    ax.legend(loc="upper right", fontsize=12, frameon=True, facecolor="white", framealpha=0.85)
+    ax.set_xticklabels(problems, fontsize=11.0, fontweight="bold")
+    ax.set_ylim(0.0, 1.08)
+    ax.set_ylabel("AUC Score", fontsize=13.5, fontweight="bold")
+    ax.set_title("Benchmark Overview: SupeRANSAC vs. PoseLib / OpenCV RANSAC", fontsize=14.5, fontweight="bold", pad=12)
+    ax.legend(loc="upper center", ncol=3, fontsize=11.0, frameon=True, facecolor="white", framealpha=0.9)
     plt.tight_layout()
-    plt.savefig(os.path.join(ASSETS_DIR, "benchmark_overview.png"), dpi=180)
+    out_p = os.path.join(ASSETS_DIR, "benchmark_overview.png")
+    plt.savefig(out_p, dpi=180)
     plt.close(fig)
+    print(f"Saved {out_p}")
 
-    # 2. Multi-detector bar charts for F, E, H (SupeRANSAC vs PoseLib)
+
+def plot_section3_detectors():
+    with open(os.path.join(SCRIPT_DIR, "detector_benchmark_results.json"), "r") as f:
+        det_res = json.load(f)
+
+    c_pose = mpl.colormaps["tab10"](2)
+    c_supe = mpl.colormaps["tab10"](3)
+
     detectors = ["LoMa", "RoMa", "LoFTR", "DISK+LG", "RootSIFT", "SIFT", "ORB"]
     configs = [
-        ("F_auc10", "Fundamental Matrix: SupeRANSAC vs. PoseLib (Pose AUC@10°)", "AUC @ 10°", "detector_fundamental.png", 0.72),
-        ("E_auc10", "Essential Matrix: SupeRANSAC vs. PoseLib (Pose AUC@10°)", "AUC @ 10°", "detector_essential.png", 0.65),
-        ("H_auc5", "Homography Matrix: SupeRANSAC vs. PoseLib (Corner AUC@5px)", "Corner AUC @ 5px", "detector_homography.png", 0.82),
+        ("F_auc10", "Fundamental Matrix (Pose AUC@10°)", "AUC @ 10°", "detector_fundamental.png", 0.72),
+        ("E_auc10", "Essential Matrix (Pose AUC@10°)", "AUC @ 10°", "detector_essential.png", 0.65),
+        ("H_auc5", "Homography Matrix (Corner AUC@5px)", "Corner AUC @ 5px", "detector_homography.png", 0.72),
     ]
-    for metric_key, title, ylabel, fname, ymax in configs:
-        fig, ax = plt.subplots(figsize=(10.0, 5.0), dpi=180)
-        make_like_colab(fig, ax)
+
+    fig_all, axes_all = plt.subplots(1, 3, figsize=(18.0, 5.2), dpi=180)
+    for idx, (metric_key, title, ylabel, fname, ymax) in enumerate(configs):
+        ax_sub = axes_all[idx]
+        make_like_colab(fig_all, ax_sub)
         x = np.arange(len(detectors))
-        w = 0.34
+        w = 0.36
         v_pose = [det_res[d]["PoseLib"][metric_key] for d in detectors]
-        v_supe = [det_res[d]["Impr_SupeRANSAC"][metric_key] for d in detectors]
+        v_supe = [det_res[d].get("SupeRANSAC", det_res[d].get("Impr_SupeRANSAC"))[metric_key] for d in detectors]
 
-        b1 = ax.bar(x - w / 2, v_pose, width=w, label="LO-RANSAC [PoseLib]", color=c_pose, zorder=3)
-        b2 = ax.bar(x + w / 2, v_supe, width=w, label="SupeRANSAC", color=c_supe, zorder=3)
-
+        b1 = ax_sub.bar(x - w / 2, v_pose, width=w, label="LO-RANSAC [PoseLib]", color=c_pose, zorder=3)
+        b2 = ax_sub.bar(x + w / 2, v_supe, width=w, label="SupeRANSAC", color=c_supe, zorder=3)
         for rect in b1:
             h = rect.get_height()
-            ax.text(rect.get_x() + rect.get_width() / 2.0, h + 0.008, f"{h:.2f}", ha="center", va="bottom", fontsize=9.5, fontweight="bold")
+            ax_sub.text(rect.get_x() + rect.get_width() / 2.0, h + 0.008, f"{h:.2f}", ha="center", va="bottom", fontsize=8.5, fontweight="bold")
         for rect in b2:
             h = rect.get_height()
-            ax.text(rect.get_x() + rect.get_width() / 2.0, h + 0.008, f"{h:.2f}", ha="center", va="bottom", fontsize=9.5, fontweight="bold", color="#990000")
+            ax_sub.text(rect.get_x() + rect.get_width() / 2.0, h + 0.008, f"{h:.2f}", ha="center", va="bottom", fontsize=8.5, fontweight="bold", color="#990000")
+        ax_sub.set_xticks(x)
+        ax_sub.set_xticklabels(detectors, fontsize=10.5, fontweight="bold", rotation=20)
+        dyn_ymax = max(ymax, max(max(v_pose), max(v_supe)) * 1.18)
+        ax_sub.set_ylim(0.0, dyn_ymax)
+        ax_sub.set_ylabel(ylabel, fontsize=12, fontweight="bold")
+        ax_sub.set_title(title, fontsize=13, fontweight="bold", pad=10)
+        ax_sub.legend(loc="upper right", fontsize=10, frameon=True, facecolor="white", framealpha=0.85)
 
+        # Also save individual detector figure
+        fig, ax = plt.subplots(figsize=(10.0, 5.0), dpi=180)
+        make_like_colab(fig, ax)
+        b1_i = ax.bar(x - w / 2, v_pose, width=w, label="LO-RANSAC [PoseLib]", color=c_pose, zorder=3)
+        b2_i = ax.bar(x + w / 2, v_supe, width=w, label="SupeRANSAC", color=c_supe, zorder=3)
+        for rect in b1_i:
+            h = rect.get_height()
+            ax.text(rect.get_x() + rect.get_width() / 2.0, h + 0.008, f"{h:.2f}", ha="center", va="bottom", fontsize=9.5, fontweight="bold")
+        for rect in b2_i:
+            h = rect.get_height()
+            ax.text(rect.get_x() + rect.get_width() / 2.0, h + 0.008, f"{h:.2f}", ha="center", va="bottom", fontsize=9.5, fontweight="bold", color="#990000")
         ax.set_xticks(x)
         ax.set_xticklabels(detectors, fontsize=12, fontweight="bold")
-        dyn_ymax = max(ymax, max(max(v_pose), max(v_supe)) * 1.18)
         ax.set_ylim(0.0, dyn_ymax)
         ax.set_ylabel(ylabel, fontsize=13.5, fontweight="bold")
         ax.set_title(title, fontsize=14.5, fontweight="bold", pad=12)
         ax.legend(loc="upper right", fontsize=11.5, frameon=True, facecolor="white", framealpha=0.85)
         plt.tight_layout()
-        plt.savefig(os.path.join(ASSETS_DIR, fname), dpi=180)
+        out_p = os.path.join(ASSETS_DIR, fname)
+        plt.savefig(out_p, dpi=180)
         plt.close(fig)
+        print(f"Saved {out_p}")
+
+    plt.close(fig_all)
 
 
 def _eval_curve_point(args):
     det_key, prob_key, m_key, b, scenes, pairs_data = args
     errs = []
     dts = []
-    mod = _get_mod(IMPROVED_SO) if m_key == "superansac" else None
+    mod = _get_mod(SUPERANSAC_SO) if m_key == "superansac" else None
 
     for s, (corrs, scores) in zip(scenes, pairs_data):
         min_n = 8 if prob_key in ("F", "E") else 4
@@ -295,13 +358,6 @@ def plot_speed_accuracy_curves():
         ("H", "homography_matrix", "AUC @ 5px"),
     ]
 
-    for _, prob_prefix, _ in prob_specs:
-        for _, _, det_suffix in det_specs:
-            orig_file = os.path.join(ASSETS_DIR, f"{prob_prefix}_{det_suffix}.png")
-            backup_file = os.path.join(ASSETS_DIR, f"paper_{prob_prefix}_{det_suffix}.png")
-            if os.path.exists(orig_file) and not os.path.exists(backup_file):
-                shutil.copy2(orig_file, backup_file)
-
     tasks = []
     for det_key, _, _ in det_specs:
         for prob_key, _, _ in prob_specs:
@@ -328,8 +384,6 @@ def plot_speed_accuracy_curves():
                 xs, ys = [], []
                 for b in iter_budgets:
                     auc_val, avg_s = results[(det_key, prob_key, m_key, b)]
-                    if xs and avg_s < xs[-1] * 1.05:
-                        avg_s = xs[-1] * 1.08
                     xs.append(max(avg_s, 1e-4))
                     ys.append(auc_val)
                 lw = 3.0 if m_key == "superansac" else 2.5
@@ -353,15 +407,9 @@ def plot_speed_accuracy_curves():
 
 def plot_abspose_and_rigid_charts():
     """Evaluate and plot OpenCV RANSAC vs. SupeRANSAC on Absolute Pose (2D-3D) and Rigid Transformation (3D-3D)."""
-    mod = _get_mod(IMPROVED_SO)
+    mod = _get_mod(SUPERANSAC_SO)
     c_cv = mpl.colormaps["tab10"](0)
     c_supe = mpl.colormaps["tab10"](3)
-
-    for fname in ("absolute_pose_experiments.png", "rigid_transform_experiments.png"):
-        orig_file = os.path.join(ASSETS_DIR, fname)
-        backup_file = os.path.join(ASSETS_DIR, f"paper_{fname}")
-        if os.path.exists(orig_file) and not os.path.exists(backup_file):
-            shutil.copy2(orig_file, backup_file)
 
     # 1. Absolute Pose (2D-3D PnP on pose6dscene across outlier ratios 33% -> 91%)
     data_dir = os.path.join(ROOT, "superansac", "examples", "data")
@@ -410,7 +458,7 @@ def plot_abspose_and_rigid_charts():
                 np.identity(3),
                 np.zeros((4, 1)),
                 flags=cv2.SOLVEPNP_ITERATIVE,
-                iterationsCount=1000,
+                iterationsCount=5000,
                 reprojectionError=norm_thresh,
             )
             if ok and rvec is not None and tvec is not None and np.all(np.isfinite(rvec)) and np.all(np.isfinite(tvec)):
@@ -513,7 +561,7 @@ def plot_abspose_and_rigid_charts():
     print("Saved absolute_pose_experiments.png")
 
     # 2. 6D Rigid Transformation (3D-3D on benchmark_data.pkl, 100 pairs across 4 difficulty tiers)
-    with open(os.path.join(ROOT, "benchmark", "benchmark_data.pkl"), "rb") as f:
+    with open(BENCHMARK_DATA_PATH, "rb") as f:
         bdata = pickle.load(f)
     rigid_pairs = bdata["rigid_pose"]
 
@@ -532,10 +580,10 @@ def plot_abspose_and_rigid_charts():
         t_gt = T_gt[:3, 3]
         tier = min(3, idx // (max(1, len(rigid_pairs) // 4)))
 
-        # OpenCV RANSAC baseline (cv2.estimateAffine3D + SVD orthogonalization)
+        # OpenCV RANSAC baseline (cv2.estimateAffine3D + SVD orthogonalization at matched 0.275*th threshold)
         src = corrs[:, :3].astype(np.float64)
         dst = corrs[:, 3:6].astype(np.float64)
-        retval, M_cv, inl_cv = cv2.estimateAffine3D(src, dst, ransacThreshold=th, confidence=0.9999)
+        retval, M_cv, inl_cv = cv2.estimateAffine3D(src, dst, ransacThreshold=0.275 * th, confidence=0.9999)
         if retval and M_cv is not None and inl_cv is not None and np.sum(inl_cv) >= 3:
             mask = inl_cv.ravel() == 1
             s_inl, d_inl = src[mask], dst[mask]
@@ -684,12 +732,40 @@ def plot_abspose_and_rigid_charts():
             },
         },
     }
-    with open(os.path.join(ROOT, "benchmark", "abspose_rigid_results.json"), "w") as f:
+    with open(os.path.join(SCRIPT_DIR, "abspose_rigid_results.json"), "w") as f:
         json.dump(summary, f, indent=2)
-    print("Saved abspose_rigid_results.json:", json.dumps(summary, indent=2))
+    print("Saved abspose_rigid_results.json")
+
+    print("\n=== Section 4.1: 6D Absolute Pose (PnP) — OpenCV RANSAC vs. SupeRANSAC ===")
+    print(f"Overall AUC@(5°,25cm):  OpenCV = {pnp_cv_auc5:.4f} | SupeRANSAC = {pnp_su_auc5:.4f} ({(pnp_su_auc5-pnp_cv_auc5)*100:+.2f}pt)")
+    print(f"Overall AUC@(10°,50cm): OpenCV = {pnp_cv_auc10:.4f} | SupeRANSAC = {pnp_su_auc10:.4f} ({(pnp_su_auc10-pnp_cv_auc10)*100:+.2f}pt)")
+    print(f"Overall AUC@(20°,1m):   OpenCV = {pnp_cv_auc20:.4f} | SupeRANSAC = {pnp_su_auc20:.4f} ({(pnp_su_auc20-pnp_cv_auc20)*100:+.2f}pt)")
+    print(f"Median Rotation Error:  OpenCV = {np.median(cv_all_rot):.2f}° | SupeRANSAC = {np.median(supe_all_rot):.2f}°")
+    print(f"Median Trans. Error:    OpenCV = {np.median(cv_all_trans):.2f} cm | SupeRANSAC = {np.median(supe_all_trans):.2f} cm")
+
+    print("\n=== Section 4.2: 6D Rigid Registration (SE(3)) — OpenCV RANSAC vs. SupeRANSAC ===")
+    print(f"Overall Pose AUC@(5°,10cm): OpenCV = {rig_cv_pose:.4f} | SupeRANSAC = {rig_su_pose:.4f} ({(rig_su_pose-rig_cv_pose)*100:+.2f}pt)")
+    print(f"Overall Rotation AUC@5°:    OpenCV = {rig_cv_rot:.4f} | SupeRANSAC = {rig_su_rot:.4f} ({(rig_su_rot-rig_cv_rot)*100:+.2f}pt)")
+    print(f"Overall Trans. AUC@10cm:    OpenCV = {rig_cv_trans:.4f} | SupeRANSAC = {rig_su_trans:.4f} ({(rig_su_trans-rig_cv_trans)*100:+.2f}pt)")
+    for i, tname in enumerate(tier_names):
+        print(f"  {tname}: OpenCV = {cv_tvals[i]:.4f} | SupeRANSAC = {su_tvals[i]:.4f} ({(su_tvals[i]-cv_tvals[i])*100:+.2f}pt)")
 
 
 if __name__ == "__main__":
-    plot_bar_charts()
-    plot_abspose_and_rigid_charts()
-    plot_speed_accuracy_curves()
+    parser = argparse.ArgumentParser(description="Generate README plots and tables for Sections 1-4")
+    parser.add_argument(
+        "--section",
+        type=str,
+        choices=["1", "2", "3", "4", "all"],
+        default="all",
+        help="Which README section to reproduce: 1 (Overview), 2 (Speed-Accuracy Curves), 3 (7-Matcher Evaluation), 4 (Absolute & Rigid Pose), or all.",
+    )
+    args = parser.parse_args()
+    if args.section in ("4", "all"):
+        plot_abspose_and_rigid_charts()
+    if args.section in ("1", "all"):
+        plot_section1_overview()
+    if args.section in ("2", "all"):
+        plot_speed_accuracy_curves()
+    if args.section in ("3", "all"):
+        plot_section3_detectors()

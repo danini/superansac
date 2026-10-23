@@ -289,13 +289,13 @@ def detect_and_load_data(data, args, detector, matcher):
     if matches is not None and scores is not None:
         return matches, scores
 
-    if args.features == "splg":
+    if args.features in ("splg", "LightGlue"):
         img1 = data["img1"]
         img2 = data["img2"]
 
         start_time = time.time()
-        # Detect keypoints by SuperPoint + SuperGlue, LoFTR, or GlueStick
-        matches, scores = point_matching(img1, img2, args.features, detector, matcher, args.device)
+        # Detect keypoints by SuperPoint + LightGlue
+        matches, scores = point_matching(img1, img2, "splg", detector, matcher, args.device)
         # Saving to the database
         append_h5({f"{args.features.lower()}-{label1}-{label2}": matches}, args.output_db_path)
         append_h5({f"{args.features.lower()}-{label1}-{label2}-scores": scores}, args.output_db_path)

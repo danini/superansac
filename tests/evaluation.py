@@ -1,3 +1,5 @@
+import math
+import cv2
 import numpy as np
 
 
@@ -127,43 +129,70 @@ def rotation_error_from_trace(R_gt, R, eps=1e-15):
 
 def evaluate_R_t(R_gt, t_gt, R, t, q_gt=None):
     if t is None or R is None:
-        return np.inf, np.inf 
-    t = t.flatten()
-    t_gt = t_gt.flatten()
+        return 180.0, 180.0
+    t = np.asarray(t, dtype=np.float64).flatten()
+    t_gt = np.asarray(t_gt, dtype=np.float64).flatten()
+    R = np.asarray(R, dtype=np.float64)
+    R_gt = np.asarray(R_gt, dtype=np.float64)
 
     eps = 1e-15
 
-    #if q_gt is None:
-    #    q_gt = quaternion_from_matrix(R_gt)
-    #q = quaternion_from_matrix(R)
-    #q = q / (np.linalg.norm(q) + eps)
-    #q_gt = q_gt / (np.linalg.norm(q_gt) + eps)
-    #loss_q = np.maximum(eps, (1.0 - np.sum(q * q_gt)**2))
-    err_q = rotation_error_from_trace(R_gt, R) #np.rad2deg(np.arccos(1 - 2 * loss_q))
+    if not np.all(np.isfinite(R)) or R.shape != (3, 3):
+        err_q = 180.0
+    else:
+        err_q = float(rotation_error_from_trace(R_gt, R))
+        if np.isnan(err_q):
+            err_q = 180.0
 
-    t = t / (np.linalg.norm(t) + eps)
-    t_gt = t_gt / (np.linalg.norm(t_gt) + eps)
-    loss_t = np.maximum(eps, (1.0 - np.sum(t * t_gt)**2))
-    err_t = np.rad2deg(np.arccos(np.sqrt(1 - loss_t)))
+    norm_t = np.linalg.norm(t)
+    norm_t_gt = np.linalg.norm(t_gt)
+    if norm_t < eps or norm_t_gt < eps or not np.all(np.isfinite(t)):
+        err_t = 180.0
+    else:
+        cos_t = np.clip(np.dot(t / norm_t, t_gt / norm_t_gt), -1.0, 1.0)
+        err_t = float(np.degrees(np.arccos(cos_t)))
+        if np.isnan(err_t):
+            err_t = 180.0
 
-    if np.sum(np.isnan(err_q)):
-        err_q = 180
-    if np.sum(np.isnan(err_t)):
-        err_t = 180
     return err_q, err_t
 
 
+def homography_pose_error(H, scale, pose_gt, K1, K2):
+    if H is None or not np.all(np.isfinite(H)) or np.linalg.norm(H) < 1e-12:
+        return 180.0, 180.0, np.inf
+    R_gt = pose_gt[:, :3]
+    t_gt = pose_gt[:, 3]
+    try:
+        num, Rs, ts, _ = cv2.decomposeHomographyMat(np.asarray(H, dtype=np.float64), np.asarray(K2, dtype=np.float64))
+    except cv2.error:
+        return 180.0, 180.0, np.inf
+    if num == 0 or not Rs:
+        return 180.0, 180.0, np.inf
+    best_max = 180.0
+    best_r, best_t = 180.0, 180.0
+    for R_cand, t_cand in zip(Rs, ts):
+        er, et = evaluate_R_t(R_gt, t_gt, R_cand, t_cand)
+        if max(er, et) < best_max:
+            best_max = max(er, et)
+            best_r, best_t = er, et
+    return best_r, best_t, best_t
+
+
 def pose_auc(errors, thresholds=[5, 10, 20]):
-    errors = np.asarray(errors)  # No copy if already array
+    errors = np.asarray(errors, dtype=np.float64)
+    if len(errors) == 0:
+        return [0.0 for _ in thresholds]
+    errors = np.where(np.isnan(errors) | np.isinf(errors), 1e9, errors)
     sort_idx = np.argsort(errors)
     errors = errors[sort_idx]
     recall = (np.arange(len(errors)) + 1) / len(errors)
     errors = np.r_[0., errors]
     recall = np.r_[0., recall]
+    trapz_fn = getattr(np, "trapezoid", getattr(np, "trapz", None))
     aucs = []
     for t in thresholds:
         last_index = np.searchsorted(errors, t)
         r = np.r_[recall[:last_index], recall[last_index-1]]
         e = np.r_[errors[:last_index], t]
-        aucs.append(np.trapz(r, x=e)/t)
+        aucs.append(float(trapz_fn(r, x=e) / t))
     return aucs
