@@ -1,0 +1,46 @@
+{
+  "fundamental": {
+    "primary_metric": "Pose AUC@10deg",
+    "primary_auc": 0.8155039385902985,
+    "pose_auc_5": 0.6984621396560853,
+    "pose_auc_10": 0.8155039385902985,
+    "pose_auc_20": 0.8868797194183374,
+    "sampson_auc_1px": 0.6526525076600207,
+    "sampson_auc_2_5px": 0.8458667426347735,
+    "sampson_auc_5px": 0.918679466879405,
+    "mean_time_ms": 70.13189934902282,
+    "median_time_ms": 67.02916899666889
+  },
+  "essential": {
+    "primary_metric": "Pose AUC@10deg",
+    "primary_auc": 0.6369444433705667,
+    "pose_auc_5": 0.5701136177056856,
+    "pose_auc_10": 0.6369444433705667,
+    "pose_auc_20": 0.6929195522988468,
+    "rot_auc_10": 0.7163865814759822,
+    "trans_auc_10": 0.6511028414184891,
+    "mean_time_ms": 80.71999650012003,
+    "median_time_ms": 69.32062799023697
+  },
+  "homography": {
+    "primary_metric": "Corner AUC@5px",
+    "primary_auc": 0.7195850769180037,
+    "corner_auc_5px": 0.7195850769180037,
+    "corner_auc_10px": 0.7866274644346002,
+    "corner_auc_20px": 0.8388288441017142,
+    "val_auc_5px": 0.7416317138558496,
+    "val_auc_10px": 0.8508158569279247,
+    "val_auc_20px": 0.9097718925590634,
+    "mean_time_ms": 25.134194148995448,
+    "median_time_ms": 18.371925005340017
+  },
+  "rigid_pose": {
+    "primary_metric": "Pose AUC@(5deg,10cm)",
+    "primary_auc": 0.8495731470014483,
+    "pose_auc_5deg_10cm": 0.8495731470014483,
+    "rot_auc_5deg": 0.8965655035369713,
+    "trans_auc_10cm": 0.8586496441538733,
+    "mean_time_ms": 14.127359040139709,
+    "median_time_ms": 13.937806499598082
+  }
+}

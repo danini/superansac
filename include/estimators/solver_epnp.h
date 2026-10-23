@@ -119,11 +119,11 @@ namespace superansac
                 if (kSampleNumber_ < sampleSize())
                     return false;
 
-                // Camera intrinsic parameters (assuming known)
-                const double fu = 800.0; // Focal length in u-direction
-                const double fv = 800.0; // Focal length in v-direction
-                const double uc = 320.0; // Principal point u-coordinate
-                const double vc = 240.0; // Principal point v-coordinate
+                // Points in kData_ are already normalized image coordinates (u, v, X, Y, Z)
+                const double fu = 1.0;
+                const double fv = 1.0;
+                const double uc = 0.0;
+                const double vc = 0.0;
 
                 // Collect world and image points from the data
                 Eigen::MatrixXd worldPoints(kSampleNumber_, 3);
@@ -134,11 +134,11 @@ namespace superansac
                     const size_t idx = kSample_ == nullptr ? i : kSample_[i];
 
                     const double
-                        X = kData_(idx, 0),
-                        Y = kData_(idx, 1),
-                        Z = kData_(idx, 2),
-                        u = kData_(idx, 3),
-                        v = kData_(idx, 4);
+                        u = kData_(idx, 0),
+                        v = kData_(idx, 1),
+                        X = kData_(idx, 2),
+                        Y = kData_(idx, 3),
+                        Z = kData_(idx, 4);
 
                     worldPoints.row(i) << X, Y, Z;
                     imagePoints.row(i) << u, v;
@@ -159,6 +159,8 @@ namespace superansac
                 // Solve for pose
                 models::Model model;
                 solveForPose(M, controlPoints, alphas, worldPoints, model);
+                if (!model.getData().allFinite())
+                    return false;
 
                 models_.emplace_back(model);
                 return true;
@@ -314,16 +316,18 @@ namespace superansac
                 const Eigen::MatrixXd& worldPoints,
                 models::Model& model) const
             {
-                // Perform SVD on M
-                Eigen::JacobiSVD<Eigen::MatrixXd> svd(M, Eigen::ComputeFullV);
-                Eigen::MatrixXd V = svd.matrixV();
-
-                // Compute Ut (transposed V)
-                Eigen::Matrix<double, 12, 12> Ut = V.transpose();
+                // Perform SVD on M^T * M for 12x12 right singular vectors
+                Eigen::Matrix<double, 12, 12> MtM = M.transpose() * M;
+                Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 12, 12>> es(MtM);
+                // Eigenvectors of SelfAdjointEigenSolver are sorted in increasing eigenvalue order,
+                // while computeL6x10 expects the 4 smallest-singular-value vectors in the last 4 columns.
+                Eigen::Matrix<double, 12, 12> V;
+                for (int c = 0; c < 12; ++c)
+                    V.col(c) = es.eigenvectors().col(11 - c);
 
                 // Compute L6x10 and rho
                 Eigen::Matrix<double, 6, 10> L6x10;
-                computeL6x10(Ut, L6x10);
+                computeL6x10(V, L6x10);
 
                 Eigen::Matrix<double, 6, 1> rho;
                 computeRho(controlPoints, rho);
@@ -336,12 +340,14 @@ namespace superansac
                 Eigen::Matrix<double, 4, 3> cameraControlPoints = Eigen::Matrix<double, 4, 3>::Zero();
                 for (int i = 0; i < 4; ++i)
                 {
-                    Eigen::VectorXd v = Ut.col(11 - i);
+                    Eigen::VectorXd v = V.col(11 - i);
                     for (int j = 0; j < 4; ++j)
                     {
                         cameraControlPoints.row(j) += betas(i) * v.segment<3>(3 * j).transpose();
                     }
                 }
+                if (cameraControlPoints.col(2).mean() < 0.0)
+                    cameraControlPoints = -cameraControlPoints;
 
                 // Estimate rotation and translation
                 Eigen::Matrix3d R;

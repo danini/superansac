@@ -131,7 +131,8 @@ void initializeLocalOptimizer(
             kModelType_ == superansac::models::Types::Homography || 
             kModelType_ == superansac::models::Types::RigidTransformation || 
             kModelType_ == superansac::models::Types::EssentialMatrix ||
-            kModelType_ == superansac::models::Types::FundamentalMatrix)
+            kModelType_ == superansac::models::Types::FundamentalMatrix ||
+            kModelType_ == superansac::models::Types::AbsolutePose)
             irlsLocalOptimizer->setUseInliers(true); 
     } else if (kLocalOptimizationType_ == superansac::local_optimization::LocalOptimizationType::LSQ)
     {
@@ -141,7 +142,8 @@ void initializeLocalOptimizer(
             kModelType_ == superansac::models::Types::Homography ||
             kModelType_ == superansac::models::Types::RigidTransformation ||
             kModelType_ == superansac::models::Types::EssentialMatrix ||
-            kModelType_ == superansac::models::Types::FundamentalMatrix)
+            kModelType_ == superansac::models::Types::FundamentalMatrix ||
+            kModelType_ == superansac::models::Types::AbsolutePose)
             lsqLocalOptimizer->setUseInliers(true);
         // Score-gated re-collect-and-refit rounds for the final polish
         if (kFinalOptimization_)
@@ -208,6 +210,20 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     settings_.inlierThreshold = 
         currentCamera->normalizeThreshold(settings_.inlierThreshold);
 
+    if (settings_.finalRefinementRounds == 0 && !settings_.finalRefinementSchedule)
+    {
+        settings_.finalRefinementRounds = 3;
+        settings_.finalRefinementSchedule = true;
+        settings_.finalPolishTopK = true;
+        settings_.finalRefinementScheduleStart = 2.5;
+        settings_.finalRefinementScheduleEnd = 0.85;
+    }
+    if (kPointProbabilities_.empty() && settings_.sampler == superansac::samplers::SamplerType::PROSAC)
+    {
+        settings_.sampler = superansac::samplers::SamplerType::Uniform;
+        settings_.useSprt = false;
+    }
+
     // Get the values from the settings
     const superansac::scoring::ScoringType kScoring = settings_.scoring;
     const superansac::samplers::SamplerType kSampler = settings_.sampler;
@@ -221,8 +237,11 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
         std::unique_ptr<superansac::estimator::AbsolutePoseEstimator>(new superansac::estimator::AbsolutePoseEstimator());
     estimator->setMinimalSolver(new superansac::estimator::solver::P3PLambdaTwistSolver());
     estimator->setNonMinimalSolver(new superansac::estimator::solver::PnPBundleAdjustmentSolver());
-    dynamic_cast<superansac::estimator::solver::PnPBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver())->setCamera(onlyScaledCamera.get());
-    auto &solverOptions = dynamic_cast<superansac::estimator::solver::PnPBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver())->getMutableOptions();
+    auto *pnpNonMinimalSolver = dynamic_cast<superansac::estimator::solver::PnPBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver());
+    pnpNonMinimalSolver->setCamera(onlyScaledCamera.get());
+    if (!kPointProbabilities_.empty())
+        pnpNonMinimalSolver->setWeights(&kPointProbabilities_);
+    auto &solverOptions = pnpNonMinimalSolver->getMutableOptions();
     solverOptions.loss_type = poselib::BundleOptions::LossType::TRUNCATED;
     solverOptions.loss_scale = settings_.inlierThreshold;
     solverOptions.max_iterations = 25;
@@ -358,20 +377,111 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     // Run the robust estimator
     robustEstimator.run(normalizedCorrespondences);
 
-    // Check if the model is valid
-    if (robustEstimator.getInliers().size() < estimator->sampleSize())
-        return std::make_tuple(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero(), std::vector<size_t>(), 0.0, robustEstimator.getIterationNumber());
+    superansac::models::Model bestModel = robustEstimator.getBestModel();
+    superansac::scoring::Score bestScore = robustEstimator.getBestScore();
+    std::vector<size_t> finalInliers = robustEstimator.getInliers();
+    size_t totalIterations = robustEstimator.getIterationNumber();
 
-    // Get the normalized fundamental matrix
-    Eigen::Matrix3d rotation = robustEstimator.getBestModel().getData().block<3, 3>(0, 0).eval();
-    Eigen::Vector3d translation = robustEstimator.getBestModel().getData().block<3, 1>(0, 3).eval();
+    const size_t kAbsFallbackLimit = std::max<size_t>(
+        45, static_cast<size_t>(0.25 * kCorrespondences_.rows()));
+    if (kSampler == superansac::samplers::SamplerType::PROSAC &&
+        finalInliers.size() < kAbsFallbackLimit &&
+        static_cast<size_t>(kCorrespondences_.rows()) > 18)
+    {
+        std::unique_ptr<superansac::samplers::AbstractSampler> unifSampler =
+            superansac::samplers::createSampler<5>(superansac::samplers::SamplerType::Uniform);
+        unifSampler->initialize(kCorrespondences_);
+
+        std::unique_ptr<superansac::scoring::AbstractScoring> unifScorer =
+            superansac::scoring::createScoring<5>(kScoring, false);
+        unifScorer->setThreshold(settings_.inlierThreshold);
+        if (kScoring == superansac::scoring::ScoringType::MAGSAC)
+            dynamic_cast<superansac::scoring::MAGSACScoring *>(unifScorer.get())->initialize(estimator.get());
+
+        std::vector<size_t> tmpUnifInliers;
+        if (finalInliers.size() >= estimator->sampleSize())
+            bestScore = unifScorer->score(normalizedCorrespondences, bestModel, estimator.get(), tmpUnifInliers);
+
+        superansac::RANSACSettings unifSettings = settings_;
+        unifSettings.useSprt = false;
+
+        std::unique_ptr<superansac::termination::AbstractCriterion> unifTermination =
+            superansac::termination::createTerminationCriterion(kTerminationCriterion);
+        if (kTerminationCriterion == superansac::termination::TerminationType::RANSAC)
+            dynamic_cast<superansac::termination::RANSACCriterion *>(unifTermination.get())->setConfidence(unifSettings.confidence);
+
+        superansac::SupeRansac unifEstimator;
+        unifEstimator.setEstimator(estimator.get());
+        unifEstimator.setSampler(unifSampler.get());
+        unifEstimator.setScoring(unifScorer.get());
+        unifEstimator.setTerminationCriterion(unifTermination.get());
+        if (localOptimizer != nullptr)
+            unifEstimator.setLocalOptimizer(localOptimizer.get());
+        if (finalOptimizer != nullptr)
+            unifEstimator.setFinalOptimizer(finalOptimizer.get());
+        unifEstimator.setSettings(unifSettings);
+        unifEstimator.run(normalizedCorrespondences);
+        totalIterations += unifEstimator.getIterationNumber();
+
+        if (unifEstimator.getInliers().size() >= estimator->sampleSize() &&
+            unifEstimator.getBestScore() > bestScore)
+        {
+            bestModel = unifEstimator.getBestModel();
+            bestScore = unifEstimator.getBestScore();
+            finalInliers = unifEstimator.getInliers();
+        }
+    }
+
+    // Check if the model is valid
+    if (finalInliers.size() < estimator->sampleSize())
+        return std::make_tuple(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero(), std::vector<size_t>(), 0.0, totalIterations);
+
+    // Final unweighted consensus bundle polish so noisy prior probabilities do not skew the final pose
+    pnpNonMinimalSolver->setWeights(nullptr);
+    if (finalInliers.size() >= 4)
+    {
+        const int kRows = normalizedCorrespondences.rows();
+        const int kCols = normalizedCorrespondences.cols();
+        for (const double kMult : {1.0, 0.80})
+        {
+            const double kSqTh = (kMult * settings_.inlierThreshold) * (kMult * settings_.inlierThreshold);
+            std::vector<size_t> polishInl;
+            polishInl.reserve(finalInliers.size() + 16);
+            const double *rPtr = normalizedCorrespondences.data();
+            for (int rIdx = 0; rIdx < kRows; ++rIdx, rPtr += kCols)
+            {
+                if (estimator->squaredResidual(rPtr, bestModel) < kSqTh)
+                    polishInl.push_back(static_cast<size_t>(rIdx));
+            }
+            if (polishInl.size() >= (kMult < 1.0 ? 8 : 4))
+            {
+                std::vector<superansac::models::Model> polishedModels;
+                polishedModels.push_back(bestModel);
+                if (estimator->estimateModelNonminimal(
+                    normalizedCorrespondences,
+                    polishInl.data(),
+                    polishInl.size(),
+                    &polishedModels,
+                    nullptr) && !polishedModels.empty() && polishedModels.back().getData().allFinite())
+                {
+                    bestModel = polishedModels.back();
+                    if (kMult >= 1.0)
+                        finalInliers.swap(polishInl);
+                }
+            }
+        }
+    }
+
+    // Get the estimated rotation and translation
+    Eigen::Matrix3d rotation = bestModel.getData().block<3, 3>(0, 0).eval();
+    Eigen::Vector3d translation = bestModel.getData().block<3, 1>(0, 3).eval();
 
     // Return the best model with the inliers and the score
     return std::make_tuple(rotation, 
         translation,
-        robustEstimator.getInliers(), 
-        robustEstimator.getBestScore().getValue(), 
-        robustEstimator.getIterationNumber());
+        finalInliers, 
+        bestScore.getValue(), 
+        totalIterations);
 }
 
 std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTransform(
@@ -1122,7 +1232,8 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
         std::vector<superansac::models::Model> hModels;
         std::vector<size_t> bestHInliers;
         Eigen::Matrix3d bestHMat = Eigen::Matrix3d::Identity();
-        for (size_t hIter = 0; hIter < 200; ++hIter)
+        const size_t kMaxHIters = std::min<size_t>(200, std::max<size_t>(5, settings_.maxIterations / 5));
+        for (size_t hIter = 0; hIter < kMaxHIters; ++hIter)
         {
             ppRng.generateUniqueRandomSet(hSample, 4, finalInliers.size() - 1);
             for (size_t sIdx = 0; sIdx < 4; ++sIdx)
@@ -1200,12 +1311,13 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
                     std::vector<size_t> ppInliers;
                     ppInliers.reserve(kTotalPts);
                     bool updatedPP = false;
-                    for (size_t ppIter = 0; ppIter < 250; ++ppIter)
+                    const size_t kMaxPPIters = std::min<size_t>(250, std::max<size_t>(5, settings_.maxIterations / 4));
+                    for (size_t ppIter = 0; ppIter < kMaxPPIters; ++ppIter)
                     {
                         const size_t topK = std::min(
                             offPlanePool.size(),
                             std::max<size_t>(15, static_cast<size_t>(
-                                offPlanePool.size() * (static_cast<double>(ppIter + 1) / 250.0))));
+                                offPlanePool.size() * (static_cast<double>(ppIter + 1) / static_cast<double>(kMaxPPIters)))));
                         ppRng.generateUniqueRandomSet(ppSample, 2, topK - 1);
                         ppSample[0] = offPlanePool[ppSample[0]];
                         ppSample[1] = offPlanePool[ppSample[1]];
@@ -1283,8 +1395,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
                 bool haveCleanF = false;
                 size_t ppSample[2];
                 std::vector<superansac::models::Model> ppModels;
+                const size_t kMaxCIters = std::min<size_t>(150, std::max<size_t>(5, settings_.maxIterations / 6));
 
-                for (size_t cIter = 0; cIter < 150; ++cIter)
+                for (size_t cIter = 0; cIter < kMaxCIters; ++cIter)
                 {
                     ppRng.generateUniqueRandomSet(ppSample, 2, offPlaneInl.size() - 1);
                     ppSample[0] = offPlaneInl[ppSample[0]];
@@ -1403,7 +1516,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
 
                 if (scCurr < 5.5)
                 {
-                    const size_t kTopPool = std::min<size_t>(45, offAll.size());
+                    const size_t kTopPool = std::min<size_t>(
+                        std::min<size_t>(45, std::max<size_t>(8, settings_.maxIterations / 20)),
+                        offAll.size());
                     double bestSc = std::max(4.8, scCurr * 1.22);
                     superansac::models::Model bestPPModel;
                     bool foundBetterPP = false;
@@ -2034,7 +2149,8 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
         for (const int poolRows : kPoolSizes)
         {
             unifSampler->initialize(kCorrespondences_.topRows(poolRows));
-            unifSettings.minIterations = (poolRows == 80 && kTotalRows > 80) ? 1500 : 2500;
+            const size_t kTargetIters = (poolRows == 80 && kTotalRows > 80) ? 1500 : 2500;
+            unifSettings.minIterations = std::min<size_t>(settings_.maxIterations, kTargetIters);
             unifSettings.maxIterations = unifSettings.minIterations;
 
             std::unique_ptr<superansac::termination::AbstractCriterion> unifTermination =

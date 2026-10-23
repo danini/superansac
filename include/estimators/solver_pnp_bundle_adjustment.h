@@ -39,6 +39,7 @@
 #include "../utils/types.h"
 #include "../camera/types.h"
 #include "solver_epnp.h"
+#include "solver_p3p_lambda_twist.h"
 
 #include "numerical_optimizer/bundle.h"
 #include "numerical_optimizer/camera_pose.h"
@@ -56,6 +57,7 @@ namespace superansac
 			protected:
 				poselib::BundleOptions options;
 				superansac::camera::AbstractCamera *camera;
+				const std::vector<double> *pointWeights = nullptr;
 				const EPnPSolver epnpSolver;
 
 			public:
@@ -65,6 +67,11 @@ namespace superansac
 
 				~PnPBundleAdjustmentSolver()
 				{
+				}
+
+				void setWeights(const std::vector<double> *kWeights_)
+				{
+					pointWeights = kWeights_;
 				}
 
 				// Determines if there is a chance of returning multiple models
@@ -127,9 +134,15 @@ namespace superansac
 				// overwritten below.
 				static thread_local std::vector<Eigen::Vector2d> points2d;
 				static thread_local std::vector<Eigen::Vector3d> points3d;
+				static thread_local std::vector<double> weights;
 				std::vector<Eigen::Vector2d> unnormalizedPoint2d;
 				points2d.resize(kSampleNumber_);
 				points3d.resize(kSampleNumber_);
+				weights.clear();
+				const bool useArgWeights = kWeights_ != nullptr;
+				const bool useMemberWeights = !useArgWeights && pointWeights != nullptr;
+				if (useArgWeights || useMemberWeights)
+					weights.resize(kSampleNumber_);
 
 				// Filling the point correspondences if the sample is not provided
 				if (kSample_ == nullptr)
@@ -139,6 +152,10 @@ namespace superansac
 					{
 						points2d[pointIdx] = Eigen::Vector2d(kData_(pointIdx, 0), kData_(pointIdx, 1));
 						points3d[pointIdx] = Eigen::Vector3d(kData_(pointIdx, 2), kData_(pointIdx, 3), kData_(pointIdx, 4));
+						if (useArgWeights)
+							weights[pointIdx] = kWeights_[pointIdx];
+						else if (useMemberWeights)
+							weights[pointIdx] = (*pointWeights)[pointIdx];
 					}
 				} else // Filling the point correspondences if the sample is provided
 				{
@@ -147,26 +164,69 @@ namespace superansac
 						const size_t& idx = kSample_[pointIdx];
 						points2d[pointIdx] = Eigen::Vector2d(kData_(idx, 0), kData_(idx, 1));
 						points3d[pointIdx] = Eigen::Vector3d(kData_(idx, 2), kData_(idx, 3), kData_(idx, 4));
+						if (useArgWeights)
+							weights[pointIdx] = kWeights_[pointIdx];
+						else if (useMemberWeights)
+							weights[pointIdx] = (*pointWeights)[idx];
 					}
 				}
 				
-				if (models_.size() == 0)
 				{
-					/*P3PLambdaTwistSolver p3pSolver;
-					samplers::UniformRandomSampler sampler;
-					sampler.initialize(kSampleNumber_);
-					size_t localSample[3];
-
-					for (size_t iter = 0; iter < 10; ++iter)
-					{
-						sampler.sample(kSampleNumber_, 3, localSample);
-						localSample[0] = kSample_[localSample[0]];
-						localSample[1] = kSample_[localSample[1]];
-						localSample[2] = kSample_[localSample[2]];
-						p3pSolver.estimateModel(kData_, localSample, 3, models_);
-					}*/
-
 					epnpSolver.estimateModel(kData_, kSample_, kSampleNumber_, models_);
+
+					P3PLambdaTwistSolver p3pSolver;
+					std::vector<models::Model> p3pCands;
+					const size_t kStep = std::max<size_t>(1, kSampleNumber_ / 3);
+					const size_t kMaxTrials = std::min<size_t>(12, kSampleNumber_);
+					for (size_t t = 0; t < kMaxTrials; ++t)
+					{
+						const size_t i0 = t % kSampleNumber_;
+						const size_t i1 = (t + kStep) % kSampleNumber_;
+						const size_t i2 = (t + 2 * kStep) % kSampleNumber_;
+						if (i0 == i1 || i0 == i2 || i1 == i2)
+							continue;
+						size_t localSample[3] = {
+							kSample_ == nullptr ? i0 : kSample_[i0],
+							kSample_ == nullptr ? i1 : kSample_[i1],
+							kSample_ == nullptr ? i2 : kSample_[i2]
+						};
+						p3pSolver.estimateModel(kData_, localSample, 3, p3pCands);
+					}
+					if (!p3pCands.empty())
+					{
+						const double kSqTh = std::max(1e-8, 4.0 * options.loss_scale * options.loss_scale);
+						double bestInitCost = std::numeric_limits<double>::max();
+						size_t bestIdx = 0;
+						for (size_t cIdx = 0; cIdx < p3pCands.size(); ++cIdx)
+						{
+							const auto &m = p3pCands[cIdx].getData();
+							if (!m.allFinite())
+								continue;
+							const Eigen::Matrix3d Rc = m.block<3, 3>(0, 0);
+							const Eigen::Vector3d tc = m.block<3, 1>(0, 3);
+							double cost = 0.0;
+							for (size_t pIdx = 0; pIdx < kSampleNumber_; ++pIdx)
+							{
+								const Eigen::Vector3d Xc = Rc * points3d[pIdx] + tc;
+								if (Xc(2) <= 1e-6)
+								{
+									cost += kSqTh;
+									continue;
+								}
+								const double du = Xc(0) / Xc(2) - points2d[pIdx](0);
+								const double dv = Xc(1) / Xc(2) - points2d[pIdx](1);
+								const double sq = du * du + dv * dv;
+								cost += std::min(sq, kSqTh);
+							}
+							if (cost < bestInitCost)
+							{
+								bestInitCost = cost;
+								bestIdx = cIdx;
+							}
+						}
+						if (bestInitCost < std::numeric_limits<double>::max())
+							models_.push_back(p3pCands[bestIdx]);
+					}
 
 					if (models_.size() == 0)
 						return false;
@@ -177,16 +237,9 @@ namespace superansac
 				// If the sample is provided, we use a more robust loss function. This typically runs in the end of the robust estimation
 				if (kSample_ != nullptr) 
 				{
-					tmpOptions.loss_scale = 1.0 * options.loss_scale;
-					//tmpOptions.loss_scale = 0.5 * options.loss_scale;
+					tmpOptions.loss_scale = 0.5 * options.loss_scale;
 					tmpOptions.max_iterations = 100;
 					tmpOptions.loss_type = poselib::BundleOptions::LossType::CAUCHY;
-				
-					/*// Unnormalize the points by the focal length to numerical stability
-					camera->fromImageToPixelCoordinates(points2d, unnormalizedPoint2d);
-
-					// Unnormalize the threshold
-					tmpOptions.loss_scale = camera->unnormalizeThreshold(tmpOptions.loss_scale);*/
 				}
 				
 				// The pose with the lowest cost
@@ -205,7 +258,7 @@ namespace superansac
 					
 					// Perform the bundle adjustment
 					poselib::BundleStats stats =
-						poselib::bundle_adjust(points2d, points3d, &pose, tmpOptions);
+						poselib::bundle_adjust(points2d, points3d, &pose, tmpOptions, weights);
 					/*else
 					{
 						poselib::Camera dummyCamera;
