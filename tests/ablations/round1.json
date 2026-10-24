@@ -1,0 +1,10 @@
+{
+  "base": {},
+  "fb1": {"final_bundle_rounds": 1},
+  "fb2": {"final_bundle_rounds": 2},
+  "fb2_ls1": {"final_bundle_rounds": 2, "final_bundle_loss_scale": 1.0},
+  "fb2_nw": {"final_bundle_rounds": 2, "nonminimal_confidence_weights": false},
+  "nodeg": {"degensac_settings.enabled": false},
+  "fb2_nodeg": {"final_bundle_rounds": 2, "degensac_settings.enabled": false}
+}
+

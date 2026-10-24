@@ -1,0 +1,11 @@
+{
+  "fb2": {"final_bundle_rounds": 2},
+  "fb2_nofallback": {"final_bundle_rounds": 2, "low_inlier_uniform_fallback": false},
+  "fb2_msac": {"final_bundle_rounds": 2, "scoring": "MSAC"},
+  "fb2_uniform": {"final_bundle_rounds": 2, "sampler": "Uniform"},
+  "fb2_nodeg": {"final_bundle_rounds": 2, "degensac_settings.enabled": false},
+  "fb2_lo_irls": {"final_bundle_rounds": 2, "local_optimization": "IRLS"},
+  "fb2_k10": {"final_bundle_rounds": 2, "local_opt_k": 10},
+  "fb2_20k": {"final_bundle_rounds": 2, "max_iterations": 20000, "min_iterations": 20000}
+}
+

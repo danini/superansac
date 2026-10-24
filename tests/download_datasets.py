@@ -193,6 +193,8 @@ def setup_hpatches(data_dir):
     urls = [
         "http://icvl.ee.ic.ac.uk/vbalnt/hpatches/hpatches-sequences-release.tar.gz",
         "https://huggingface.co/datasets/vbalnt/hpatches/resolve/main/hpatches-sequences-release.tar.gz",
+        "https://huggingface.co/datasets/Parskatt/hpatches/resolve/main/hpatches-sequences-release.tar.gz",
+        "https://cmp.felk.cvut.cz/~mishkdmy/hpatches-sequences-release.tar.gz",
     ]
     if not any(download_url(u, tar_path) for u in urls):
         print("[hpatches] Optional dataset not reachable from this machine -- skipping (homography track uses Homogr + EVD).")
@@ -207,6 +209,39 @@ def setup_hpatches(data_dir):
         os.rmdir(nested)
     os.remove(tar_path)
     print("[hpatches] Ready at", hp_dir)
+
+
+OXFORD_AFFINE_SEQUENCES = ["bark", "bikes", "boat", "graf", "leuven", "trees", "ubc", "wall"]
+
+
+def setup_oxford_affine(data_dir):
+    """Oxford affine-covariant sequences (Mikolajczyk et al.): 8 sequences x 5 pairs with GT homographies."""
+    import tarfile
+
+    ox_dir = os.path.join(data_dir, "oxford_affine")
+    os.makedirs(ox_dir, exist_ok=True)
+    for seq in OXFORD_AFFINE_SEQUENCES:
+        seq_dir = os.path.join(ox_dir, seq)
+        if os.path.exists(os.path.join(seq_dir, "H1to2p")) and os.path.exists(os.path.join(seq_dir, "img1.ppm")):
+            print(f"[oxford_affine:{seq}] Already present")
+            continue
+        tar_path = os.path.join(ox_dir, f"{seq}.tar.gz")
+        url = f"https://www.robots.ox.ac.uk/~vgg/research/affine/det_eval_files/{seq}.tar.gz"
+        if not download_url(url, tar_path):
+            print(f"[oxford_affine:{seq}] Warning: could not download {url}")
+            continue
+        os.makedirs(seq_dir, exist_ok=True)
+        with tarfile.open(tar_path, "r:gz") as tf:
+            tf.extractall(seq_dir)
+        os.remove(tar_path)
+        # Some archives nest a directory; flatten it.
+        for item in os.listdir(seq_dir):
+            sub = os.path.join(seq_dir, item)
+            if os.path.isdir(sub) and os.path.exists(os.path.join(sub, "H1to2p")):
+                for f in os.listdir(sub):
+                    shutil.move(os.path.join(sub, f), os.path.join(seq_dir, f))
+                os.rmdir(sub)
+    print("[oxford_affine] Ready at", ox_dir)
 
 
 def verify_6d_examples():
@@ -239,14 +274,14 @@ def main():
         dest="datasets",
         nargs="+",
         default=["all"],
-        choices=["all", "magsac_data", "phototourism", "eth3d", "7scenes", "hpatches"],
+        choices=["all", "magsac_data", "phototourism", "eth3d", "7scenes", "hpatches", "oxford_affine"],
         help="Which datasets to download.",
     )
     args = parser.parse_args()
     os.makedirs(args.data_dir, exist_ok=True)
     selected = set(args.datasets)
     if "all" in selected:
-        selected = {"magsac_data", "phototourism", "eth3d", "7scenes", "hpatches"}
+        selected = {"magsac_data", "phototourism", "eth3d", "7scenes", "hpatches", "oxford_affine"}
 
     if "magsac_data" in selected:
         setup_magsac_data(args.data_dir)
@@ -258,6 +293,8 @@ def main():
         setup_7scenes(args.data_dir)
     if "hpatches" in selected:
         setup_hpatches(args.data_dir)
+    if "oxford_affine" in selected:
+        setup_oxford_affine(args.data_dir)
     verify_6d_examples()
 
 

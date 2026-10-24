@@ -1,0 +1,10 @@
+{
+  "fb2": {"final_bundle_rounds": 2},
+  "fb2_loin": {"final_bundle_rounds": 2, "local_optimization_inside_the_loop": true},
+  "fb2_loin_c4": {"final_bundle_rounds": 2, "local_optimization_inside_the_loop": true, "confidence": 0.9999},
+  "fb2_loin_k5": {"final_bundle_rounds": 2, "local_optimization_inside_the_loop": true, "local_opt_k": 5},
+  "fb2_loin_gc": {"final_bundle_rounds": 2, "local_optimization_inside_the_loop": true, "local_optimization": "GCRANSAC"},
+  "fb2_msac": {"final_bundle_rounds": 2, "scoring": "MSAC"},
+  "fb2_loin_nosprt": {"final_bundle_rounds": 2, "local_optimization_inside_the_loop": true, "use_sprt": false}
+}
+

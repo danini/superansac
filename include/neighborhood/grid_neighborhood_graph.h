@@ -212,20 +212,18 @@ namespace neighborhood {
         {
             for (size_t dimensionIdx = 0; dimensionIdx < _DimensionNumber; ++dimensionIdx) 
             {
-                // Get the current value of the point along the current axis
-                const double value = (*kContainer_)(row, dimensionIdx);
-
-                if (value < 0)
-                    throw std::runtime_error("The grid neighborhood structure does not support negative values.");
+                // Get the current value of the point along the current axis.
+                // Points slightly outside the nominal bounding box (keypoints detected on
+                // resized/padded images, sub-pixel refinement past the border) are clamped
+                // into the border cells rather than rejected.
+                const double value = std::max(0.0, (*kContainer_)(row, dimensionIdx));
 
                 // The index of the cell along the current axis
                 indices[dimensionIdx] =
                     static_cast<size_t>(std::floor(value / cellSizes[dimensionIdx]));
 
-                if (indices[dimensionIdx] == cellNumberAlongAllAxes)
+                if (indices[dimensionIdx] >= cellNumberAlongAllAxes)
                     indices[dimensionIdx] = cellNumberAlongAllAxes - 1;
-                else if (indices[dimensionIdx] > cellNumberAlongAllAxes)
-                    throw std::runtime_error("The grid neighborhood structure does not support values larger than the bounding box.");
             }
 
             // Constructing the cell structure which is used in the HashMap.

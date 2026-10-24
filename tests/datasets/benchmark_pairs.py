@@ -44,12 +44,19 @@ from datasets.features import (  # noqa: F401  (re-exported for the test scripts
 
 PAIRS_DIR = os.path.join(TESTS_DIR, "datasets", "pairs")
 CALIBRATED_PAIRS_FILE = os.path.join(PAIRS_DIR, "calibrated_pairs.json")
+CALIBRATED_DEV_PAIRS_FILE = os.path.join(PAIRS_DIR, "calibrated_pairs_dev.json")
 
 # Target composition of the frozen calibrated pair list (300 pairs).
 CALIBRATED_TARGETS = {
     "PhotoTourism": {"palace_of_westminster": 100},
     "ETH3D": {"courtyard": 20, "electro": 15, "facade": 20, "kicker": 15, "playground": 10, "relief": 15, "terrace": 5},
     "7Scenes": {"chess": 40, "fire": 40, "heads": 20},
+}
+# Development split used for tuning only (disjoint from the test list above, seed 1, 150 pairs).
+CALIBRATED_DEV_TARGETS = {
+    "PhotoTourism": {"palace_of_westminster": 50},
+    "ETH3D": {"courtyard": 10, "electro": 7, "facade": 10, "kicker": 8, "playground": 5, "relief": 7, "terrace": 3},
+    "7Scenes": {"chess": 20, "fire": 20, "heads": 10},
 }
 
 
@@ -169,41 +176,46 @@ def _materialize_calibrated_pair(dataset, key, entry):
     }
 
 
-def _generate_calibrated_pair_list(index, seed=0):
-    """Deterministically pick the frozen pair list from what is available."""
+def _generate_calibrated_pair_list(index, targets, seed=0, exclude=()):
+    """Deterministically pick a frozen pair list from what is available (optionally excluding keys)."""
     rng = np.random.default_rng(seed)
+    excluded = {(e["dataset"], e["key"]) for e in exclude}
     chosen = []
-    for dataset, per_scene in CALIBRATED_TARGETS.items():
-        keys = sorted(index[dataset].keys())
+    for dataset, per_scene in targets.items():
+        keys = sorted(k for k in index[dataset].keys() if (dataset, k) not in excluded)
         for scene, n in per_scene.items():
             scene_keys = [k for k in keys if k.split("|")[0] == scene]
-            if dataset == "7Scenes":
-                # Pairs are 50 frames apart within a sequence; sample uniformly over all sequences.
-                pass
             if not scene_keys:
                 print(f"[pairs] WARNING: no pairs available for {dataset}/{scene}")
                 continue
-            if dataset == "PhotoTourism":
-                # Only keep pairs with a non-degenerate baseline (|t| > 0) and both images readable.
-                scene_keys = [k for k in scene_keys]
             take = min(n, len(scene_keys))
             sel = rng.choice(len(scene_keys), size=take, replace=False)
             chosen.extend({"dataset": dataset, "key": scene_keys[i]} for i in sorted(sel))
     return chosen
 
 
-def load_calibrated_pairs(data_dir=DEFAULT_DATA_DIR, pairs_file=CALIBRATED_PAIRS_FILE, verbose=True):
-    """Return the frozen list of calibrated pairs (PhotoTourism, ETH3D, 7Scenes)."""
+def load_calibrated_pairs(data_dir=DEFAULT_DATA_DIR, split="test", verbose=True):
+    """Return the frozen list of calibrated pairs (PhotoTourism, ETH3D, 7Scenes).
+
+    split="test" -> tests/datasets/pairs/calibrated_pairs.json (300 pairs, used for all reported numbers)
+    split="dev"  -> tests/datasets/pairs/calibrated_pairs_dev.json (150 disjoint pairs, used for tuning only)
+    """
     index = _calibrated_index(data_dir)
+    pairs_file = CALIBRATED_PAIRS_FILE if split == "test" else CALIBRATED_DEV_PAIRS_FILE
     if os.path.exists(pairs_file):
         with open(pairs_file, "r") as f:
             wanted = json.load(f)
     else:
-        wanted = _generate_calibrated_pair_list(index)
+        if split == "test":
+            wanted = _generate_calibrated_pair_list(index, CALIBRATED_TARGETS, seed=0)
+        else:
+            with open(CALIBRATED_PAIRS_FILE, "r") as f:
+                test_keys = json.load(f)
+            wanted = _generate_calibrated_pair_list(index, CALIBRATED_DEV_TARGETS, seed=1, exclude=test_keys)
         os.makedirs(os.path.dirname(pairs_file), exist_ok=True)
         with open(pairs_file, "w") as f:
             json.dump(wanted, f, indent=1)
-        print(f"[pairs] Wrote frozen calibrated pair list with {len(wanted)} pairs to {pairs_file}")
+        print(f"[pairs] Wrote frozen {split} pair list with {len(wanted)} pairs to {pairs_file}")
 
     pairs, missing = [], {}
     for w in wanted:
@@ -215,7 +227,6 @@ def load_calibrated_pairs(data_dir=DEFAULT_DATA_DIR, pairs_file=CALIBRATED_PAIRS
         if p is None:
             missing[w["dataset"]] = missing.get(w["dataset"], 0) + 1
             continue
-        # Skip pairs with (numerically) zero baseline: the epipolar geometry is undefined.
         if np.linalg.norm(p["t"]) < 1e-6:
             continue
         pairs.append(p)
@@ -223,7 +234,7 @@ def load_calibrated_pairs(data_dir=DEFAULT_DATA_DIR, pairs_file=CALIBRATED_PAIRS
         counts = {}
         for p in pairs:
             counts[p["dataset"]] = counts.get(p["dataset"], 0) + 1
-        print(f"[pairs] Calibrated pairs loaded: {counts} (total {len(pairs)})")
+        print(f"[pairs] Calibrated {split} pairs loaded: {counts} (total {len(pairs)})")
         if missing:
             print(f"[pairs] WARNING: {missing} frozen pairs are missing on disk -- run tests/download_datasets.py")
     return pairs
@@ -309,6 +320,31 @@ def load_planar_pairs(data_dir=DEFAULT_DATA_DIR, verbose=True):
                 corners = np.array([[0, 0], [hw1[1], 0], [hw1[1], hw1[0]], [0, hw1[0]]], dtype=np.float64)
                 pairs.append({
                     "dataset": "HPatches", "scene": f"{seq}_1_{k}", "cache_key": f"hp|{seq}|1|{k}",
+                    "im1": im1_p, "im2": im2_p,
+                    "h1": hw1[0], "w1": hw1[1], "h2": hw2[0], "w2": hw2[1],
+                    "K1": None, "K2": None, "R": None, "t": None, "E_gt": None, "F_gt": None,
+                    "H_gt": H_gt, "gt_inliers": np.hstack([corners, corners]),
+                })
+    # Oxford affine-covariant sequences: img1..img6.ppm, H1to{k}p
+    ox_dir = os.path.join(data_dir, "oxford_affine")
+    if os.path.isdir(ox_dir):
+        for seq_dir in sorted(glob.glob(os.path.join(ox_dir, "*"))):
+            seq = os.path.basename(seq_dir)
+            im1_p = os.path.join(seq_dir, "img1.ppm")
+            if not os.path.exists(im1_p):
+                continue
+            hw1 = _image_hw(im1_p)
+            for k in range(2, 7):
+                im2_p = os.path.join(seq_dir, f"img{k}.ppm")
+                h_p = os.path.join(seq_dir, f"H1to{k}p")
+                if not (os.path.exists(im2_p) and os.path.exists(h_p)):
+                    continue
+                hw2 = _image_hw(im2_p)
+                H_gt = np.loadtxt(h_p, dtype=np.float64)
+                H_gt /= H_gt[2, 2]
+                corners = np.array([[0, 0], [hw1[1], 0], [hw1[1], hw1[0]], [0, hw1[0]]], dtype=np.float64)
+                pairs.append({
+                    "dataset": "OxfordAffine", "scene": f"{seq}_1_{k}", "cache_key": f"ox|{seq}|1|{k}",
                     "im1": im1_p, "im2": im2_p,
                     "h1": hw1[0], "w1": hw1[1], "h2": hw2[0], "w2": hw2[1],
                     "K1": None, "K2": None, "R": None, "t": None, "E_gt": None, "F_gt": None,

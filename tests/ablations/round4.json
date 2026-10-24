@@ -1,0 +1,8 @@
+{
+  "fb4": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0},
+  "fb4_loin5k": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0, "local_optimization_inside_the_loop": true, "min_iterations": 5000},
+  "fb4_loin5k_lsq": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0, "local_optimization_inside_the_loop": true, "min_iterations": 5000, "local_optimization": "IteratedLSQ"},
+  "fb4_k10": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0, "local_opt_k": 10},
+  "fb4_msac": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0, "scoring": "MSAC"},
+  "fb4_msac_k10": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0, "scoring": "MSAC", "local_opt_k": 10}
+}

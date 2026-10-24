@@ -1,0 +1,8 @@
+{
+  "fb2": {"final_bundle_rounds": 2},
+  "fb3_s2": {"final_bundle_rounds": 3, "final_bundle_schedule_start": 2.0},
+  "fb3_s3": {"final_bundle_rounds": 3, "final_bundle_schedule_start": 3.0},
+  "fb4_s4": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 4.0},
+  "fb4_s3_ls1": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0},
+  "fb5_s6": {"final_bundle_rounds": 5, "final_bundle_schedule_start": 6.0}
+}

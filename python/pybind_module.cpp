@@ -26,13 +26,13 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     const DataMatrix& kCorrespondences_, // The point correspondences
     const std::vector<double>& kPointProbabilities_, // The probabilities of the points being inliers
     const std::vector<double>& kImageSizes_, // Image sizes (height source, width source, height destination, width destination)
-    superansac::RANSACSettings& settings_); // The RANSAC settings
+    const superansac::RANSACSettings& settings_); // The RANSAC settings
 
 std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundamentalMatrix(
     const DataMatrix& kCorrespondences_, // The point correspondences
     const std::vector<double>& kPointProbabilities_, // The probabilities of the points being inliers
     const std::vector<double>& kImageSizes_, // Image sizes (height source, width source, height destination, width destination)
-    superansac::RANSACSettings& settings_); // The RANSAC settings
+    const superansac::RANSACSettings& settings_); // The RANSAC settings
 
 std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssentialMatrix(
     const DataMatrix& kCorrespondences_, // The point correspondences
@@ -40,13 +40,13 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     const Eigen::Matrix3d& kIntrinsicsDestination_, // The intrinsic matrix of the destination camera
     const std::vector<double>& kPointProbabilities_, // The probabilities of the points being inliers
     const std::vector<double>& kImageSizes_, // Image sizes (width source, height source, width destination, height destination)
-    superansac::RANSACSettings& settings_); // The RANSAC settings
+    const superansac::RANSACSettings& settings_); // The RANSAC settings
 
 std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTransform(
     const DataMatrix& kCorrespondences_, // The 3D-3D point correspondences
     const std::vector<double>& kBoundingBoxSizes_, // Bounding box sizes (x1, y1, z1, x2, y2, z2)
     const std::vector<double>& kPointProbabilities_, // The probabilities of the points being inliers
-    superansac::RANSACSettings& settings_); // The RANSAC settings
+    const superansac::RANSACSettings& settings_); // The RANSAC settings
 
 std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t> estimateAbsolutePose(
     const DataMatrix& kCorrespondences_, // The 2D-3D point correspondences
@@ -54,7 +54,7 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     const std::vector<double>& kCameraParams_, // The camera parameters
     const std::vector<double>& kBoundingBox_, // The bounding box dimensions (image width, image height, X, Y, Z)
     const std::vector<double>& kPointProbabilities_, // The probabilities of the points being inliers
-    superansac::RANSACSettings& settings_); // The RANSAC settings
+    const superansac::RANSACSettings& settings_); // The RANSAC settings
 
 // Validate that a buffer is a 2D array.
 static inline void require_2d(const py::buffer_info& b, const char* name) {
@@ -172,7 +172,10 @@ PYBIND11_MODULE(pysuperansac, m) {
         .def_readwrite("max_iterations", &superansac::LocalOptimizationSettings::maxIterations)
         .def_readwrite("graph_cut_number", &superansac::LocalOptimizationSettings::graphCutNumber)
         .def_readwrite("sample_size_multiplier", &superansac::LocalOptimizationSettings::sampleSizeMultiplier)
-        .def_readwrite("spatial_coherence_weight", &superansac::LocalOptimizationSettings::spatialCoherenceWeight);
+        .def_readwrite("spatial_coherence_weight", &superansac::LocalOptimizationSettings::spatialCoherenceWeight)
+        .def_readwrite("refinement_rounds", &superansac::LocalOptimizationSettings::refinementRounds)
+        .def_readwrite("schedule_start", &superansac::LocalOptimizationSettings::scheduleStart)
+        .def_readwrite("schedule_end", &superansac::LocalOptimizationSettings::scheduleEnd);
 
     py::class_<superansac::NeighborhoodSettings>(m, "NeighborhoodSettings")
         .def(py::init<>())
@@ -218,6 +221,15 @@ PYBIND11_MODULE(pysuperansac, m) {
         .def_readwrite("essential_cheirality_point_number", &superansac::RANSACSettings::essentialCheiralityPointNumber)
         .def_readwrite("homography_bundle_refinement", &superansac::RANSACSettings::homographyBundleRefinement)
         .def_readwrite("fundamental_plane_parallax_post_refinement", &superansac::RANSACSettings::fundamentalPlaneParallaxPostRefinement)
+        .def_readwrite("final_bundle_rounds", &superansac::RANSACSettings::finalBundleRounds)
+        .def_readwrite("local_optimization_inside_the_loop", &superansac::RANSACSettings::localOptimizationInsideTheLoop)
+        .def_readwrite("fundamental_symmetric_validation_enabled", &superansac::RANSACSettings::fundamentalSymmetricValidation)
+        .def_readwrite("final_bundle_loss_scale", &superansac::RANSACSettings::finalBundleLossScale)
+        .def_readwrite("final_bundle_schedule_start", &superansac::RANSACSettings::finalBundleScheduleStart)
+        .def_readwrite("final_bundle_over_candidates", &superansac::RANSACSettings::finalBundleOverCandidates)
+        .def_readwrite("final_bundle_max_iterations", &superansac::RANSACSettings::finalBundleMaxIterations)
+        .def_readwrite("nonminimal_confidence_weights", &superansac::RANSACSettings::nonminimalConfidenceWeights)
+        .def_readwrite("low_inlier_uniform_fallback", &superansac::RANSACSettings::lowInlierUniformFallback)
         .def_readwrite("homography_bundle_max_iterations", &superansac::RANSACSettings::homographyBundleMaxIterations);
 
     // Expose the function to Python

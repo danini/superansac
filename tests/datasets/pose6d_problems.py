@@ -43,8 +43,8 @@ def _lift(depth_img, uv, K_inv):
     return X, ok
 
 
-def load_7scenes_pnp_problems(data_dir=DEFAULT_DATA_DIR, detectors=PNP_DETECTORS):
-    pairs = [p for p in load_calibrated_pairs(data_dir, verbose=False) if p["dataset"] == "7Scenes"]
+def load_7scenes_pnp_problems(data_dir=DEFAULT_DATA_DIR, detectors=PNP_DETECTORS, split="test"):
+    pairs = [p for p in load_calibrated_pairs(data_dir, split=split, verbose=False) if p["dataset"] == "7Scenes"]
     cache = ensure_cached_matches(pairs, list(detectors), data_dir=data_dir)
     K_inv = np.linalg.inv(SEVEN_SCENES_DEPTH_K)
     problems = []
@@ -71,8 +71,8 @@ def load_7scenes_pnp_problems(data_dir=DEFAULT_DATA_DIR, detectors=PNP_DETECTORS
     return problems
 
 
-def load_7scenes_rigid_problems(data_dir=DEFAULT_DATA_DIR, detectors=PNP_DETECTORS):
-    pairs = [p for p in load_calibrated_pairs(data_dir, verbose=False) if p["dataset"] == "7Scenes"]
+def load_7scenes_rigid_problems(data_dir=DEFAULT_DATA_DIR, detectors=PNP_DETECTORS, split="test"):
+    pairs = [p for p in load_calibrated_pairs(data_dir, split=split, verbose=False) if p["dataset"] == "7Scenes"]
     cache = ensure_cached_matches(pairs, list(detectors), data_dir=data_dir)
     K_inv = np.linalg.inv(SEVEN_SCENES_DEPTH_K)
     problems = []

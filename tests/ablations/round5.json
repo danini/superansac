@@ -1,0 +1,7 @@
+{
+  "fb4": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0},
+  "fb4_lsqw": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0, "local_optimization": "LSQ", "local_optimization_settings.refinement_rounds": 2, "local_optimization_settings.schedule_start": 2.24, "local_optimization_settings.schedule_end": 1.0},
+  "fb4_loin_lsqw": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0, "local_optimization_inside_the_loop": true, "min_iterations": 5000, "local_optimization": "LSQ", "local_optimization_settings.refinement_rounds": 2, "local_optimization_settings.schedule_start": 2.24, "local_optimization_settings.schedule_end": 1.0},
+  "fb4_loin_lsqw3": {"final_bundle_rounds": 4, "final_bundle_schedule_start": 3.0, "final_bundle_loss_scale": 1.0, "local_optimization_inside_the_loop": true, "min_iterations": 5000, "local_optimization": "LSQ", "local_optimization_settings.refinement_rounds": 3, "local_optimization_settings.schedule_start": 3.0, "local_optimization_settings.schedule_end": 1.0},
+  "fb2_loin_lsqw": {"final_bundle_rounds": 2, "local_optimization_inside_the_loop": true, "min_iterations": 5000, "local_optimization": "LSQ", "local_optimization_settings.refinement_rounds": 2, "local_optimization_settings.schedule_start": 2.24, "local_optimization_settings.schedule_end": 1.0}
+}

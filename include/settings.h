@@ -53,6 +53,11 @@ namespace superansac {
             graphCutNumber = 20;
         double sampleSizeMultiplier = 3.0;  // Reduced from 7.0 (3x sufficient for robustness)
         double spatialCoherenceWeight = 0.1;
+        // LSQ local optimizer only: extra re-collect-and-refit rounds whose collection threshold
+        // shrinks geometrically from scheduleStart * threshold to scheduleEnd * threshold.
+        size_t refinementRounds = 0;
+        double scheduleStart = 1.0,
+            scheduleEnd = 1.0;
     };
 
     struct NeighborhoodSettings
@@ -94,6 +99,17 @@ namespace superansac {
         bool homographyBundleRefinement = false; // Nonlinear (LM) reprojection-error refinement of the non-minimal homography fit (H only)
         size_t homographyBundleMaxIterations = 5; // LM iterations: early stopping regularizes (full convergence over-fits the plane) and stays within the runtime budget
         bool fundamentalPlaneParallaxPostRefinement = false; // Post-RANSAC dominant-plane detection + Plane-and-Parallax re-estimation (F only). Off: no measurable effect on real data (see tests/test_relative_pose.py --ablate_pp)
+        // Final robust bundle polish (F, E, H, absolute pose): after RANSAC + local optimization, re-collect the
+        // inliers of the best model and run a robust (Cauchy) LM refinement on them; repeat for the given number
+        // of rounds. Unlike the score-gated optimizers above, the result is accepted unless the consensus set
+        // collapses (divergence guard). 0 = off.
+        size_t finalBundleRounds = 3; // Dev-split ablation (tests/ablations/): 3 rounds, start 2.0, Cauchy 0.5*threshold
+        double finalBundleLossScale = 0.5; // Cauchy scale as a multiple of the inlier threshold
+        bool finalBundleOverCandidates = false; // Run the final bundle on every top-K locally optimized candidate and keep the one with the largest consensus set
+        double finalBundleScheduleStart = 2.0; // First-round collection threshold multiplier (shrinks geometrically to 1.0 over the rounds)
+        size_t finalBundleMaxIterations = 100; // LM iterations per round
+        bool nonminimalConfidenceWeights = true;
+        bool lowInlierUniformFallback = true; // Re-run with uniform sampling when PROSAC ends with a small consensus set (result-dependent) // Feed caller-provided confidences as weights into the non-minimal (LM) solver
         
         scoring::ScoringType scoring = 
             scoring::ScoringType::MAGSAC; // Scoring type

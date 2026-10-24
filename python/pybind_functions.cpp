@@ -152,6 +152,13 @@ void initializeLocalOptimizer(
                 kSettings_.finalRefinementScheduleStart, kSettings_.finalRefinementScheduleEnd);
             lsqLocalOptimizer->setWeightedFit(kSettings_.finalRefinementWeighted);
         }
+        else if (kLOSettings_.refinementRounds > 0)
+        {
+            // In-loop LO with a widened collection schedule (LO-RANSAC style)
+            lsqLocalOptimizer->setExtraRefinementRounds(kLOSettings_.refinementRounds);
+            lsqLocalOptimizer->setSigmaSchedule(true);
+            lsqLocalOptimizer->setSigmaScheduleRange(kLOSettings_.scheduleStart, kLOSettings_.scheduleEnd);
+        }
     } else if (kLocalOptimizationType_ == superansac::local_optimization::LocalOptimizationType::NestedRANSAC)
     {
         // Set the neighborhood graph to the local optimizer
@@ -177,14 +184,150 @@ void initializeLocalOptimizer(
     } 
 }
 
+// ---------------------------------------------------------------------------------------------
+// Final robust bundle polish shared by F / E / H / absolute pose.
+//
+// After RANSAC and the (score-gated) local optimizers, re-collect the inliers of the best model
+// with the inlier threshold and run a robust Cauchy LM refinement (PoseLib's bundle routines) on
+// them, for settings.finalBundleRounds rounds. The refined model is accepted unless its consensus
+// set collapses (fewer than 80% of the previous inliers), in which case the previous model is kept.
+// Everything here is result-dependent and identical for all inputs.
+// ---------------------------------------------------------------------------------------------
+namespace
+{
+    inline void collectInliers(
+        const DataMatrix &kData_,
+        const superansac::estimator::Estimator *kEstimator_,
+        const superansac::models::Model &kModel_,
+        const double kSquaredThreshold_,
+        std::vector<size_t> &inliers_)
+    {
+        const size_t kRows = kData_.rows();
+        const size_t kCols = kData_.cols();
+        const double *row = kData_.data();
+        inliers_.clear();
+        inliers_.reserve(kRows);
+        for (size_t i = 0; i < kRows; ++i, row += kCols)
+            if (kEstimator_->squaredResidual(row, kModel_) < kSquaredThreshold_)
+                inliers_.push_back(i);
+    }
+
+    inline poselib::BundleOptions finalBundleOptions(const superansac::RANSACSettings &kSettings_)
+    {
+        poselib::BundleOptions opt;
+        opt.loss_type = poselib::BundleOptions::LossType::CAUCHY;
+        opt.loss_scale = kSettings_.finalBundleLossScale * kSettings_.inlierThreshold;
+        opt.max_iterations = kSettings_.finalBundleMaxIterations;
+        return opt;
+    }
+
+    // Generic driver: refineFn_(inlierIndices, modelInOut) -> bool.
+    // Round r collects the fit set with a threshold multiplier that shrinks geometrically from
+    // settings.finalBundleScheduleStart to 1.0 (LO-RANSAC style iterative re-collection), so that
+    // true inliers excluded by a locally tight fit can be re-admitted before the final robust fit.
+    template <typename RefineFn>
+    void runFinalBundle(
+        const DataMatrix &kData_,
+        const superansac::estimator::Estimator *kEstimator_,
+        const superansac::RANSACSettings &kSettings_,
+        const size_t kMinInliers_,
+        superansac::models::Model &model_,
+        std::vector<size_t> &inliers_,
+        RefineFn refineFn_)
+    {
+        const size_t kRounds = kSettings_.finalBundleRounds;
+        if (kRounds == 0)
+            return;
+        const double kSqTh = kSettings_.inlierThreshold * kSettings_.inlierThreshold;
+        const double kStart = std::max(1.0, kSettings_.finalBundleScheduleStart);
+        std::vector<size_t> current, fitSet, next;
+        collectInliers(kData_, kEstimator_, model_, kSqTh, current);
+        if (current.size() < kMinInliers_)
+            return;
+        const size_t kInitialInliers = current.size();
+        for (size_t round = 0; round < kRounds; ++round)
+        {
+            const double kMult = (kRounds <= 1) ? 1.0
+                : kStart * std::pow(1.0 / kStart, static_cast<double>(round) / static_cast<double>(kRounds - 1));
+            collectInliers(kData_, kEstimator_, model_, kSqTh * kMult * kMult, fitSet);
+            if (fitSet.size() < kMinInliers_)
+                break;
+            superansac::models::Model candidate = model_;
+            if (!refineFn_(fitSet, candidate) || !candidate.getData().allFinite())
+                break;
+            collectInliers(kData_, kEstimator_, candidate, kSqTh, next);
+            if (next.size() * 5 < kInitialInliers * 4 || next.size() < kMinInliers_)
+                break; // diverged: keep the previous model
+            model_ = candidate;
+            current.swap(next);
+        }
+        inliers_ = current;
+    }
+
+    // MSAC-style tie-breaker: sum of (1 - r^2/th^2) over the inliers.
+    inline double truncatedScore(
+        const DataMatrix &kData_,
+        const superansac::estimator::Estimator *kEstimator_,
+        const superansac::models::Model &kModel_,
+        const double kSquaredThreshold_,
+        const std::vector<size_t> &kInliers_)
+    {
+        const size_t kCols = kData_.cols();
+        double s = 0.0;
+        for (const size_t idx : kInliers_)
+            s += 1.0 - kEstimator_->squaredResidual(kData_.data() + idx * kCols, kModel_) / kSquaredThreshold_;
+        return s;
+    }
+
+    // Final bundle over the best model and (optionally) every top-K locally optimized candidate;
+    // the model with the largest consensus set after refinement wins (ties: truncated score).
+    template <typename RefineFn>
+    void runFinalBundleWithCandidates(
+        const DataMatrix &kData_,
+        const superansac::estimator::Estimator *kEstimator_,
+        const superansac::RANSACSettings &kSettings_,
+        const size_t kMinInliers_,
+        const std::vector<superansac::models::Model> &kCandidates_,
+        superansac::models::Model &model_,
+        std::vector<size_t> &inliers_,
+        RefineFn refineFn_)
+    {
+        runFinalBundle(kData_, kEstimator_, kSettings_, kMinInliers_, model_, inliers_, refineFn_);
+        if (!kSettings_.finalBundleOverCandidates || kSettings_.finalBundleRounds == 0)
+            return;
+        const double kSqTh = kSettings_.inlierThreshold * kSettings_.inlierThreshold;
+        double bestScore = truncatedScore(kData_, kEstimator_, model_, kSqTh, inliers_);
+        for (const auto &cand : kCandidates_)
+        {
+            superansac::models::Model m = cand;
+            std::vector<size_t> inl;
+            collectInliers(kData_, kEstimator_, m, kSqTh, inl);
+            if (inl.size() < kMinInliers_)
+                continue;
+            runFinalBundle(kData_, kEstimator_, kSettings_, kMinInliers_, m, inl, refineFn_);
+            if (inl.size() < inliers_.size())
+                continue;
+            const double sc = truncatedScore(kData_, kEstimator_, m, kSqTh, inl);
+            if (inl.size() > inliers_.size() || sc > bestScore)
+            {
+                model_ = m;
+                inliers_.swap(inl);
+                bestScore = sc;
+            }
+        }
+    }
+}
+
 std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t> estimateAbsolutePose(
+
     const DataMatrix& kCorrespondences_, // The 2D-3D point correspondences
     const superansac::camera::CameraType &kCameraType_, // The type of the camera 
     const std::vector<double>& kCameraParams_, // The camera parameters
     const std::vector<double>& kBoundingBox_, // The bounding box dimensions (image width, image height, X, Y, Z)
     const std::vector<double>& kPointProbabilities_, // The probabilities of the points being inliers
-    superansac::RANSACSettings &settings_) // The RANSAC settings
+    const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
+    superansac::RANSACSettings settings_ = kSettingsIn_;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 5) 
         throw std::invalid_argument("The input matrix must have 5 columns (x1, y1, x2, y2, z2).");
@@ -237,7 +380,7 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     estimator->setNonMinimalSolver(new superansac::estimator::solver::PnPBundleAdjustmentSolver());
     auto *pnpNonMinimalSolver = dynamic_cast<superansac::estimator::solver::PnPBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver());
     pnpNonMinimalSolver->setCamera(onlyScaledCamera.get());
-    if (!kPointProbabilities_.empty())
+    if (!kPointProbabilities_.empty() && settings_.nonminimalConfidenceWeights)
         pnpNonMinimalSolver->setWeights(&kPointProbabilities_);
     auto &solverOptions = pnpNonMinimalSolver->getMutableOptions();
     solverOptions.loss_type = poselib::BundleOptions::LossType::TRUNCATED;
@@ -387,7 +530,7 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
 
     const size_t kAbsFallbackLimit = std::max<size_t>(
         45, static_cast<size_t>(0.25 * kCorrespondences_.rows()));
-    if (kSampler == superansac::samplers::SamplerType::PROSAC &&
+    if (settings_.lowInlierUniformFallback && kSampler == superansac::samplers::SamplerType::PROSAC &&
         finalInliers.size() < kAbsFallbackLimit &&
         static_cast<size_t>(kCorrespondences_.rows()) > 18)
     {
@@ -439,9 +582,33 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     if (finalInliers.size() < estimator->sampleSize())
         return std::make_tuple(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero(), std::vector<size_t>(), 0.0, totalIterations);
 
-    // Final unweighted consensus bundle polish so noisy prior probabilities do not skew the final pose
+    // Final robust bundle polish: PoseLib's absolute-pose LM (Cauchy on the reprojection error) on the re-collected inliers.
     pnpNonMinimalSolver->setWeights(nullptr);
-    if (finalInliers.size() >= 4)
+    if (settings_.finalBundleRounds > 0)
+    {
+        const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
+        runFinalBundleWithCandidates(normalizedCorrespondences, estimator.get(), settings_, 4, robustEstimator.getCandidateModels(), bestModel, finalInliers,
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model) -> bool
+            {
+                std::vector<Eigen::Vector2d> x(inl.size());
+                std::vector<Eigen::Vector3d> X(inl.size());
+                for (size_t i = 0; i < inl.size(); ++i)
+                {
+                    const size_t idx = inl[i];
+                    x[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 0), normalizedCorrespondences(idx, 1));
+                    X[i] = Eigen::Vector3d(normalizedCorrespondences(idx, 2), normalizedCorrespondences(idx, 3), normalizedCorrespondences(idx, 4));
+                }
+                poselib::CameraPose pose;
+                const Eigen::Matrix3d R = model.getData().block<3, 3>(0, 0);
+                pose.q = poselib::rotmat_to_quat(R);
+                pose.t = model.getData().block<3, 1>(0, 3);
+                poselib::bundle_adjust(x, X, &pose, kOpt);
+                model.getMutableData().block<3, 3>(0, 0) = pose.R();
+                model.getMutableData().block<3, 1>(0, 3) = pose.t;
+                return true;
+            });
+    }
+    else if (finalInliers.size() >= 4)
     {
         const int kRows = normalizedCorrespondences.rows();
         const int kCols = normalizedCorrespondences.cols();
@@ -491,8 +658,9 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
     const DataMatrix& kCorrespondences_, // The 3D-3D point correspondences
     const std::vector<double>& kBoundingBoxSizes_, // Bounding box sizes (x1, y1, z1, x2, y2, z2)
     const std::vector<double>& kPointProbabilities_, // The probabilities of the points being inliers
-    superansac::RANSACSettings &settings_) // The RANSAC settings
+    const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
+    superansac::RANSACSettings settings_ = kSettingsIn_;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 6) 
         throw std::invalid_argument("The input matrix must have 6 columns (x1, y1, z1, x2, y2, z2).");
@@ -693,7 +861,7 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
 
     // When PROSAC finds very few inliers (< 15), run a Uniform-sampling fallback
     // so low-inlier 3D scans whose inliers lie outside the top prefix are recovered.
-    if (kSampler == superansac::samplers::SamplerType::PROSAC &&
+    if (settings_.lowInlierUniformFallback && kSampler == superansac::samplers::SamplerType::PROSAC &&
         finalInliers.size() < 15 &&
         kCorrespondences_.rows() > 15)
     {
@@ -790,8 +958,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     const DataMatrix& kCorrespondences_, // The point correspondences
     const std::vector<double>& kPointProbabilities_, // The probabilities of the points being inliers
     const std::vector<double>& kImageSizes_, // Image sizes (width source, height source, width destination, height destination)
-    superansac::RANSACSettings &settings_) // The RANSAC settings
+    const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
+    superansac::RANSACSettings settings_ = kSettingsIn_;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 4) 
         throw std::invalid_argument("The input matrix must have 4 columns (x1, y1, x2, y2).");
@@ -1060,7 +1229,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
 
     // When PROSAC finds very few inliers (<= 35) on a larger correspondence set,
     // run a Uniform-sampling fallback so low-inlier pairs outside the prefix are recovered.
-    if (kSampler == superansac::samplers::SamplerType::PROSAC &&
+    if (settings_.lowInlierUniformFallback && kSampler == superansac::samplers::SamplerType::PROSAC &&
         settings_.maxIterations >= 500 &&
         finalInliers.size() <= 35 &&
         kCorrespondences_.rows() > 35)
@@ -1117,6 +1286,28 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     // Check if the model is valid
     if (finalInliers.size() < estimator->sampleSize())
         return std::make_tuple(Eigen::Matrix3d::Identity(), std::vector<size_t>(), 0.0, totalIterations);
+
+    // Final robust bundle polish in the normalized frame (PoseLib's 7-DoF F refinement, Cauchy loss).
+    if (settings_.finalBundleRounds > 0)
+    {
+        const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
+        runFinalBundleWithCandidates(normalizedCorrespondences, estimator.get(), settings_, 8, robustEstimator.getCandidateModels(), bestModel, finalInliers,
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model) -> bool
+            {
+                std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
+                for (size_t i = 0; i < inl.size(); ++i)
+                {
+                    const size_t idx = inl[i];
+                    x1[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 0), normalizedCorrespondences(idx, 1));
+                    x2[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 2), normalizedCorrespondences(idx, 3));
+                }
+                Eigen::Matrix3d F = model.getData().block<3, 3>(0, 0);
+                poselib::refine_fundamental(x1, x2, &F, kOpt);
+                F.normalize();
+                model.getMutableData() = F;
+                return true;
+            });
+    }
 
     Eigen::Matrix3d fundamentalMatrix = bestModel.getData();
 
@@ -1582,8 +1773,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     const Eigen::Matrix3d &kIntrinsicsDestination_, // The intrinsic matrix of the destination camera
     const std::vector<double>& kPointProbabilities_, // The probabilities of the points being inliers
     const std::vector<double>& kImageSizes_, // Image sizes (width source, height source, width destination, height destination)
-    superansac::RANSACSettings &settings_) // The RANSAC settings
+    const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
+    superansac::RANSACSettings settings_ = kSettingsIn_;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 4) 
         throw std::invalid_argument("The input matrix must have 4 columns (x1, y1, x2, y2).");
@@ -1640,7 +1832,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     estimator->setNonMinimalSolver(new superansac::estimator::solver::EssentialMatrixBundleAdjustmentSolver());
     superansac::estimator::solver::EssentialMatrixBundleAdjustmentSolver * nonminimalSolver = 
         dynamic_cast<superansac::estimator::solver::EssentialMatrixBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver());
-    if (kPointProbabilities_.size() > 0)
+    if (kPointProbabilities_.size() > 0 && settings_.nonminimalConfidenceWeights)
         nonminimalSolver->setWeights(&kPointProbabilities_);
     nonminimalSolver->setCheiralityPointNumber(settings_.essentialCheiralityPointNumber);
     auto &solverOptions = nonminimalSolver->getMutableOptions();
@@ -1810,7 +2002,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
 
     // When PROSAC finds very few inliers (<= 45) on a larger correspondence set,
     // run a Uniform-sampling fallback so low-inlier or cluttered-prefix pairs are recovered.
-    if (kSampler == superansac::samplers::SamplerType::PROSAC &&
+    if (settings_.lowInlierUniformFallback && kSampler == superansac::samplers::SamplerType::PROSAC &&
         settings_.maxIterations >= 500 &&
         finalInliers.size() <= 45 &&
         kCorrespondences_.rows() > 45)
@@ -1868,6 +2060,51 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     if (finalInliers.size() < estimator->sampleSize())
         return std::make_tuple(Eigen::Matrix3d::Identity(), std::vector<size_t>(), 0.0, totalIterations);
 
+    // Final robust bundle polish: refine (R, t) on the re-collected inliers in normalized image coordinates.
+    if (settings_.finalBundleRounds > 0)
+    {
+        const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
+        runFinalBundleWithCandidates(normalizedCorrespondences, estimator.get(), settings_, 8, robustEstimator.getCandidateModels(), bestModel, finalInliers,
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model) -> bool
+            {
+                const Eigen::Matrix3d E = model.getData().block<3, 3>(0, 0);
+                std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
+                std::vector<Eigen::Vector3d> b1(inl.size()), b2(inl.size());
+                for (size_t i = 0; i < inl.size(); ++i)
+                {
+                    const size_t idx = inl[i];
+                    x1[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 0), normalizedCorrespondences(idx, 1));
+                    x2[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 2), normalizedCorrespondences(idx, 3));
+                    b1[i] = x1[i].homogeneous().normalized();
+                    b2[i] = x2[i].homogeneous().normalized();
+                }
+                // Disambiguate the four decompositions by a cheirality vote over the inliers.
+                poselib::CameraPoseVector poses;
+                poselib::motion_from_essential(E, {}, {}, &poses);
+                int best = -1;
+                size_t bestVotes = 0;
+                for (size_t p = 0; p < poses.size(); ++p)
+                {
+                    size_t votes = 0;
+                    for (size_t i = 0; i < inl.size(); ++i)
+                        votes += poselib::check_cheirality(poses[p], b1[i], b2[i]) ? 1 : 0;
+                    if (votes > bestVotes)
+                    {
+                        bestVotes = votes;
+                        best = static_cast<int>(p);
+                    }
+                }
+                if (best < 0)
+                    return false;
+                poselib::CameraPose pose = poses[best];
+                poselib::refine_relpose(x1, x2, &pose, kOpt);
+                Eigen::Matrix3d refined;
+                poselib::essential_from_motion(pose, &refined);
+                model.getMutableData() = refined;
+                return true;
+            });
+    }
+
     // Get the normalized essential matrix
     Eigen::Matrix3d essentialMatrix = bestModel.getData();
 
@@ -1882,8 +2119,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     const DataMatrix& kCorrespondences_, // The point correspondences
     const std::vector<double>& kPointProbabilities_, // The probabilities of the points being inliers
     const std::vector<double>& kImageSizes_, // Image sizes (height source, width source, height destination, width destination)
-    superansac::RANSACSettings &settings_) // The RANSAC settings
+    const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
+    superansac::RANSACSettings settings_ = kSettingsIn_;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 4) 
         throw std::invalid_argument("The input matrix must have 4 columns (x1, y1, x2, y2).");
@@ -2081,7 +2319,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     // PROSAC growth schedule, or SPRT may have rejected models due to an outlier-heavy
     // leading prefix. Run a non-SPRT Uniform-sampling fallback (first over the top-80
     // prefix, then over the full correspondence set) and keep the best model.
-    if (kSampler == superansac::samplers::SamplerType::PROSAC &&
+    if (settings_.lowInlierUniformFallback && kSampler == superansac::samplers::SamplerType::PROSAC &&
         settings_.maxIterations >= 500 &&
         finalInliers.size() < 25 &&
         kCorrespondences_.rows() > 25)
@@ -2149,8 +2387,32 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
         return std::make_tuple(Eigen::Matrix3d::Identity(), std::vector<size_t>(), 0.0, totalIterations);
 
     Eigen::Matrix3d homography = bestModel.getData();
-    if (finalInliers.size() >= estimator->nonMinimalSampleSize())
+    if (settings_.finalBundleRounds > 0)
     {
+        // Final robust bundle polish: PoseLib's homography LM (Cauchy on the transfer error) on the re-collected inliers.
+        const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
+        runFinalBundleWithCandidates(kCorrespondences_, estimator.get(), settings_, estimator->nonMinimalSampleSize(), robustEstimator.getCandidateModels(), bestModel, finalInliers,
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model) -> bool
+            {
+                std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
+                for (size_t i = 0; i < inl.size(); ++i)
+                {
+                    const size_t idx = inl[i];
+                    x1[i] = Eigen::Vector2d(kCorrespondences_(idx, 0), kCorrespondences_(idx, 1));
+                    x2[i] = Eigen::Vector2d(kCorrespondences_(idx, 2), kCorrespondences_(idx, 3));
+                }
+                Eigen::Matrix3d H = model.getData().block<3, 3>(0, 0);
+                poselib::refine_homography(x1, x2, &H, kOpt);
+                if (std::abs(H(2, 2)) > 1e-12)
+                    H /= H(2, 2);
+                model.getMutableData() = H;
+                return true;
+            });
+        homography = bestModel.getData();
+    }
+    else if (finalInliers.size() >= estimator->nonMinimalSampleSize())
+    {
+        // Legacy polish: one DLT + short LM refit on the re-collected inliers.
         const int kRows = kCorrespondences_.rows();
         const int kCols = kCorrespondences_.cols();
         const double kSqThresh = settings_.inlierThreshold * settings_.inlierThreshold;
@@ -2176,190 +2438,6 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
             {
                 homography = polishedModels.back().getData();
                 finalInliers.swap(polishInliers);
-            }
-        }
-    }
-    else if (finalInliers.size() >= estimator->nonMinimalSampleSize())
-    {
-        // Two-step unweighted Hartley-normalized DLT polish: first at the full
-        // inlier threshold (4.0px), then tightened to 0.75x (3.0px) so boundary
-        // semi-outliers and MAGSAC weights do not skew the extrapolated plane fit.
-        const int kRows = kCorrespondences_.rows();
-        const int kCols = kCorrespondences_.cols();
-        for (const double kMult : {1.0, 0.75})
-        {
-            const double kThresh = kMult * settings_.inlierThreshold;
-            const double kSqThresh = kThresh * kThresh;
-            std::vector<size_t> polishInliers;
-            polishInliers.reserve(finalInliers.size() + 32);
-            const double *rowPtr = kCorrespondences_.data();
-            for (int rIdx = 0; rIdx < kRows; ++rIdx, rowPtr += kCols)
-            {
-                if (estimator->squaredResidual(rowPtr, homography) < kSqThresh)
-                    polishInliers.push_back(static_cast<size_t>(rIdx));
-            }
-            const size_t kMinPolish = (kMult < 1.0) ? 6 : estimator->nonMinimalSampleSize();
-            if (polishInliers.size() >= kMinPolish)
-            {
-                std::vector<superansac::models::Model> polishedModels;
-                if (estimator->estimateModelNonminimal(
-                    kCorrespondences_,
-                    polishInliers.data(),
-                    polishInliers.size(),
-                    &polishedModels,
-                    nullptr) && !polishedModels.empty() && polishedModels.back().getData().allFinite())
-                {
-                    homography = polishedModels.back().getData();
-                    if (kMult >= 1.0)
-                        finalInliers.swap(polishInliers);
-                }
-            }
-        }
-
-        // Low-inlier expand-and-shrink rescue: when the consensus set is small (<= 22 inliers)
-        // on a larger correspondence set, the initial model can lock onto a localized subset
-        // of the plane plus a few outliers, leaving true inliers on the far side of the plane
-        // at 5..15px reprojection error. Sampling 4-point subsets from finalInliers and the
-        // wider 6.25x (25px) pool and refitting across an expand-and-shrink schedule
-        // (2.25x -> 1.25x -> 1.0x threshold, i.e., 9px -> 5px -> 4px) pulls in the far-side
-        // true inliers and sheds the outliers.
-        if (finalInliers.size() <= 22 && kRows > 22)
-        {
-            estimator->setBundleRefinement(false, settings_.inlierThreshold, settings_.homographyBundleMaxIterations);
-            const double kSqThresh4 = settings_.inlierThreshold * settings_.inlierThreshold;
-            const double kInvSqThresh4 = 1.0 / kSqThresh4;
-            const double kPoolThresh = 6.25 * settings_.inlierThreshold;
-            const double kPoolSqThresh = kPoolThresh * kPoolThresh;
-
-            double bestMsac = 0.0;
-            std::vector<size_t> subPool;
-            subPool.reserve(64);
-            const double *rowPtr = kCorrespondences_.data();
-            for (int rIdx = 0; rIdx < kRows; ++rIdx, rowPtr += kCols)
-            {
-                const double sq = estimator->squaredResidual(rowPtr, homography);
-                if (sq < kSqThresh4)
-                    bestMsac += (1.0 - sq * kInvSqThresh4);
-                if (sq < kPoolSqThresh)
-                    subPool.push_back(static_cast<size_t>(rIdx));
-            }
-
-            const std::vector<size_t> initInlierPool = finalInliers;
-            const std::vector<const std::vector<size_t>*> kPools = { &initInlierPool, &subPool };
-            const double kScheduleMults[3] = { 2.25, 1.25, 1.0 };
-
-            superansac::utils::UniformRandomGenerator<size_t> hRng;
-            size_t sampleIdx[4];
-            std::vector<superansac::models::Model> candModels;
-            std::vector<size_t> stepInliers;
-            stepInliers.reserve(64);
-            bool rescued = false;
-            const int kMaxRescueIters = static_cast<int>(std::min<size_t>(400, std::max<size_t>(10, (400 * settings_.maxIterations) / 5000)));
-
-            for (const std::vector<size_t>* poolPtr : kPools)
-            {
-                const std::vector<size_t>& pool = *poolPtr;
-                if (pool.size() < 4 || pool.size() > 80)
-                    continue;
-
-                hRng.resetGenerator(0, pool.size() - 1);
-                for (int iter = 0; iter < kMaxRescueIters; ++iter)
-                {
-                    hRng.generateUniqueRandomSet(sampleIdx, 4);
-                    const size_t globalSample[4] = {
-                        pool[sampleIdx[0]],
-                        pool[sampleIdx[1]],
-                        pool[sampleIdx[2]],
-                        pool[sampleIdx[3]]
-                    };
-
-                    candModels.clear();
-                    if (!estimator->estimateModel(kCorrespondences_, globalSample, &candModels) ||
-                        candModels.empty() || !candModels.back().getData().allFinite())
-                        continue;
-
-                    Eigen::Matrix3d Hc = candModels.back().getData();
-                    bool validRefit = true;
-                    for (const double stepMult : kScheduleMults)
-                    {
-                        const double stepThresh = stepMult * settings_.inlierThreshold;
-                        const double stepSqThresh = stepThresh * stepThresh;
-                        stepInliers.clear();
-                        const double *rPtr = kCorrespondences_.data();
-                        for (int rIdx = 0; rIdx < kRows; ++rIdx, rPtr += kCols)
-                        {
-                            if (estimator->squaredResidual(rPtr, Hc) < stepSqThresh)
-                                stepInliers.push_back(static_cast<size_t>(rIdx));
-                        }
-                        if (stepInliers.size() < 6)
-                        {
-                            validRefit = false;
-                            break;
-                        }
-                        candModels.clear();
-                        if (!estimator->estimateModelNonminimal(
-                            kCorrespondences_,
-                            stepInliers.data(),
-                            stepInliers.size(),
-                            &candModels,
-                            nullptr) || candModels.empty() || !candModels.back().getData().allFinite())
-                        {
-                            validRefit = false;
-                            break;
-                        }
-                        Hc = candModels.back().getData();
-                    }
-
-                    if (!validRefit)
-                        continue;
-
-                    double msac = 0.0;
-                    stepInliers.clear();
-                    const double *rPtr = kCorrespondences_.data();
-                    for (int rIdx = 0; rIdx < kRows; ++rIdx, rPtr += kCols)
-                    {
-                        const double sq = estimator->squaredResidual(rPtr, Hc);
-                        if (sq < kSqThresh4)
-                        {
-                            msac += (1.0 - sq * kInvSqThresh4);
-                            stepInliers.push_back(static_cast<size_t>(rIdx));
-                        }
-                    }
-
-                    if (stepInliers.size() >= initInlierPool.size() + 2 && msac > bestMsac)
-                    {
-                        bestMsac = msac;
-                        homography = Hc;
-                        finalInliers = stepInliers;
-                        rescued = true;
-                    }
-                }
-            }
-
-            if (rescued)
-            {
-                const double kTightThresh = 0.75 * settings_.inlierThreshold;
-                const double kTightSqThresh = kTightThresh * kTightThresh;
-                stepInliers.clear();
-                const double *rPtr = kCorrespondences_.data();
-                for (int rIdx = 0; rIdx < kRows; ++rIdx, rPtr += kCols)
-                {
-                    if (estimator->squaredResidual(rPtr, homography) < kTightSqThresh)
-                        stepInliers.push_back(static_cast<size_t>(rIdx));
-                }
-                if (stepInliers.size() >= 6)
-                {
-                    candModels.clear();
-                    if (estimator->estimateModelNonminimal(
-                        kCorrespondences_,
-                        stepInliers.data(),
-                        stepInliers.size(),
-                        &candModels,
-                        nullptr) && !candModels.empty() && candModels.back().getData().allFinite())
-                    {
-                        homography = candModels.back().getData();
-                    }
-                }
             }
         }
     }

@@ -62,6 +62,7 @@ void SupeRansac::run(const DataMatrix &kData_)
         tmpInliers.reserve(kData_.rows());
     std::vector<const std::vector<size_t>*> potentialInlierSets; // The potential inlier sets from the inlier selector
     std::vector<std::tuple<models::Model, std::vector<size_t>, scoring::Score>> bestModels;
+    candidateModels.clear();
 
     // Current sample
     const size_t kSampleSize = estimator->sampleSize();
@@ -377,6 +378,9 @@ void SupeRansac::run(const DataMatrix &kData_)
                 }
             }
 
+            if (tmpInliers.size() > kSampleSize && locallyOptimizedModel.getData().allFinite())
+                candidateModels.emplace_back(locallyOptimizedModel);
+
             if (bestScore < currentScore)
             {
                 if (kRigidEstimator != nullptr && tmpInliers.size() >= 12)
@@ -547,6 +551,11 @@ const std::vector<size_t> &SupeRansac::getInliers() const
 const scoring::Score &SupeRansac::getBestScore() const
 {
     return bestScore;
+}
+
+const std::vector<models::Model> &SupeRansac::getCandidateModels() const
+{
+    return candidateModels;
 }
 
 // Get the number of iterations
