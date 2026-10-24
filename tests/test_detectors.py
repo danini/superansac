@@ -214,11 +214,13 @@ def print_detector_table(problem, res_dict):
 def main():
     parser = argparse.ArgumentParser(description="Multi-Detector Evaluation Across 7 Feature Matchers")
     parser.add_argument("--problem", choices=["all", "fundamental", "essential", "homography"], default="all")
-    parser.add_argument("--detectors", nargs="+", default=ALL_DETECTORS)
+    parser.add_argument("--detectors", "--features", dest="detectors", nargs="+", default=ALL_DETECTORS)
     parser.add_argument("--data_dir", type=str, default=DEFAULT_DATA_DIR)
     parser.add_argument("--workers", type=int, default=24)
     parser.add_argument("--no_plots", action="store_true")
     args = parser.parse_args()
+    if "all" in [d.lower() for d in args.detectors]:
+        args.detectors = list(ALL_DETECTORS)
 
     assets_dir = os.path.join(SUPERANSAC_DIR, "assets")
     out_json = {}

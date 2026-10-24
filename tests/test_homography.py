@@ -377,6 +377,8 @@ def main():
     parser.add_argument("--workers", type=int, default=24)
     parser.add_argument("--no_plots", action="store_true")
     args = parser.parse_args()
+    if "all" in [f.lower() for f in args.features]:
+        args.features = ["loma", "roma", "splg"]
 
     assets_dir = os.path.join(SUPERANSAC_DIR, "assets")
     h_pairs = filter_pairs_by_dataset(get_homography_benchmark_pairs(args.data_dir), args.dataset)

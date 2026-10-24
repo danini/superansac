@@ -553,6 +553,10 @@ def load_phototourism_pairs(data_dir=DEFAULT_DATA_DIR, max_pairs=15, include_reg
     return pairs
 
 
+ETH3D_BENCHMARK_SCENES = ("courtyard", "electro", "facade", "kicker", "office", "playground", "relief")
+SEVEN_SCENES_BENCHMARK = ("chess", "fire", "heads")
+
+
 def load_eth3d_pairs(data_dir=DEFAULT_DATA_DIR, max_pairs_per_scene=5, include_regimes=True):
     from datasets.eth3d import ETH3D
 
@@ -564,7 +568,8 @@ def load_eth3d_pairs(data_dir=DEFAULT_DATA_DIR, max_pairs_per_scene=5, include_r
     for idx, d in enumerate(ds.data):
         p1 = d["ref_img_path"]
         scene = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(p1))))
-        by_scene.setdefault(scene, []).append(idx)
+        if scene in ETH3D_BENCHMARK_SCENES:
+            by_scene.setdefault(scene, []).append(idx)
 
     pairs = []
     for scene in sorted(by_scene.keys()):
@@ -616,7 +621,8 @@ def load_7scenes_pairs(data_dir=DEFAULT_DATA_DIR, max_pairs_per_scene=6, include
     by_scene = {}
     for idx, (p1, p2) in enumerate(ds.img_pairs):
         scene = os.path.basename(os.path.dirname(os.path.dirname(p1)))
-        by_scene.setdefault(scene, []).append(idx)
+        if scene in SEVEN_SCENES_BENCHMARK:
+            by_scene.setdefault(scene, []).append(idx)
 
     pairs = []
     for scene in sorted(by_scene.keys()):

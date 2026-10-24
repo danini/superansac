@@ -2,48 +2,37 @@
 """Download and prepare benchmark datasets for SupeRANSAC evaluation.
 
 Datasets supported:
-1. phototourism : CVPR 2020 RANSAC Tutorial (Sacre Coeur, St. Peter's Square)
-2. scannet      : SuperGlue ScanNet indoor relative pose test set (1500 pairs)
+1. magsac_data  : kusvod2, AdelaideRMF, Multi-H, homogr, EVD (Extreme View Dataset), Strecha
+2. phototourism : CVPR 2020 RANSAC Tutorial (Palace of Westminster / Sacre Coeur)
 3. eth3d        : ETH3D multi-view high-res undistorted DSLR scenes
 4. 7scenes      : Microsoft 7Scenes RGB-D indoor localization/pose benchmark
-5. hpatches     : HPatches sequences (viewpoint + illumination homography benchmark)
-6. magsac_data  : kusvod2, AdelaideRMF, Multi-H, homogr, EVD (Extreme View Dataset), Strecha
 
 Usage:
-    python tests/download_datasets.py --data_dir ./data --datasets all
+    python tests/download_datasets.py --data_dir ./data --dataset all
 """
 
 import argparse
 import os
 import shutil
 import subprocess
-import sys
-import tarfile
 import urllib.request
 import zipfile
 
 
 ETH3D_SCENES = [
     "courtyard",
-    "delivery_area",
     "electro",
     "facade",
     "kicker",
     "office",
-    "pipes",
     "playground",
     "relief",
-    "terrace",
 ]
 
 SEVEN_SCENES_LIST = [
     "heads",
     "fire",
     "chess",
-    "office",
-    "pumpkin",
-    "redkitchen",
-    "stairs",
 ]
 
 
@@ -81,30 +70,6 @@ def setup_magsac_data(data_dir):
     shutil.move(os.path.join(tmp_repo, "data"), target_dir)
     shutil.rmtree(tmp_repo, ignore_errors=True)
     print("[magsac_data] Ready at", target_dir)
-
-
-def setup_scannet(data_dir):
-    scannet_dir = os.path.join(data_dir, "scannet")
-    if os.path.exists(os.path.join(scannet_dir, "scannet_test_pairs_with_gt.txt")):
-        print("[scannet] Already present at", scannet_dir)
-        return
-    os.makedirs(scannet_dir, exist_ok=True)
-    zip_path = os.path.join(data_dir, "ScanNet_test.zip")
-    url = "https://www.polybox.ethz.ch/index.php/s/lAZyxm62WUh27Zl/download"
-    if not download_url(url, zip_path):
-        print("[scannet] Warning: Failed to download ScanNet_test.zip")
-        return
-    print("[scannet] Extracting ScanNet_test.zip ...")
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(scannet_dir)
-    # Handle nested ScanNet_test/ directory if present
-    nested = os.path.join(scannet_dir, "ScanNet_test")
-    if os.path.isdir(nested) and os.path.exists(os.path.join(nested, "scannet_test_pairs_with_gt.txt")):
-        for item in os.listdir(nested):
-            shutil.move(os.path.join(nested, item), os.path.join(scannet_dir, item))
-        os.rmdir(nested)
-    os.remove(zip_path)
-    print("[scannet] Ready at", scannet_dir)
 
 
 def setup_phototourism(data_dir):
@@ -215,35 +180,20 @@ def setup_7scenes(data_dir, scenes=None):
     print("[7scenes] Ready at", s7_dir)
 
 
-def setup_hpatches(data_dir):
-    hp_dir = os.path.join(data_dir, "hpatches")
-    if os.path.isdir(hp_dir) and len(os.listdir(hp_dir)) >= 50:
-        print("[hpatches] Already present at", hp_dir)
-        return
-    os.makedirs(hp_dir, exist_ok=True)
-    tar_path = os.path.join(data_dir, "hpatches-sequences-release.tar.gz")
-    urls = [
-        "https://huggingface.co/datasets/vbalnt/hpatches/resolve/main/hpatches-sequences-release.tar.gz",
-        "http://icvl.ee.ic.ac.uk/vbalnt/hpatches/hpatches-sequences-release.tar.gz",
+def verify_6d_examples():
+    ex_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "examples", "data")
+    required = [
+        "pose6dscene_points.txt",
+        "pose6dscene_gt.txt",
+        "pose6dscene.K",
+        "rigid_pose_example_points.txt",
+        "rigid_pose_example_gt.txt",
     ]
-    downloaded = False
-    for url in urls:
-        if download_url(url, tar_path):
-            downloaded = True
-            break
-    if not downloaded:
-        print("[hpatches] Warning: Failed to download HPatches")
-        return
-    print("[hpatches] Extracting hpatches-sequences-release.tar.gz ...")
-    with tarfile.open(tar_path, "r:gz") as tf:
-        tf.extractall(hp_dir)
-    nested = os.path.join(hp_dir, "hpatches-sequences-release")
-    if os.path.isdir(nested):
-        for item in os.listdir(nested):
-            shutil.move(os.path.join(nested, item), os.path.join(hp_dir, item))
-        os.rmdir(nested)
-    os.remove(tar_path)
-    print("[hpatches] Ready at", hp_dir)
+    missing = [f for f in required if not os.path.exists(os.path.join(ex_dir, f))]
+    if not missing:
+        print("[6d_examples] Ready at", ex_dir)
+    else:
+        print(f"[6d_examples] Warning: Missing files in {ex_dir}: {missing}")
 
 
 def main():
@@ -255,30 +205,29 @@ def main():
         help="Target directory where benchmark datasets will be stored.",
     )
     parser.add_argument(
+        "--dataset",
         "--datasets",
+        dest="datasets",
         nargs="+",
         default=["all"],
-        choices=["all", "magsac_data", "scannet", "phototourism", "eth3d", "7scenes", "hpatches"],
+        choices=["all", "magsac_data", "phototourism", "eth3d", "7scenes"],
         help="Which datasets to download.",
     )
     args = parser.parse_args()
     os.makedirs(args.data_dir, exist_ok=True)
     selected = set(args.datasets)
     if "all" in selected:
-        selected = {"magsac_data", "scannet", "phototourism", "eth3d", "7scenes", "hpatches"}
+        selected = {"magsac_data", "phototourism", "eth3d", "7scenes"}
 
     if "magsac_data" in selected:
         setup_magsac_data(args.data_dir)
-    if "scannet" in selected:
-        setup_scannet(args.data_dir)
     if "phototourism" in selected:
         setup_phototourism(args.data_dir)
     if "eth3d" in selected:
         setup_eth3d(args.data_dir)
     if "7scenes" in selected:
         setup_7scenes(args.data_dir)
-    if "hpatches" in selected:
-        setup_hpatches(args.data_dir)
+    verify_6d_examples()
 
 
 if __name__ == "__main__":
