@@ -75,7 +75,7 @@ protected:
 
 public:
     // Constructors
-    PROSACSampler() : PROSACSampler(100000) {}
+    PROSACSampler() : PROSACSampler(200000) {}
     PROSACSampler(const size_t& kRansacConvergenceIterations_)
         : ransacConvergenceIterations(kRansacConvergenceIterations_), kthSampleNumber(1)
     {
@@ -93,6 +93,11 @@ public:
     void setSampleSize(const size_t kSampleSize_)
     {
         sampleSize = kSampleSize_;
+    }
+
+    void setRansacConvergenceIterations(const size_t kRansacConvergenceIterations_)
+    {
+        ransacConvergenceIterations = kRansacConvergenceIterations_;
     }
 
     // Set the sample such that you are sampling the kth PROSAC sample (Eq. 6).
@@ -127,7 +132,9 @@ public:
         pointNumber = kPointNumber_;
         growthFunction.resize(pointNumber, 0);
 
-        double T_n = (sampleSize <= 3) ? 25000.0 : std::max<double>(200000.0, static_cast<double>(ransacConvergenceIterations));
+        double T_n = (sampleSize <= 3)
+            ? std::min<double>(25000.0, static_cast<double>(ransacConvergenceIterations))
+            : static_cast<double>(ransacConvergenceIterations);
         for (size_t i = 0; i < sampleSize; i++)
         {
             T_n *= static_cast<double>(sampleSize - i) / (pointNumber - i);

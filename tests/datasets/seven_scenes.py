@@ -4,7 +4,12 @@ import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from lightglue.utils import load_image
+
+
+def load_image(path):
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return torch.from_numpy(img.transpose(2, 0, 1)).float() / 255.0
 
 train_splits = {
     'chess': ['seq-01', 'seq-02', 'seq-04', 'seq-06'],
@@ -42,27 +47,37 @@ class SevenScenes(Dataset):
         step = 10
 
         if scene == 'all':
-            scenes = train_splits.keys()
+            scenes = [s for s in sorted(train_splits.keys()) if os.path.isdir(os.path.join(root_dir, s))]
         else:
-            scenes = [scene]
+            scenes = [scene] if os.path.isdir(os.path.join(root_dir, scene)) else []
 
-        self.img_pairs, self.T_1_2, self.R_1_2 = [], [], []
+        self.img_pairs, self.depth_pairs, self.T_1_2, self.R_1_2 = [], [], [], []
         for s in scenes:
             sequences = train_splits[s] if split == 'train' else test_splits[s]
             for seq in sequences:
                 seq_path = os.path.join(root_dir, s, seq)
+                if not os.path.isdir(seq_path):
+                    continue
                 img_paths = [
                     os.path.join(seq_path, p)
                     for p in os.listdir(seq_path) if p[-9:] == 'color.png']
                 img_paths.sort()
+                depth_paths = [
+                    os.path.join(seq_path, p)
+                    for p in os.listdir(seq_path) if p[-9:] == 'depth.png']
+                depth_paths.sort()
                 pose_paths = [
                     os.path.join(seq_path, p)
                     for p in os.listdir(seq_path) if p[-8:] == 'pose.txt']
                 pose_paths.sort()
-                num_img = len(img_paths)
+                num_img = min(len(img_paths), len(pose_paths))
                 for i in range(0, num_img - interval, step):
                     self.img_pairs.append((img_paths[i],
                                            img_paths[i + interval]))
+                    if len(depth_paths) == len(img_paths):
+                        self.depth_pairs.append((depth_paths[i], depth_paths[i + interval]))
+                    else:
+                        self.depth_pairs.append((None, None))
                     Rt1 = np.loadtxt(pose_paths[i])
                     Rt2 = np.loadtxt(pose_paths[i + interval])
                     Rt_1_2 = np.linalg.inv(Rt2).dot(Rt1)
@@ -86,6 +101,8 @@ class SevenScenes(Dataset):
             'id2': self.img_pairs[item][1],
             'path1': self.img_pairs[item][0],
             'path2': self.img_pairs[item][1],
+            'depth_path1': self.depth_pairs[item][0],
+            'depth_path2': self.depth_pairs[item][1],
             'img1': img1,
             'img2': img2,
             'R_1_2': self.R_1_2[item],

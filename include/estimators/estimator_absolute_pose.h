@@ -149,6 +149,9 @@ namespace superansac
 					py = r21 * x + r22 * y + r23 * z + ty,
 					pz = r31 * x + r32 * y + r33 * z + tz;
 
+				if (pz <= 1e-6)
+					return std::numeric_limits<double>::max();
+
 				const double pu = px / pz,
 					pv = py / pz;	
 
@@ -195,14 +198,17 @@ namespace superansac
 				const double kThreshold_,
 				bool& modelUpdated_) const override
 			{ 
-				// Calculate the determinant of the homography
-				/*const double kDeterminant =
-					model_.getData().determinant();
-
-				// Check if the homography has a small determinant.
-				constexpr double kMinimumDeterminant = 1e-2;
-				if (abs(kDeterminant) < kMinimumDeterminant)
-					return false;*/
+				const auto &d = model_.getData();
+				if (d.rows() != 3 || d.cols() != 4 || !d.allFinite())
+					return false;
+				const double tNormSq = d.col(3).squaredNorm();
+				if (kMinimalSample_ != nullptr)
+				{
+					const double *p0 = &kData_(kMinimalSample_[0], 0);
+					const double refScaleSq = std::max(1.0, p0[2] * p0[2] + p0[3] * p0[3] + p0[4] * p0[4]);
+					if (tNormSq > 1e6 * refScaleSq)
+						return false;
+				}
 				return true;
 			}
 
@@ -212,40 +218,21 @@ namespace superansac
 				const DataMatrix& kData_, // All data points
 				const size_t *kSample_) const override // The indices of the selected points
 			{
-				/*if (sampleSize() < 4)
-					return true;
-
-				// Check oriented constraints
-				Eigen::Vector3d p, q;
-
-				// Use references to avoid repeated dereferencing
 				const double *a = &kData_(kSample_[0], 0);
 				const double *b = &kData_(kSample_[1], 0);
 				const double *c = &kData_(kSample_[2], 0);
-				const double *d = &kData_(kSample_[3], 0);
 
-				crossProduct(p, a, b, 1);
-				crossProduct(q, a + 2, b + 2, 1);
-
-				// Use cached values and simplify conditions
-				const double p_c = p[0] * c[0] + p[1] * c[1] + p[2];
-				const double q_c = q[0] * c[2] + q[1] * c[3] + q[2];
-				const double p_d = p[0] * d[0] + p[1] * d[1] + p[2];
-				const double q_d = q[0] * d[2] + q[1] * d[3] + q[2];
-
-				if (p_c * q_c < 0 || p_d * q_d < 0)
+				const double d2_ab = (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
+				const double d2_ac = (a[0] - c[0]) * (a[0] - c[0]) + (a[1] - c[1]) * (a[1] - c[1]);
+				const double d2_bc = (b[0] - c[0]) * (b[0] - c[0]) + (b[1] - c[1]) * (b[1] - c[1]);
+				if (d2_ab < 1e-6 || d2_ac < 1e-6 || d2_bc < 1e-6)
 					return false;
 
-				crossProduct(p, c, d, 1);
-				crossProduct(q, c + 2, d + 2, 1);
-
-				const double p_a = p[0] * a[0] + p[1] * a[1] + p[2];
-				const double q_a = q[0] * a[2] + q[1] * a[3] + q[2];
-				const double p_b = p[0] * b[0] + p[1] * b[1] + p[2];
-				const double q_b = q[0] * b[2] + q[1] * b[3] + q[2];
-
-				if (p_a * q_a < 0 || p_b * q_b < 0)
-					return false;*/
+				const double d3_ab = (a[2] - b[2]) * (a[2] - b[2]) + (a[3] - b[3]) * (a[3] - b[3]) + (a[4] - b[4]) * (a[4] - b[4]);
+				const double d3_ac = (a[2] - c[2]) * (a[2] - c[2]) + (a[3] - c[3]) * (a[3] - c[3]) + (a[4] - c[4]) * (a[4] - c[4]);
+				const double d3_bc = (b[2] - c[2]) * (b[2] - c[2]) + (b[3] - c[3]) * (b[3] - c[3]) + (b[4] - c[4]) * (b[4] - c[4]);
+				if (d3_ab < 1e-8 || d3_ac < 1e-8 || d3_bc < 1e-8)
+					return false;
 
 				return true;
 			}

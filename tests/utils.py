@@ -4,9 +4,7 @@ import h5py
 from PIL import Image
 import torch
 import time
-from functions import point_matching, normalize_keypoints
-from lightglue import LightGlue, SuperPoint
-from romatch import roma_outdoor
+from functions import point_matching, normalize_keypoints, load_image
 
 def load_h5(filename):
     '''Loads dictionary from hdf5 file'''

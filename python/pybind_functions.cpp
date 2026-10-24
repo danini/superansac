@@ -61,9 +61,7 @@ void initializeNeighborhood(
         std::vector<double> kCellSizes(_DimensionNumber);
         for (size_t i = 0; i < _DimensionNumber; i++)
         {
-            kCellSizes[i] = kImageSizes_[i] / kCellNumber;
-            if (kCellSizes[i] < 1.0)
-                throw std::invalid_argument("The cell size is too small (< 1px). Try setting a smaller neighborhood size (in grid it acts as the number of cells along an axis).");
+            kCellSizes[i] = std::max(1e-6, kImageSizes_[i] / static_cast<double>(kCellNumber));
         }
 
         gridNeighborhoodGraph->setCellSizes(
@@ -255,7 +253,12 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
 
     // If the sampler is PROSAC, set the sample size
     if (kSampler == superansac::samplers::SamplerType::PROSAC)
-        dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get())->setSampleSize(estimator->sampleSize());
+    {
+        auto *prosacSampler = dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get());
+        prosacSampler->setSampleSize(estimator->sampleSize());
+        if (settings_.maxIterations < 1000)
+            prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200, settings_.maxIterations * 10));
+    }
     else if (kSampler == superansac::samplers::SamplerType::ProgressiveNAPSAC)
     {
         auto pNapsacSampler = dynamic_cast<superansac::samplers::ProgressiveNAPSACSampler<5> *>(sampler.get());
@@ -544,7 +547,12 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
 
     // If the sampler is PROSAC, set the sample size
     if (kSampler == superansac::samplers::SamplerType::PROSAC)
-        dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get())->setSampleSize(estimator->sampleSize());
+    {
+        auto *prosacSampler = dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get());
+        prosacSampler->setSampleSize(estimator->sampleSize());
+        if (settings_.maxIterations < 1000)
+            prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200, settings_.maxIterations * 10));
+    }
     else if (kSampler == superansac::samplers::SamplerType::ProgressiveNAPSAC)
     {
         auto pNapsacSampler = dynamic_cast<superansac::samplers::ProgressiveNAPSACSampler<6> *>(sampler.get());
@@ -930,7 +938,12 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
 
     // If the sampler is PROSAC, set the sample size
     if (kSampler == superansac::samplers::SamplerType::PROSAC)
-        dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get())->setSampleSize(estimator->sampleSize());
+    {
+        auto *prosacSampler = dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get());
+        prosacSampler->setSampleSize(estimator->sampleSize());
+        if (settings_.maxIterations < 1000)
+            prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200, settings_.maxIterations * 10));
+    }
     else if (kSampler == superansac::samplers::SamplerType::ProgressiveNAPSAC)
     {
         auto pNapsacSampler = dynamic_cast<superansac::samplers::ProgressiveNAPSACSampler<4> *>(sampler.get());
@@ -1142,8 +1155,8 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
         superansac::RANSACSettings unifSettings = settings_;
         if (settings_.maxIterations < 5000)
         {
-            unifSettings.minIterations = std::max<size_t>(50, settings_.minIterations / 2);
-            unifSettings.maxIterations = std::max<size_t>(50, settings_.maxIterations / 2);
+            unifSettings.minIterations = std::max<size_t>(15, settings_.minIterations / 2);
+            unifSettings.maxIterations = std::max<size_t>(15, settings_.maxIterations / 2);
         }
 
         std::unique_ptr<superansac::termination::AbstractCriterion> unifTermination =
@@ -1219,7 +1232,6 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
 
     // Post-loop Plane-and-Parallax rescue and off-plane epipole cleaning in pixel space
     if (kCalibratedPriorBand &&
-        settings_.maxIterations >= 500 &&
         settings_.degensacSettings.enabled &&
         finalInliers.size() >= 10 && finalInliers.size() <= 160)
     {
@@ -1760,7 +1772,12 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
 
     // If the sampler is PROSAC, set the sample size
     if (kSampler == superansac::samplers::SamplerType::PROSAC)
-        dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get())->setSampleSize(estimator->sampleSize());
+    {
+        auto *prosacSampler = dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get());
+        prosacSampler->setSampleSize(estimator->sampleSize());
+        if (settings_.maxIterations < 1000)
+            prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200, settings_.maxIterations * 10));
+    }
     else if (kSampler == superansac::samplers::SamplerType::ProgressiveNAPSAC)
     {
         auto pNapsacSampler = dynamic_cast<superansac::samplers::ProgressiveNAPSACSampler<4> *>(sampler.get());
@@ -1901,18 +1918,79 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     // Run the robust estimator
     robustEstimator.run(normalizedCorrespondences);
 
-    // Check if the model is valid
-    if (robustEstimator.getInliers().size() < estimator->sampleSize())
-        return std::make_tuple(Eigen::Matrix3d::Identity(), std::vector<size_t>(), 0.0, robustEstimator.getIterationNumber());
+    superansac::models::Model bestModel = robustEstimator.getBestModel();
+    superansac::scoring::Score bestScore = robustEstimator.getBestScore();
+    std::vector<size_t> finalInliers = robustEstimator.getInliers();
+    size_t totalIterations = robustEstimator.getIterationNumber();
 
-    // Get the normalized fundamental matrix
-    Eigen::Matrix3d essentialMatrix = robustEstimator.getBestModel().getData();
+    // When PROSAC finds very few inliers (<= 45) on a larger correspondence set,
+    // run a Uniform-sampling fallback so low-inlier or cluttered-prefix pairs are recovered.
+    if (kSampler == superansac::samplers::SamplerType::PROSAC &&
+        settings_.maxIterations >= 500 &&
+        finalInliers.size() <= 45 &&
+        kCorrespondences_.rows() > 45)
+    {
+        std::unique_ptr<superansac::samplers::AbstractSampler> unifSampler =
+            superansac::samplers::createSampler<4>(superansac::samplers::SamplerType::Uniform);
+        unifSampler->initialize(kCorrespondences_);
+
+        std::unique_ptr<superansac::scoring::AbstractScoring> unifScorer =
+            superansac::scoring::createScoring<4>(kScoring, settings_.useSprt);
+        unifScorer->setThreshold(settings_.inlierThreshold);
+        if (kScoring == superansac::scoring::ScoringType::MAGSAC)
+        {
+            if (settings_.useSprt)
+                dynamic_cast<superansac::scoring::MAGSACSPRTScoring *>(unifScorer.get())->initialize(estimator.get());
+            else
+                dynamic_cast<superansac::scoring::MAGSACScoring *>(unifScorer.get())->initialize(estimator.get());
+        }
+
+        superansac::RANSACSettings unifSettings = settings_;
+        if (settings_.maxIterations < 5000)
+        {
+            unifSettings.minIterations = std::max<size_t>(15, settings_.minIterations / 2);
+            unifSettings.maxIterations = std::max<size_t>(15, settings_.maxIterations / 2);
+        }
+
+        std::unique_ptr<superansac::termination::AbstractCriterion> unifTermination =
+            superansac::termination::createTerminationCriterion(kTerminationCriterion);
+        if (kTerminationCriterion == superansac::termination::TerminationType::RANSAC)
+            dynamic_cast<superansac::termination::RANSACCriterion *>(unifTermination.get())->setConfidence(unifSettings.confidence);
+
+        superansac::SupeRansac unifEstimator;
+        unifEstimator.setEstimator(estimator.get());
+        unifEstimator.setSampler(unifSampler.get());
+        unifEstimator.setScoring(unifScorer.get());
+        unifEstimator.setTerminationCriterion(unifTermination.get());
+        if (localOptimizer != nullptr)
+            unifEstimator.setLocalOptimizer(localOptimizer.get());
+        if (finalOptimizer != nullptr)
+            unifEstimator.setFinalOptimizer(finalOptimizer.get());
+        unifEstimator.setSettings(unifSettings);
+        unifEstimator.run(normalizedCorrespondences);
+        totalIterations += unifEstimator.getIterationNumber();
+
+        if (unifEstimator.getInliers().size() >= estimator->sampleSize() &&
+            unifEstimator.getBestScore() > bestScore)
+        {
+            bestModel = unifEstimator.getBestModel();
+            bestScore = unifEstimator.getBestScore();
+            finalInliers = unifEstimator.getInliers();
+        }
+    }
+
+    // Check if the model is valid
+    if (finalInliers.size() < estimator->sampleSize())
+        return std::make_tuple(Eigen::Matrix3d::Identity(), std::vector<size_t>(), 0.0, totalIterations);
+
+    // Get the normalized essential matrix
+    Eigen::Matrix3d essentialMatrix = bestModel.getData();
 
     // Return the best model with the inliers and the score
     return std::make_tuple(essentialMatrix, 
-        robustEstimator.getInliers(), 
-        robustEstimator.getBestScore().getValue(), 
-        robustEstimator.getIterationNumber());
+        finalInliers, 
+        bestScore.getValue(), 
+        totalIterations);
 }
 
 std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomography(
@@ -1981,7 +2059,12 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
 
     // If the sampler is PROSAC, set the sample size
     if (kSampler == superansac::samplers::SamplerType::PROSAC)
-        dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get())->setSampleSize(estimator->sampleSize());
+    {
+        auto *prosacSampler = dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get());
+        prosacSampler->setSampleSize(estimator->sampleSize());
+        if (settings_.maxIterations < 1000)
+            prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200, settings_.maxIterations * 10));
+    }
     else if (kSampler == superansac::samplers::SamplerType::ProgressiveNAPSAC)
     {
         auto pNapsacSampler = dynamic_cast<superansac::samplers::ProgressiveNAPSACSampler<4> *>(sampler.get());
@@ -2162,7 +2245,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
             const size_t kTargetIters = (poolRows == 80 && kTotalRows > 80)
                 ? (1500 * std::min<size_t>(settings_.maxIterations, 5000)) / 5000
                 : (2500 * std::min<size_t>(settings_.maxIterations, 5000)) / 5000;
-            unifSettings.minIterations = std::max<size_t>(50, std::min<size_t>(settings_.maxIterations, kTargetIters));
+            unifSettings.minIterations = std::max<size_t>(15, std::min<size_t>(settings_.maxIterations, kTargetIters));
             unifSettings.maxIterations = unifSettings.minIterations;
 
             std::unique_ptr<superansac::termination::AbstractCriterion> unifTermination =
@@ -2272,7 +2355,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
         // wider 6.25x (25px) pool and refitting across an expand-and-shrink schedule
         // (2.25x -> 1.25x -> 1.0x threshold, i.e., 9px -> 5px -> 4px) pulls in the far-side
         // true inliers and sheds the outliers.
-        if (settings_.maxIterations >= 500 && finalInliers.size() <= 22 && kRows > 22)
+        if (finalInliers.size() <= 22 && kRows > 22)
         {
             estimator->setBundleRefinement(false, settings_.inlierThreshold, settings_.homographyBundleMaxIterations);
             const double kSqThresh4 = settings_.inlierThreshold * settings_.inlierThreshold;
@@ -2303,7 +2386,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
             std::vector<size_t> stepInliers;
             stepInliers.reserve(64);
             bool rescued = false;
-            const int kMaxRescueIters = static_cast<int>(std::min<size_t>(400, std::max<size_t>(40, (400 * settings_.maxIterations) / 5000)));
+            const int kMaxRescueIters = static_cast<int>(std::min<size_t>(400, std::max<size_t>(10, (400 * settings_.maxIterations) / 5000)));
 
             for (const std::vector<size_t>* poolPtr : kPools)
             {

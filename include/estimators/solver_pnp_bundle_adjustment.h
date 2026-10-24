@@ -243,48 +243,88 @@ namespace superansac
 				}
 				
 				// The pose with the lowest cost
+				const double kEvalSqTh = std::max(1e-8, 4.0 * options.loss_scale * options.loss_scale);
 				double bestCost = std::numeric_limits<double>::max();
 				poselib::CameraPose bestPose;
+
+				const double kRefScaleSq = std::max(1.0, points3d[0].squaredNorm());
+				const double kMaxTransNormSq = 1e6 * kRefScaleSq;
+
+				auto evaluatePoseCost = [&](const Eigen::Matrix3d &Rc, const Eigen::Vector3d &tc, size_t &frontCount) -> double
+				{
+					frontCount = 0;
+					if (tc.squaredNorm() > kMaxTransNormSq)
+						return std::numeric_limits<double>::max();
+					double c = 0.0;
+					for (size_t pIdx = 0; pIdx < kSampleNumber_; ++pIdx)
+					{
+						const double w = (useArgWeights || useMemberWeights) ? weights[pIdx] : 1.0;
+						const Eigen::Vector3d Xc = Rc * points3d[pIdx] + tc;
+						if (Xc(2) <= 1e-6)
+						{
+							c += w * kEvalSqTh;
+							continue;
+						}
+						++frontCount;
+						const double du = Xc(0) / Xc(2) - points2d[pIdx](0);
+						const double dv = Xc(1) / Xc(2) - points2d[pIdx](1);
+						const double sq = du * du + dv * dv;
+						c += w * std::min(sq, kEvalSqTh);
+					}
+					return c;
+				};
 
 				// Iterating through the potential models.
 				for (auto& model : models_)
 				{
+					if (model.getData().rows() < 3 || model.getData().cols() < 4 || !model.getData().allFinite())
+						continue;
+
 					// Get the pose parameters
 					Eigen::Matrix3d R = model.getData().block<3, 3>(0, 0);
 					Eigen::Vector3d t = model.getData().block<3, 1>(0, 3);
 
-					// Decompose the essential matrix to camera poses
+					size_t initFront = 0;
+					const double initCost = evaluatePoseCost(R, t, initFront);
+					if (initFront < 3)
+						continue;
+					if (initCost < bestCost)
+					{
+						bestCost = initCost;
+						bestPose = poselib::CameraPose(R, t);
+					}
+
 					poselib::CameraPose pose(R, t);
+					if (!pose.q.allFinite() || !pose.t.allFinite())
+						continue;
 					
 					// Perform the bundle adjustment
 					poselib::BundleStats stats =
 						poselib::bundle_adjust(points2d, points3d, &pose, tmpOptions, weights);
-					/*else
-					{
-						poselib::Camera dummyCamera;
-						dummyCamera.model_id = camera->getModelId();
-						dummyCamera.params = camera->getParameters();
-						poselib::bundle_adjust(unnormalizedPoint2d, points3d, dummyCamera, &pose, tmpOptions);
-						
-					}*/
 
-					if (stats.cost < bestCost)
+					if (std::isfinite(stats.cost) && pose.q.allFinite() && pose.t.allFinite())
 					{
-						bestCost = stats.cost;
-						bestPose = pose;
+						size_t refinedFront = 0;
+						const double refinedCost = evaluatePoseCost(pose.R(), pose.t, refinedFront);
+						if (refinedFront >= 3 && refinedCost < bestCost)
+						{
+							bestCost = refinedCost;
+							bestPose = pose;
+						}
 					}
 				}
 				
-				// Composing the essential matrix from the pose
+				// Composing the pose matrix from the best refined pose
 				if (bestCost < std::numeric_limits<double>::max())
 				{
-					// Adding the essential matrix as the estimated models.
 					models_.resize(1);
 					auto &modelData = models_[0].getMutableData();
 					modelData = bestPose.Rt();
+					return true;
 				}
 
-				return models_.size();
+				models_.clear();
+				return false;
 			}
 		}
 	}

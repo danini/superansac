@@ -4,7 +4,12 @@ import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from lightglue.utils import load_image
+
+
+def load_image(path):
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return torch.from_numpy(img.transpose(2, 0, 1)).float() / 255.0
 
 def simple_collate_fn(sample):
     return sample

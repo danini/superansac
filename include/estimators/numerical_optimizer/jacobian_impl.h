@@ -64,8 +64,10 @@ class CameraJacobianAccumulator {
             const Eigen::Vector3d Z = pose.apply(X[i]);
             // Note this assumes points that are behind the camera will stay behind the camera
             // during the optimization
-            if (Z(2) < 0)
+            if (Z(2) <= 1e-6) {
+                cost += weights[i] * loss_fn.loss(1e6);
                 continue;
+            }
             const double inv_z = 1.0 / Z(2);
             Eigen::Vector2d p(Z(0) * inv_z, Z(1) * inv_z);
             CameraModel::project(camera.params, p, &p);

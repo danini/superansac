@@ -4,7 +4,14 @@ import torch
 
 import kornia as K
 import kornia.feature as KF
-from lightglue.utils import load_image, rbd
+
+
+def load_image(path):
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if img is None:
+        raise FileNotFoundError(f"Could not read image: {path}")
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return torch.from_numpy(img.transpose(2, 0, 1)).float() / 255.0
 
 def normalize_keypoints(keypoints, K):
     '''Normalize keypoints using the calibration data.'''

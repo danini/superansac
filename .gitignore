@@ -44,3 +44,7 @@ pyproject.toml
 *.csv
 *.pdf
 tests/*.csv
+__pycache__/
+data
+data/
+*.pkl

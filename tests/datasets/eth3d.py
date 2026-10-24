@@ -6,8 +6,13 @@ import numpy as np
 import cv2
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
-from lightglue.utils import load_image
 import torch
+
+
+def load_image(path):
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return torch.from_numpy(img.transpose(2, 0, 1)).float() / 255.0
 
 def simple_collate_fn(sample):
     return sample
@@ -17,19 +22,21 @@ def read_cameras(camera_file, scale_factor=None):
     """ Read the camera intrinsics from a file in COLMAP format. """
     with open(camera_file, 'r') as f:
         raw_cameras = f.read().rstrip().split('\n')
-    raw_cameras = raw_cameras[3:]
-    cameras = []
-    for c in raw_cameras:
+    raw_cameras = [line for line in raw_cameras if line and not line.startswith('#')]
+    cameras = {}
+    for idx, c in enumerate(raw_cameras):
         data = c.split(' ')
-        cameras.append({
+        cam_id = int(data[0])
+        cam_dict = {
             "model": data[1],
             "width": int(data[2]),
             "height": int(data[3]),
-            "params": np.array(list(map(float, data[4:])))})
-
-    # Optionally scale the intrinsics if the image are resized
-    if scale_factor is not None:
-        cameras = [scale_intrinsics(c, scale_factor) for c in cameras]
+            "params": np.array(list(map(float, data[4:])))}
+        if scale_factor is not None:
+            cam_dict = scale_intrinsics(cam_dict, scale_factor)
+        cameras[cam_id] = cam_dict
+        if idx not in cameras:
+            cameras[idx] = cam_dict
     return cameras
 
 
@@ -96,13 +103,6 @@ class ETH3D(Dataset):
                 Path(folder, "dslr_calibration_undistorted", "cameras.txt")),
                 1 / self.downsize_factor)
             name_to_cam_idx = {name: {} for name in names}
-            with open(str(Path(folder, "dslr_calibration_jpg", "images.txt")),
-                      "r") as f:
-                raw_data = f.read().rstrip().split('\n')[4::2]
-            for raw_line in raw_data:
-                line = raw_line.split(' ')
-                img_name = os.path.basename(line[-1])
-                name_to_cam_idx[img_name]["dist_camera_idx"] = int(line[-2])
             T_world_to_camera = {}
             image_visible_points3D = {}
             with open(str(Path(folder, "dslr_calibration_undistorted",
@@ -164,30 +164,39 @@ class ETH3D(Dataset):
     def __getitem__(self, idx):
         # Load the reference image
         data = self.data[idx]
-        ref_img = cv2.imread(data["ref_img_path"])
-        ref_img = cv2.cvtColor(ref_img, cv2.COLOR_BGR2RGB)
-        output_shape = np.array(ref_img.shape) // self.downsize_factor
-        ref_img = cv2.resize(ref_img, tuple(output_shape[[1, 0]]),
-                             interpolation = cv2.INTER_AREA)
-        # Convert to torch and move the last channel to the front
-        ref_img = torch.from_numpy(ref_img.transpose(2, 0, 1)).float() / 255.0
+        ref_img_bgr = cv2.imread(data["ref_img_path"])
+        output_shape = np.array(ref_img_bgr.shape) // self.downsize_factor
+        ref_img_bgr = cv2.resize(ref_img_bgr, tuple(output_shape[[1, 0]]),
+                                 interpolation=cv2.INTER_AREA)
+        ref_img = cv2.cvtColor(ref_img_bgr, cv2.COLOR_BGR2RGB)
+        ref_img_t = torch.from_numpy(ref_img.transpose(2, 0, 1)).float() / 255.0
 
         # Load the target image
-        target_img = cv2.imread(data["target_img_path"])
-        target_img = cv2.cvtColor(target_img, cv2.COLOR_BGR2RGB)
-        output_shape = np.array(target_img.shape) // self.downsize_factor
-        target_img = cv2.resize(target_img, tuple(output_shape[[1, 0]]),
-                                interpolation = cv2.INTER_AREA)
-        # Convert to torch and move the last channel to the front
-        target_img = torch.from_numpy(target_img.transpose(2, 0, 1)).float() / 255.0
+        target_img_bgr = cv2.imread(data["target_img_path"])
+        output_shape_t = np.array(target_img_bgr.shape) // self.downsize_factor
+        target_img_bgr = cv2.resize(target_img_bgr, tuple(output_shape_t[[1, 0]]),
+                                    interpolation=cv2.INTER_AREA)
+        target_img = cv2.cvtColor(target_img_bgr, cv2.COLOR_BGR2RGB)
+        target_img_t = torch.from_numpy(target_img.transpose(2, 0, 1)).float() / 255.0
+
+        # Cache downsized images so path-based matchers (RoMa/LoMa) see the exact same resolution as K1/K2
+        cache_dir = os.path.join(self.root_dir, f"_downsized_{self.downsize_factor}")
+        os.makedirs(cache_dir, exist_ok=True)
+        scene_name = Path(data["ref_img_path"]).parents[2].name
+        p1_cache = os.path.join(cache_dir, f"{scene_name}_{data['ref_name']}.jpg")
+        p2_cache = os.path.join(cache_dir, f"{scene_name}_{data['target_name']}.jpg")
+        if not os.path.exists(p1_cache):
+            cv2.imwrite(p1_cache, ref_img_bgr)
+        if not os.path.exists(p2_cache):
+            cv2.imwrite(p2_cache, target_img_bgr)
 
         # Get the relative pose
         Rt = data["T_world_to_target"] @ np.linalg.inv(data["T_world_to_ref"])
 
         return {
-            "id1": data["ref_name"], "id2": data["target_name"],
-            "path1": data["ref_img_path"], "path2": data["target_img_path"],
-            "img1": ref_img, "img2": target_img,
+            "id1": f"{scene_name}_{data['ref_name']}", "id2": f"{scene_name}_{data['target_name']}",
+            "path1": p1_cache, "path2": p2_cache,
+            "img1": ref_img_t, "img2": target_img_t,
             "R_1_2": Rt[:3, :3], "T_1_2": Rt[:3, 3],
             "K1": data["ref_undist_camera"],
             "K2": data["target_undist_camera"],

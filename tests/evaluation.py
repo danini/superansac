@@ -163,8 +163,9 @@ def homography_pose_error(H, scale, pose_gt, K1, K2):
     R_gt = pose_gt[:, :3]
     t_gt = pose_gt[:, 3]
     try:
-        num, Rs, ts, _ = cv2.decomposeHomographyMat(np.asarray(H, dtype=np.float64), np.asarray(K2, dtype=np.float64))
-    except cv2.error:
+        H_norm = np.linalg.inv(np.asarray(K2, dtype=np.float64)) @ np.asarray(H, dtype=np.float64) @ np.asarray(K1, dtype=np.float64)
+        num, Rs, ts, _ = cv2.decomposeHomographyMat(H_norm, np.eye(3, dtype=np.float64))
+    except (cv2.error, np.linalg.LinAlgError):
         return 180.0, 180.0, np.inf
     if num == 0 or not Rs:
         return 180.0, 180.0, np.inf
@@ -176,6 +177,27 @@ def homography_pose_error(H, scale, pose_gt, K1, K2):
             best_max = max(er, et)
             best_r, best_t = er, et
     return best_r, best_t, best_t
+
+
+def homography_corner_error(H_est, H_gt, width, height):
+    """Mean reprojection error (in pixels) of the 4 image corners under H_est vs H_gt."""
+    if H_est is None or not np.all(np.isfinite(H_est)) or np.linalg.norm(H_est) < 1e-12:
+        return 1e6
+    corners = np.array([
+        [0.0, 0.0, 1.0],
+        [float(width), 0.0, 1.0],
+        [float(width), float(height), 1.0],
+        [0.0, float(height), 1.0],
+    ], dtype=np.float64)
+    c_gt = corners @ np.asarray(H_gt, dtype=np.float64).T
+    if np.any(np.abs(c_gt[:, 2]) < 1e-8):
+        return 1e6
+    c_gt = c_gt[:, :2] / c_gt[:, 2:3]
+    c_est = corners @ np.asarray(H_est, dtype=np.float64).T
+    if np.any(np.abs(c_est[:, 2]) < 1e-8):
+        return 1e6
+    c_est = c_est[:, :2] / c_est[:, 2:3]
+    return float(np.mean(np.linalg.norm(c_est - c_gt, axis=1)))
 
 
 def pose_auc(errors, thresholds=[5, 10, 20]):

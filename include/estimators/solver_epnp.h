@@ -62,7 +62,7 @@ namespace superansac
                     Eigen::Matrix<double, 4, 3>& controlPoints) const;
 
                 // Computes the barycentric coordinates of the world points
-                void computeBarycentricCoordinates(
+                bool computeBarycentricCoordinates(
                     const Eigen::MatrixXd& worldPoints,
                     const Eigen::Matrix<double, 4, 3>& controlPoints,
                     Eigen::MatrixXd& alphas) const;
@@ -78,7 +78,7 @@ namespace superansac
                     Eigen::MatrixXd& M) const;
 
                 // Solves for the camera pose using EPnP
-                void solveForPose(
+                bool solveForPose(
                     const Eigen::MatrixXd& M,
                     const Eigen::Matrix<double, 4, 3>& controlPoints,
                     const Eigen::MatrixXd& alphas,
@@ -147,18 +147,24 @@ namespace superansac
                 // Choose control points
                 Eigen::Matrix<double, 4, 3> controlPoints;
                 chooseControlPoints(worldPoints, controlPoints);
+                if (!controlPoints.allFinite())
+                    return false;
 
                 // Compute barycentric coordinates
                 Eigen::MatrixXd alphas(kSampleNumber_, 4);
-                computeBarycentricCoordinates(worldPoints, controlPoints, alphas);
+                if (!computeBarycentricCoordinates(worldPoints, controlPoints, alphas))
+                    return false;
 
                 // Construct M matrix
                 Eigen::MatrixXd M(2 * kSampleNumber_, 12);
                 fillM(alphas, imagePoints, fu, fv, uc, vc, M);
+                if (!M.allFinite())
+                    return false;
 
                 // Solve for pose
                 models::Model model;
-                solveForPose(M, controlPoints, alphas, worldPoints, model);
+                if (!solveForPose(M, controlPoints, alphas, worldPoints, model))
+                    return false;
                 if (!model.getData().allFinite())
                     return false;
 
@@ -187,7 +193,7 @@ namespace superansac
                     controlPoints.row(i + 1) = centroid.transpose() + V.col(i).transpose() * S(i) / worldPoints.rows();
             }
 
-            void EPnPSolver::computeBarycentricCoordinates(
+            bool EPnPSolver::computeBarycentricCoordinates(
                 const Eigen::MatrixXd& worldPoints,
                 const Eigen::Matrix<double, 4, 3>& controlPoints,
                 Eigen::MatrixXd& alphas) const
@@ -196,7 +202,12 @@ namespace superansac
                 for (int i = 0; i < 3; ++i)
                     CC.col(i) = controlPoints.row(i + 1).transpose() - controlPoints.row(0).transpose();
 
+                if (!CC.allFinite() || std::abs(CC.determinant()) < 1e-9)
+                    return false;
+
                 Eigen::Matrix3d CC_inv = CC.inverse();
+                if (!CC_inv.allFinite())
+                    return false;
                 for (int i = 0; i < worldPoints.rows(); ++i)
                 {
                     Eigen::Vector3d pi = worldPoints.row(i).transpose() - controlPoints.row(0).transpose();
@@ -206,6 +217,7 @@ namespace superansac
                     alphas(i, 3) = alpha(2);
                     alphas(i, 0) = 1.0 - alpha.sum();
                 }
+                return alphas.allFinite();
             }
 
             void EPnPSolver::fillM(
@@ -309,7 +321,7 @@ namespace superansac
                 if (betas_10(6) < 0) betas(3) = -betas(3);
             }
 
-            void EPnPSolver::solveForPose(
+            bool EPnPSolver::solveForPose(
                 const Eigen::MatrixXd& M,
                 const Eigen::Matrix<double, 4, 3>& controlPoints,
                 const Eigen::MatrixXd& alphas,
@@ -318,7 +330,11 @@ namespace superansac
             {
                 // Perform SVD on M^T * M for 12x12 right singular vectors
                 Eigen::Matrix<double, 12, 12> MtM = M.transpose() * M;
+                if (!MtM.allFinite())
+                    return false;
                 Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 12, 12>> es(MtM);
+                if (es.info() != Eigen::Success || !es.eigenvectors().allFinite())
+                    return false;
                 // Eigenvectors of SelfAdjointEigenSolver are sorted in increasing eigenvalue order,
                 // while computeL6x10 expects the 4 smallest-singular-value vectors in the last 4 columns.
                 Eigen::Matrix<double, 12, 12> V;
@@ -331,10 +347,14 @@ namespace superansac
 
                 Eigen::Matrix<double, 6, 1> rho;
                 computeRho(controlPoints, rho);
+                if (!L6x10.allFinite() || !rho.allFinite())
+                    return false;
 
                 // Solve for betas
                 Eigen::Vector4d betas;
                 findBetas(L6x10, rho, betas);
+                if (!betas.allFinite())
+                    return false;
 
                 // Compute camera control points
                 Eigen::Matrix<double, 4, 3> cameraControlPoints = Eigen::Matrix<double, 4, 3>::Zero();
@@ -359,6 +379,7 @@ namespace superansac
                 modelData.resize(3, 4);
                 modelData.block<3, 3>(0, 0) = R;
                 modelData.col(3) = t;
+                return modelData.allFinite();
             }
 
             void EPnPSolver::estimateRandT(

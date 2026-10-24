@@ -142,7 +142,8 @@ namespace superansac
 				// fallback. Previously kWeights_ was silently ignored, so the LM
 				// always ran with uniform per-point weights.
 				const bool useArgWeights = kWeights_ != nullptr;
-				const bool useMemberWeights = !useArgWeights && pointWeights != nullptr;
+				const bool useMemberWeights = !useArgWeights &&
+					pointWeights != nullptr && pointWeights->size() >= static_cast<size_t>(kData_.rows());
 				if (useArgWeights || useMemberWeights)
 					weights.resize(kSampleNumber_);
 
@@ -211,11 +212,12 @@ namespace superansac
 				
 				// The options for the bundle adjustment
 				poselib::BundleOptions tmpOptions = options;
+				const bool kIsInnerSubsample = (kSample_ != nullptr && kWeights_ == nullptr && kSampleNumber_ <= 40);
 				// If the sample is provided, we use a more robust loss function. This typically runs in the end of the robust estimation
 				if (kSample_ != nullptr) 
 				{
 					tmpOptions.loss_scale = 0.5 * options.loss_scale;
-					tmpOptions.max_iterations = 50;
+					tmpOptions.max_iterations = kIsInnerSubsample ? 12 : 50;
 					tmpOptions.loss_type = poselib::BundleOptions::LossType::CAUCHY;
 				}
 
@@ -317,7 +319,7 @@ namespace superansac
 					return a.initialCost < b.initialCost;
 				});
 
-				const size_t kMaxRefinements = std::min<size_t>(2, candidates.size());
+				const size_t kMaxRefinements = std::min<size_t>(kIsInnerSubsample ? 1 : 2, candidates.size());
 				double bestCost = std::numeric_limits<double>::max();
 				poselib::CameraPose bestPose;
 				bool haveBestPose = false;
@@ -331,12 +333,15 @@ namespace superansac
 						&pose,
 						tmpOptions,
 						weights);
-					stats = poselib::refine_relpose(
-						x1,
-						x2,
-						&pose,
-						tightOptions,
-						weights);
+					if (!kIsInnerSubsample)
+					{
+						stats = poselib::refine_relpose(
+							x1,
+							x2,
+							&pose,
+							tightOptions,
+							weights);
+					}
 
 					if (!haveBestPose || stats.cost < bestCost)
 					{
