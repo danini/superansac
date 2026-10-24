@@ -120,3 +120,4 @@ if __name__ == "__main__":
     for k, fn in sections.items():
         if which in ("all", k):
             print(f"\n<!-- {k} -->\n{fn()}\n")
+
