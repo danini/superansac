@@ -28,94 +28,97 @@ pip install .
 
 # Results
 
-All benchmarks below evaluate **`SupeRANSAC`** using the default `RANSACSettings()` out of the box against **`PoseLib`** (for Fundamental matrix, Essential matrix, and Homography estimation) and **`OpenCV RANSAC`** (`cv2.solvePnPRansac` and `cv2.estimateAffine3D` for 6D Absolute Pose and 6D Rigid Registration) across **9 public multi-view and 3D benchmarks**: **PhotoTourism** (*CVPR 2020 RANSAC Tutorial*), **ETH3D** (*High-Res Multi-View*), **7Scenes** (*RGB-D indoor*), **Kusvod2**, **AdelaideRMF / Multi-H**, **Strecha Fountain**, **EVD** (*Extreme View Dataset*), **Homogr**, and **pose6dscene / 3D scan registration**.
+All numbers below compare **SupeRANSAC with its default `RANSACSettings()`** against **PoseLib 2.0.5** (and, for 6D problems, OpenCV and a plain Procrustes RANSAC) under one protocol:
 
-Every table and figure in this README is directly reproducible via standalone test scripts in `tests/`:
+* **Real inputs only.** The correspondences are the unmodified output of each matcher, or the original labelled tentative matches shipped with the classic datasets. Nothing is filtered against the ground truth, no outliers are injected, no confidence scores are synthesised. Synthetic outlier sweeps exist for the 6D problems but are reported separately and labelled as such.
+* **Real ground truth only.** PhotoTourism / ETH3D / 7Scenes poses and calibrations come from the datasets; Homogr / EVD homographies and kusvod2 / AdelaideRMF inlier labels come from the datasets.
+* **Identical inputs, thresholds and budgets for every method**: the same correspondence array in the same order; 1.5 px ($F$, $E$), 4.0 px ($H$), 3.5 px (PnP), 5 cm (rigid); `min_iterations = 1000`, `max_iterations = 5000` for the tables and `min = max = b` for the speed–accuracy sweeps; PROSAC on for both (`max_prosac_iterations = max_iterations` in PoseLib) wherever a confidence order exists, off for both where none exists.
+* **Frozen pair lists.** The 300 calibrated pairs are listed in `tests/datasets/pairs/calibrated_pairs.json`, so anyone with the datasets evaluates exactly the same pairs.
+* The library contains no input-statistics-dependent switches; every default is the same for every dataset and matcher.
+
+Every table is produced by one script in `tests/`:
 
 ```bash
-# 0. Activate the Python virtual environment (if using ~/ransac/.venv on this machine)
-source ~/ransac/.venv/bin/activate
-
-# 1. Download & prepare all public benchmark datasets into data/
-python tests/download_datasets.py
-
-# 2. Experiment 1 & 2 (Relative Pose: Fundamental & Essential Matrix across 5 datasets)
-python tests/test_relative_pose.py --problem all --features all
-
-# 3. Experiment 1 & 2 (Homography across 5 datasets: EVD, Homogr, AdelaideRMF, ETH3D, PhotoTourism)
-python tests/test_homography.py --features all
-
-# 4. Experiment 3 (7 Feature Matchers: LoMa, RoMa, LoFTR, DISK+LG, RootSIFT, SIFT, ORB)
-python tests/test_detectors.py --problem all
-
-# 5. Experiment 4 (6D Absolute Pose PnP & 6D Rigid Registration SE(3) + Overview Figure)
-python tests/test_6d_pose.py --problem all
+python tests/download_datasets.py                         # PhotoTourism, ETH3D, 7Scenes, kusvod2/AdelaideRMF/Homogr/EVD (HPatches optional)
+python tests/test_relative_pose.py --problem all --features all   # Section 1: F and E, 300 calibrated pairs, LoMa / RoMa / DISK+LG + speed curves
+python tests/test_homography.py --features all                    # Section 1: H, Homogr + EVD + speed curves
+python tests/test_detectors.py --problem all                      # Section 2: F, E, H with 7 matchers
+python tests/test_classic_labelled.py                             # Section 3: labelled tentative matches (high outlier ratios)
+python tests/test_6d_pose.py --problem all                        # Section 4: PnP and rigid registration
 ```
+
+Summary (AUC@10° for $F$/$E$, AUC@5px for $H$, AUC@(5°,10cm) for 6D; higher is better; runtimes are means per problem, single thread):
+
+| Task | Data | Baseline | SupeRANSAC | Δ | Runtime SupeRANSAC / baseline |
+|---|---|---:|---:|---:|---:|
+| $F$, LoMa / RoMa / DISK+LG | 300 calibrated pairs | 71.5 / 66.8 / 49.9 (PoseLib) | 71.6 / 67.6 / 46.8 | +0.1 / +0.8 / −3.2 | 49 / 19 ms, 96 / 66 ms, 43 / 17 ms |
+| $F$, RootSIFT / SIFT / ORB | 300 calibrated pairs | 29.9 / 25.9 / 17.0 (PoseLib) | **38.6 / 33.0 / 21.1** | **+8.7 / +7.1 / +4.0** | 84 / 93, 88 / 104, 106 / 140 ms |
+| $E$, LoMa / RoMa / DISK+LG | 300 calibrated pairs | **78.3 / 74.0 / 63.8** (PoseLib) | 77.1 / 72.7 / 61.4 | −1.2 / −1.3 / −2.4 | 99 / 32, 204 / 106, 96 / 31 ms |
+| $E$, RootSIFT / SIFT / ORB | 300 calibrated pairs | 54.7 / 50.9 / 39.4 (PoseLib) | 53.0 / 50.4 / 40.0 | −1.7 / −0.5 / +0.5 | 103 / 70, 95 / 69, 142 / 89 ms |
+| $H$, LoMa / RoMa / DISK+LG | 16 Homogr + EVD pairs | 59.5 / 56.5 / 43.9 (PoseLib) | 58.9 / 57.2 / 42.9 | −0.6 / +0.7 / −1.0 | 16 / 8, 31 / 31, 15 / 8 ms |
+| $H$, RootSIFT / SIFT / ORB | 16 Homogr + EVD pairs | 39.8 / 39.9 / 33.8 (PoseLib) | **47.7 / 47.3 / 35.6** | **+7.9 / +7.4 / +1.8** | 25 / 8, 26 / 8, 29 / 9 ms |
+| $F$, labelled tentative matches | 30 kusvod2 + AdelaideRMF scenes × 5 | 77.7 @2px (PoseLib) | 78.4 | +0.6 | 61 / 29 ms |
+| $H$, labelled tentative matches | 35 Homogr + EVD + AdelaideRMF scenes × 5 | 62.5 @5px (PoseLib) | 63.0 | +0.5 | 16 / 7 ms |
+| PnP, 6 matchers | 600 real 7Scenes RGB-D problems | 37.1 (PoseLib), 30.7 (OpenCV) | 37.2 | +0.0 / +6.5 | 72 / 18 / 190 ms |
+| Rigid, 6 matchers | 599 real 7Scenes RGB-D problems | 41.3 (Procrustes RANSAC) | 39.1 | −2.1 | 24 / 244 ms |
+
+In short: on real correspondences from modern learned matchers, SupeRANSAC and PoseLib are statistically indistinguishable for $F$ and $H$, PoseLib is slightly more accurate for $E$, and PoseLib is 2–3× faster. SupeRANSAC's advantage shows up where the inlier ratio is low and the confidence ordering is weak — classical sparse matchers (RootSIFT, SIFT, ORB) on $F$ and $H$, and the synthetic high-outlier 6D sweeps — where its local optimisation and MAGSAC++ scoring buy 4–9 AUC points at equal or lower runtime.
 
 ---
 
-## 1. Multi-Dataset Benchmark Overview
+## 1. Relative pose and homography on real detector matches
 
-Across all 5 geometric estimation tasks and 9 datasets (`825` evaluation problems per matcher), `SupeRANSAC` consistently and substantially outperforms `PoseLib` and `OpenCV RANSAC`:
+**Data.** 300 calibrated image pairs frozen in `tests/datasets/pairs/calibrated_pairs.json`: PhotoTourism *palace_of_westminster* (100, CVPR'20 RANSAC tutorial GT), ETH3D (100: courtyard 20, facade 20, electro / kicker / relief 15, playground 10, terrace 5; COLMAP GT; images downscaled 4×), 7Scenes (100: chess 40, fire 40, heads 20; dataset poses). Homography: the 16 Homogr + EVD pairs with ground-truth $H$ (HPatches is used in addition when present in `data/hpatches`).
 
-<p align="center">
-  <img src="assets/benchmark_overview.png" width="820"/>
-</p>
+**Metric.** $F$, $E$: relative pose recovered from the estimated matrix on the method's own inliers (`cv2.recoverPose`; PoseLib's own pose for $E$), error = max(rotation, translation angle), AUC@5/10/20°. $H$: mean transfer error of the corners of the ground-truth-inlier bounding box, AUC@2.5/5/10 px.
 
-| Geometric Task | Datasets (`# Problems`) | Primary Metric | Baseline (`PoseLib` / `OpenCV`) | **`SupeRANSAC` (3-Matcher Avg)** | **`SupeRANSAC` (Best Matcher)** | Gain (Avg / Best) |
-| :--- | :--- | :--- | :---: | :---: | :---: | :---: |
-| **Fundamental Matrix ($F$)** | PhotoTourism, ETH3D, 7Scenes, Kusvod2/AdelaideRMF (`212` pairs) | Pose $\text{AUC}@10^\circ$ | `43.54%` (`PoseLib`) | **`54.34%`** | **`61.68%`** (`LoMa`, vs `47.81%`) | **`+10.80 pt` / `+13.87 pt`** |
-| **Essential Matrix ($E$)** | PhotoTourism, ETH3D, 7Scenes, Strecha, Kusvod2 (`158` pairs) | Pose $\text{AUC}@10^\circ$ | `54.63%` (`PoseLib`) | **`60.62%`** | **`67.90%`** (`LoMa`, vs `61.22%`) | **`+6.00 pt` / `+6.68 pt`** |
-| **Homography ($H$)** | EVD, Homogr, AdelaideRMF/Multi-H, ETH3D, PhotoTourism (`84` pairs) | Corner $\text{AUC}@5\text{px}$ | `25.65%` (`PoseLib`) | **`36.29%`** | **`44.25%`** (`RoMa`, vs `31.23%`) | **`+10.64 pt` / `+13.02 pt`** |
-| **6D Absolute Pose ($PnP$)** | 7Scenes RGB-D 2D–3D, pose6dscene (`203` problems) | Pose $\text{AUC}@(10^\circ, 50\text{cm})$ | `45.49%` (`OpenCV RANSAC`) | **`78.56%`** | **`90.78%`** (`7Scenes RGB-D`) | **`+33.07 pt`** (**`5.1x` faster**) |
-| **6D Rigid Pose ($SE(3)$)** | 7Scenes RGB-D 3D–3D, 3D Scan Benchmark (`168` problems) | Pose $\text{AUC}@(5^\circ, 10\text{cm})$ | `16.46%` (`OpenCV RANSAC`) | **`80.60%`** | **`84.99%`** (`3D Scan Benchmark`) | **`+64.14 pt`** |
+### Fundamental matrix (AUC@10°, 1.5 px, 1000–5000 iterations)
 
-### Per-Dataset Breakdown (`LoMa` Features)
+| Matcher | Dataset | Pairs | PoseLib | SupeRANSAC | Δ | ms PoseLib / SupeRANSAC |
+|---|---|---:|---:|---:|---:|---:|
+| LoMa | PhotoTourism | 100 | 70.0 | **70.1** | +0.1 | 16 / 44 |
+| LoMa | ETH3D | 100 | **90.5** | 90.3 | −0.2 | 22 / 52 |
+| LoMa | 7Scenes | 100 | 55.0 | **55.4** | +0.4 | 21 / 51 |
+| LoMa | **Overall** | 300 | 71.5 | **71.6** | +0.1 | 19 / 49 |
+| RoMa | PhotoTourism | 100 | 58.8 | **59.8** | +1.0 | 71 / 100 |
+| RoMa | ETH3D | 100 | 81.2 | **82.2** | +1.0 | 65 / 83 |
+| RoMa | 7Scenes | 100 | 61.1 | **61.5** | +0.4 | 61 / 104 |
+| RoMa | **Overall** | 300 | 66.8 | **67.6** | +0.8 | 66 / 96 |
+| DISK+LG | PhotoTourism | 100 | **50.1** | 44.1 | −6.0 | 13 / 36 |
+| DISK+LG | ETH3D | 99 | **57.9** | 56.1 | −1.8 | 20 / 53 |
+| DISK+LG | 7Scenes | 100 | **42.9** | 41.2 | −1.7 | 17 / 40 |
+| DISK+LG | **Overall** | 299 | **49.9** | 46.8 | −3.2 | 17 / 43 |
 
-#### Fundamental Matrix ($F$, `212` pairs across 4 datasets)
-| Dataset | Pairs | Method | $\text{AUC}@5^\circ \uparrow$ | $\text{AUC}@10^\circ \uparrow$ | $\text{AUC}@20^\circ \uparrow$ | Med Error ($^\circ$) $\downarrow$ | Mean Time (ms) $\downarrow$ |
-| :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: |
-| **PhotoTourism** | 38 | **`SupeRANSAC`** / `PoseLib` | **`60.48%`** / `42.90%` | **`74.45%`** / `56.79%` (**`+17.66 pt`**) | **`84.38%`** / `70.14%` | **`1.49°`** / `2.80°` | `51.49` / `28.83` |
-| **ETH3D** | 39 | **`SupeRANSAC`** / `PoseLib` | **`67.99%`** / `56.92%` | **`81.14%`** / `70.25%` (**`+10.89 pt`**) | **`88.01%`** / `80.38%` | **`0.85°`** / `1.32°` | `62.06` / `38.92` |
-| **7Scenes** | 45 | **`SupeRANSAC`** / `PoseLib` | **`15.30%`** / `13.49%` | **`37.10%`** / `33.83%` (**`+3.27 pt`**) | **`56.99%`** / `50.98%` | **`5.19°`** / `6.25°` | `72.61` / `28.07` |
-| **Kusvod2 / AdelaideRMF** | 90 | **`SupeRANSAC`** / `PoseLib` | **`42.76%`** / `30.09%` | **`61.46%`** / `42.83%` (**`+18.63 pt`**) | **`74.16%`** / `58.18%` | **`2.81°`** / `5.23°` | `56.19` / `36.40` |
-| **Overall ($F$)** | **212** | **`SupeRANSAC`** / `PoseLib` | **`44.10%`** / `33.14%` | **`61.68%`** / `47.81%` (**`+13.87 pt`**) | **`74.46%`** / `62.26%` | **`2.80°`** / `4.46°` | `59.91` / `33.74` |
+### Essential matrix (AUC@10°, 1.5 px, 1000–5000 iterations)
 
-#### Essential Matrix ($E$, `158` pairs across 5 datasets)
-| Dataset | Pairs | Method | $\text{AUC}@5^\circ \uparrow$ | $\text{AUC}@10^\circ \uparrow$ | $\text{AUC}@20^\circ \uparrow$ | Med Error ($^\circ$) $\downarrow$ | Mean Time (ms) $\downarrow$ |
-| :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: |
-| **PhotoTourism** | 30 | **`SupeRANSAC`** / `PoseLib` | **`81.51%`** / `80.08%` | **`87.42%`** / `86.88%` (**`+0.54 pt`**) | **`90.38%`** / `90.10%` | **`0.36°`** / `0.50°` | `75.38` / `42.99` |
-| **ETH3D** | 30 | **`SupeRANSAC`** / `PoseLib` | `95.26%` / `95.48%` | `97.63%` / `97.74%` (`-0.11 pt`) | `98.81%` / `98.87%` | `0.24°` / `0.21°` | `79.81` / `38.97` |
-| **7Scenes** | 36 | **`SupeRANSAC`** / `PoseLib` | `29.08%` / `30.20%` | **`55.14%`** / `52.30%` (**`+2.84 pt`**) | **`73.29%`** / `71.35%` | **`4.03°`** / `4.71°` | `76.96` / `34.99` |
-| **Strecha / SacreCoeur** | 2 | **`SupeRANSAC`** / `PoseLib` | `48.01%` / `48.13%` | `49.00%` / `49.07%` (`-0.06 pt`) | `49.50%` / `49.53%` | `12.82°` / `12.56°` | `97.82` / `35.35` |
-| **Kusvod2 / AdelaideRMF** | 60 | **`SupeRANSAC`** / `PoseLib` | **`33.02%`** / `20.21%` | **`52.44%`** / `37.14%` (**`+15.30 pt`**) | **`68.18%`** / `57.17%` | **`3.75°`** / `6.12°` | `88.89` / `56.01` |
-| **Overall ($E$)** | **158** | **`SupeRANSAC`** / `PoseLib` | **`52.83%`** / `47.99%` | **`67.90%`** / `61.22%` (**`+6.68 pt`**) | **`78.89%`** / `74.14%` | **`2.10°`** / `2.29°` | `82.00` / `45.25` |
+| Matcher | Dataset | Pairs | PoseLib | SupeRANSAC | Δ | ms PoseLib / SupeRANSAC |
+|---|---|---:|---:|---:|---:|---:|
+| LoMa | PhotoTourism | 100 | **81.6** | 79.8 | −1.8 | 28 / 90 |
+| LoMa | ETH3D | 100 | **95.7** | 95.6 | −0.1 | 34 / 104 |
+| LoMa | 7Scenes | 100 | **58.4** | 56.7 | −1.7 | 34 / 103 |
+| LoMa | **Overall** | 300 | **78.3** | 77.1 | −1.2 | 32 / 99 |
+| RoMa | PhotoTourism | 100 | **71.1** | 67.6 | −3.5 | 122 / 213 |
+| RoMa | ETH3D | 100 | **91.0** | 90.6 | −0.4 | 97 / 175 |
+| RoMa | 7Scenes | 100 | **60.9** | 60.8 | −0.0 | 100 / 223 |
+| RoMa | **Overall** | 300 | **74.0** | 72.7 | −1.3 | 106 / 204 |
+| DISK+LG | PhotoTourism | 100 | **62.9** | 60.2 | −2.6 | 28 / 87 |
+| DISK+LG | ETH3D | 99 | **77.2** | 76.2 | −1.0 | 35 / 109 |
+| DISK+LG | 7Scenes | 100 | **52.4** | 48.6 | −3.8 | 31 / 91 |
+| DISK+LG | **Overall** | 299 | **63.8** | 61.4 | −2.4 | 31 / 96 |
 
-#### Homography ($H$, `84` pairs across 5 datasets)
-| Dataset | Pairs | Method | $\text{AUC}@3\text{px} \uparrow$ | $\text{AUC}@5\text{px} \uparrow$ | $\text{AUC}@10\text{px} \uparrow$ | Med Error (px) $\downarrow$ | Mean Time (ms) $\downarrow$ |
-| :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: |
-| **EVD** (*Extreme View*) | 22 | **`SupeRANSAC`** / `PoseLib` | **`46.86%`** / `31.68%` | **`65.65%`** / `40.84%` (**`+24.81 pt`**) | **`81.67%`** / `51.64%` | **`1.11 px`** / `4.05 px` | `30.45` / `4.39` |
-| **Homogr** | 10 | **`SupeRANSAC`** / `PoseLib` | **`58.62%`** / `44.27%` | **`79.31%`** / `57.13%` (**`+22.18 pt`**) | **`89.66%`** / `63.57%` | **`0.99 px`** / `1.37 px` | `22.90` / `8.63` |
-| **AdelaideRMF / Multi-H** | 22 | **`SupeRANSAC`** / `PoseLib` | **`6.56%`** / `0.00%` | **`7.83%`** / `0.00%` (**`+7.83 pt`**) | **`8.46%`** / `3.06%` | **`34.71 px`** / `39.05 px` | `24.78` / `2.17` |
-| **ETH3D** | 15 | **`SupeRANSAC`** / `PoseLib` | **`25.56%`** / `24.00%` | **`40.97%`** / `40.51%` (**`+0.46 pt`**) | **`56.40%`** / `56.24%` | **`3.03 px`** / `3.04 px` | `14.14` / `10.02` |
-| **PhotoTourism** | 15 | **`SupeRANSAC`** / `PoseLib` | **`10.79%`** / `10.74%` | **`12.06%`** / `12.04%` (**`+0.03 pt`**) | `12.70%` / `16.81%` | **`73.71 px`** / `75.67 px` | `14.24` / `6.33` |
-| **Overall ($H$, `LoMa`)** | **84** | **`SupeRANSAC`** / `PoseLib` | **`25.77%`** / `18.74%` | **`37.15%`** / `26.33%` (**`+10.82 pt`**) | **`45.88%`** / `33.70%` | **`4.64 px`** / `25.81 px` | `22.26` / `5.66` |
-| **Overall ($H$, `RoMa`)** | **84** | **`SupeRANSAC`** / `PoseLib` | **`29.32%`** / `21.64%` | **`44.25%`** / `31.23%` (**`+13.02 pt`**) | **`54.34%`** / `39.44%` | **`2.45 px`** / `9.98 px` | `27.45` / `18.87` |
+### Homography (AUC@5px, 4.0 px, 1000–5000 iterations)
 
-### Exact Reproduction Commands (Section 1)
-```bash
-source ~/ransac/.venv/bin/activate
-python tests/download_datasets.py
-python tests/test_relative_pose.py --problem all --features all
-python tests/test_homography.py --features all
-python tests/test_6d_pose.py --problem all
-```
+| Matcher | Dataset | Pairs | PoseLib | SupeRANSAC | Δ | ms PoseLib / SupeRANSAC |
+|---|---|---:|---:|---:|---:|---:|
+| LoMa | EVD | 11 | 56.4 | **56.7** | +0.3 | 6 / 13 |
+| LoMa | Homogr | 5 | **71.0** | 69.5 | −1.5 | 12 / 18 |
+| LoMa | **Overall** | 16 | **59.5** | 58.9 | −0.6 | 8 / 15 |
+| RoMa | **Overall** | 16 | 56.5 | **57.2** | +0.7 | 33 / 31 |
+| DISK+LG | **Overall** | 16 | **43.9** | 42.9 | −1.0 | 7 / 13 |
 
----
+### Speed–accuracy trade-off
 
-## 2. Speed–Accuracy Trade-Off Across Datasets: `SupeRANSAC` vs. `PoseLib`
-
-Below, we sweep the RANSAC iteration budget $b \in \{10, 25, 50, 100, 250, 500, 1000, 2500, 5000\}$ across the full multi-dataset benchmark (`212` pairs for $F$, `158` pairs for $E$, `84` pairs for $H$) for **DISK + LightGlue** (`splg`, top row), **RoMa** (`roma`, middle row), and **LoMa** (`loma`, bottom row) across **Essential Matrix** (left), **Fundamental Matrix** (middle), and **Homography** (right) estimation:
+Both methods with `min_iterations = max_iterations = b`, $b \in \{25, 50, 100, 250, 500, 1000, 2500, 5000\}$; no per-budget tuning of either method. SupeRANSAC has a fixed per-call overhead (neighbourhood graph, graph-cut local optimisation, final polish) of roughly 15–40 ms, so its curve starts where PoseLib's already saturates.
 
 <table align="center">
   <tr>
@@ -134,25 +137,22 @@ Below, we sweep the RANSAC iteration budget $b \in \{10, 25, 50, 100, 250, 500, 
     <td align="center"><img src="assets/homography_matrix_loma.png" width="260"/></td>
   </tr>
   <tr>
-    <td align="center"><b>Essential Matrix (5 Datasets)</b></td>
-    <td align="center"><b>Fundamental Matrix (4 Datasets)</b></td>
-    <td align="center"><b>Homography (5 Datasets)</b></td>
+    <td align="center"><b>Essential matrix</b></td>
+    <td align="center"><b>Fundamental matrix</b></td>
+    <td align="center"><b>Homography</b></td>
   </tr>
 </table>
 
-### Exact Reproduction Commands (Section 2)
-`test_relative_pose.py` and `test_homography.py` automatically evaluate the 9 iteration budgets and generate all 9 speed–accuracy plots in `assets/`:
 ```bash
-source ~/ransac/.venv/bin/activate
-python tests/test_relative_pose.py --problem all --features all
+python tests/test_relative_pose.py --problem all --features all    # add --ablate_pp to also run F without the Plane-and-Parallax post-refinement
 python tests/test_homography.py --features all
 ```
 
 ---
 
-## 3. Multi-Detector Evaluation Across 7 Feature Matchers (including `LoMa`)
+## 2. Seven feature matchers
 
-We evaluate **`SupeRANSAC`** and **`PoseLib`** across all multi-dataset pairs (`212` pairs for $F$, `158` pairs for $E$, `84` pairs for $H$) using **7 modern deep and classical feature matchers**: **[LoMa](https://github.com/davnords/LoMa)** (*ECCV 2026 Oral: Local Feature Matching Revisited*), **[RoMa](https://github.com/Parskatt/RoMa)**, **LoFTR**, **DISK + LightGlue**, **RootSIFT**, **SIFT**, and **ORB**. Across **every single detector and all three geometric tasks ($F$, $E$, and $H$)**, `SupeRANSAC` beats `PoseLib`:
+Same 300 calibrated pairs (and the 16 planar pairs) with **LoMa**, **RoMa**, **LoFTR**, **DISK + LightGlue**, **RootSIFT**, **SIFT** and **ORB**. The classical matchers use a 0.95 ratio test on 4000 keypoints, so their match sets are large and noisy (typically 10–40 % inliers); the learned matchers deliver mostly clean sets.
 
 <table align="center">
   <tr>
@@ -164,97 +164,79 @@ We evaluate **`SupeRANSAC`** and **`PoseLib`** across all multi-dataset pairs (`
   </tr>
 </table>
 
-### Fundamental Matrix ($F$, `212` pairs across PhotoTourism, ETH3D, 7Scenes, Kusvod2/AdelaideRMF)
-`SupeRANSAC` outperforms `PoseLib` by **`+8.45 pt` to `+13.86 pt`** in $\text{AUC}@10^\circ$ (`+11.16 pt` average across all 7 matchers):
+| Matcher | $F$ AUC@10° PoseLib / SupeRANSAC | $E$ AUC@10° PoseLib / SupeRANSAC | $H$ AUC@5px PoseLib / SupeRANSAC |
+|---|---:|---:|---:|
+| LoMa | 71.5 / **71.6** (+0.1) | **78.3** / 77.1 (−1.2) | **59.5** / 58.9 (−0.6) |
+| RoMa | 66.8 / **67.6** (+0.8) | **74.0** / 72.7 (−1.3) | 56.5 / **57.2** (+0.7) |
+| LoFTR | **59.5** / 59.1 (−0.4) | **69.2** / 68.3 (−0.9) | **46.2** / 45.1 (−1.1) |
+| DISK+LG | **49.9** / 46.8 (−3.2) | **63.8** / 61.4 (−2.4) | **43.9** / 42.9 (−1.0) |
+| RootSIFT | 29.9 / **38.6** (+8.7) | **54.7** / 53.0 (−1.7) | 39.8 / **47.7** (+7.9) |
+| SIFT | 25.9 / **33.0** (+7.1) | **50.9** / 50.4 (−0.5) | 39.9 / **47.3** (+7.4) |
+| ORB | 17.0 / **21.1** (+4.0) | 39.4 / **40.0** (+0.5) | 33.8 / **35.6** (+1.8) |
+| Average | 45.8 / **48.2** (+2.4) | **61.5** / 60.4 (−1.1) | 45.6 / **47.8** (+2.2) |
 
-| Detector / Matcher | `PoseLib` ($\text{AUC}@5^\circ / 10^\circ / 20^\circ$) | **`SupeRANSAC`** ($\text{AUC}@5^\circ / 10^\circ / 20^\circ$) | `PoseLib` / **`SupeRANSAC`** Med Err | Gain in $\text{AUC}@10^\circ$ |
-| :--- | :---: | :---: | :---: | :---: |
-| **LoMa** | `33.14%` / `47.81%` / `62.26%` | **`44.10%` / `61.68%` / `74.46%`** | `4.46°` / **`2.80°`** | **`+13.86 pt`** |
-| **RoMa** | `35.37%` / `50.03%` / `62.90%` | **`42.30%` / `58.48%` / `72.09%`** | `4.31°` / **`3.06°`** | **`+8.45 pt`** |
-| **LoFTR** | `27.39%` / `40.31%` / `51.96%` | **`35.70%` / `49.96%` / `61.78%`** | `6.46°` / **`4.00°`** | **`+9.64 pt`** |
-| **DISK + LightGlue** | `19.80%` / `32.77%` / `44.71%` | **`27.10%` / `42.87%` / `55.87%`** | `9.82°` / **`5.18°`** | **`+10.10 pt`** |
-| **RootSIFT** | `23.31%` / `32.39%` / `41.80%` | **`33.59%` / `44.44%` / `54.35%`** | `13.73°` / **`4.97°`** | **`+12.05 pt`** |
-| **SIFT** | `20.24%` / `29.07%` / `39.19%` | **`30.77%` / `42.15%` / `51.73%`** | `14.85°` / **`5.99°`** | **`+13.08 pt`** |
-| **ORB** | `12.17%` / `20.03%` / `29.75%` | **`19.77%` / `30.99%` / `42.94%`** | `24.26°` / **`11.00°`** | **`+10.96 pt`** |
-| **7-Matcher Average** | `24.49%` / `36.06%` / `47.51%` | **`33.33%` / `47.22%` / `59.03%`** | `11.13°` / **`5.29°`** | **`+11.16 pt`** |
-
-### Essential Matrix ($E$, `158` pairs across PhotoTourism, ETH3D, 7Scenes, Strecha, Kusvod2/AdelaideRMF)
-`SupeRANSAC` outperforms `PoseLib` across **all 7 matchers** (`+4.86 pt` average in $\text{AUC}@10^\circ$, up to **`+7.91 pt`**):
-
-| Detector / Matcher | `PoseLib` ($\text{AUC}@5^\circ / 10^\circ / 20^\circ$) | **`SupeRANSAC`** ($\text{AUC}@5^\circ / 10^\circ / 20^\circ$) | `PoseLib` / **`SupeRANSAC`** Med Err | Gain in $\text{AUC}@10^\circ$ |
-| :--- | :---: | :---: | :---: | :---: |
-| **LoMa** | `47.99%` / `61.22%` / `74.14%` | **`52.83%` / `67.90%` / `78.89%`** | `2.29°` / **`2.10°`** | **`+6.68 pt`** |
-| **RoMa** | `42.23%` / `57.20%` / `71.14%` | **`48.09%` / `65.11%` / `77.91%`** | `3.40°` / **`2.30°`** | **`+7.91 pt`** |
-| **LoFTR** | `38.55%` / `50.38%` / `63.04%` | **`40.35%` / `55.29%` / `67.89%`** | `3.84°` / **`3.44°`** | **`+4.91 pt`** |
-| **DISK + LightGlue** | `31.88%` / `45.45%` / `58.62%` | **`32.88%` / `48.58%` / `62.16%`** | `4.96°` / **`4.10°`** | **`+3.13 pt`** |
-| **RootSIFT** | `33.32%` / `43.58%` / `55.15%` | **`35.40%` / `48.42%` / `61.16%`** | `5.91°` / **`4.74°`** | **`+4.84 pt`** |
-| **SIFT** | `30.74%` / `41.29%` / `54.63%` | **`33.77%` / `45.58%` / `57.41%`** | `6.33°` / **`5.74°`** | **`+4.29 pt`** |
-| **ORB** | `23.00%` / `36.30%` / `51.33%` | **`25.16%` / `38.58%` / `53.81%`** | `7.41°` / **`6.22°`** | **`+2.29 pt`** |
-| **7-Matcher Average** | `35.39%` / `47.92%` / `61.15%` | **`38.36%` / `52.78%` / `65.61%`** | `4.88°` / **`4.09°`** | **`+4.86 pt`** |
-
-### Homography Matrix ($H$, `84` pairs across EVD, Homogr, AdelaideRMF/Multi-H, ETH3D, PhotoTourism)
-`SupeRANSAC` outperforms `PoseLib` across **all 7 matchers** (`+9.67 pt` average in $\text{AUC}@5\text{px}$, up to **`+13.02 pt`**):
-
-| Detector / Matcher | `PoseLib` ($\text{AUC}@3 / 5 / 10\text{px}$) | **`SupeRANSAC`** ($\text{AUC}@3 / 5 / 10\text{px}$) | `PoseLib` / **`SupeRANSAC`** Med Err | Gain in $\text{AUC}@5\text{px}$ |
-| :--- | :---: | :---: | :---: | :---: |
-| **LoMa** | `18.74%` / `26.33%` / `33.70%` | **`25.77%` / `37.15%` / `45.88%`** | `25.81 px` / **`4.64 px`** | **`+10.82 pt`** |
-| **RoMa** | `21.64%` / `31.23%` / `39.44%` | **`29.32%` / `44.25%` / `54.34%`** | `9.98 px` / **`2.45 px`** | **`+13.02 pt`** |
-| **LoFTR** | `16.78%` / `23.85%` / `29.32%` | **`20.96%` / `32.12%` / `39.90%`** | `33.51 px` / **`10.75 px`** | **`+8.27 pt`** |
-| **DISK + LightGlue** | `12.07%` / `19.38%` / `26.81%` | **`16.92%` / `27.47%` / `36.33%`** | `23.87 px` / **`13.53 px`** | **`+8.09 pt`** |
-| **RootSIFT** | `14.38%` / `18.74%` / `22.33%` | **`20.23%` / `29.47%` / `37.22%`** | `81.65 px` / **`22.19 px`** | **`+10.73 pt`** |
-| **SIFT** | `13.08%` / `17.22%` / `20.66%` | **`20.85%` / `29.54%` / `37.07%`** | `109.25 px` / **`20.69 px`** | **`+12.32 pt`** |
-| **ORB** | `8.85%` / `14.19%` / `18.96%` | **`10.49%` / `18.65%` / `27.75%`** | `81.28 px` / **`23.81 px`** | **`+4.46 pt`** |
-| **7-Matcher Average** | `15.08%` / `21.56%` / `27.32%` | **`20.65%` / `31.23%` / `39.78%`** | `52.19 px` / **`13.99 px`** | **`+9.67 pt`** |
-
-### Exact Reproduction Command (Section 3)
 ```bash
-source ~/ransac/.venv/bin/activate
 python tests/test_detectors.py --problem all
 ```
 
 ---
 
-## 4. 6D Absolute Pose ($PnP$) & 6D Rigid Registration ($SE(3)$): `SupeRANSAC` vs. `OpenCV RANSAC`
+## 3. Classic labelled tentative correspondences (high outlier ratios)
 
-We compare **`SupeRANSAC`** against **`OpenCV RANSAC`** (`cv2.solvePnPRansac` with matched `5000` iteration budget for 2D–3D absolute pose, and `cv2.estimateAffine3D` + SVD orthogonalization for 3D–3D rigid registration) across **both real RGB-D indoor scenes (`7Scenes RGB-D`) and the 6D pose / point cloud registration benchmarks (`pose6dscene`, `rigid_pose_example`)**:
+The original SIFT tentative matches shipped with **kusvod2**, **AdelaideRMF / Multi-H** ($F$; 30 scenes, 5–94 % inliers, median 48 %) and **Homogr**, **EVD**, **AdelaideRMF / Multi-H planes** ($H$; 35 scenes, 2–49 % inliers, median 22 %). These files carry no confidence scores and are stored sorted by label, so every repeat shuffles them with a fixed seed and **both methods use uniform sampling**; 5 repeats per scene. $F$ error = mean Sampson error of the estimate on the labelled inliers; $H$ error = corner transfer error against the dataset homography.
 
-### 6D Absolute Pose Estimation (2D–3D $PnP$, `203` problems)
+<p align="center"><img src="assets/classic_labelled.png" width="820"/></p>
 
-Across `7Scenes RGB-D` (`63` real RGB-D 2D–3D problems with `LoMa`, `RoMa`, and `DISK+LG` matches lifted via sensor depth maps) and `pose6dscene` (`140` problems across 7 outlier ratios from `33%` to `91%`), `SupeRANSAC` achieves **`78.56%`** Pose $\text{AUC}@(10^\circ, 50\text{cm})$ at **`46.77 ms`** mean runtime compared to `OpenCV RANSAC`'s **`45.49%`** at **`236.42 ms`** (**`+33.07 pt` higher accuracy** and **`5.1x` faster**):
+| Problem | Scenes × repeats | Method | AUC@1px / 2px / 5px ($F$) — AUC@2.5 / 5 / 10 px ($H$) | Med err (px) | Mean ms |
+|---|---:|---|---|---:|---:|
+| $F$ kusvod2 | 11 × 5 | PoseLib | 63.1 / **80.6** / **92.3** | 0.29 | 15 |
+| $F$ kusvod2 | 11 × 5 | SupeRANSAC | **65.5** / 78.2 / 85.8 | 0.28 | 42 |
+| $F$ AdelaideRMF / Multi-H | 19 × 5 | PoseLib | 55.1 / 76.6 / 90.6 | 0.34 | 37 |
+| $F$ AdelaideRMF / Multi-H | 19 × 5 | SupeRANSAC | **57.3** / **78.6** / **91.5** | 0.35 | 71 |
+| $F$ **Overall** | 30 × 5 | PoseLib | 57.9 / 77.7 / **91.1** | 0.33 | 29 |
+| $F$ **Overall** | 30 × 5 | SupeRANSAC | **60.1** / **78.4** / 89.4 | 0.33 | 61 |
+| $H$ EVD | 11 × 5 | PoseLib | 38.5 / **61.4** / **80.7** | 1.73 | 4 |
+| $H$ EVD | 11 × 5 | SupeRANSAC | **38.7** / 57.5 / 78.5 | 1.52 | 11 |
+| $H$ Homogr | 5 × 5 | PoseLib | **38.6** / **67.6** / **83.8** | 1.55 | 2 |
+| $H$ Homogr | 5 × 5 | SupeRANSAC | 38.4 / 67.2 / 83.6 | 1.57 | 9 |
+| $H$ AdelaideRMF / Multi-H | 19 × 5 | PoseLib | 51.9 / 62.6 / 71.8 | 0.99 | 11 |
+| $H$ AdelaideRMF / Multi-H | 19 × 5 | SupeRANSAC | **56.7** / **65.7** / **72.9** | 0.71 | 21 |
+| $H$ **Overall** | 35 × 5 | PoseLib | 45.3 / 62.5 / **76.1** | 1.40 | 7 |
+| $H$ **Overall** | 35 × 5 | SupeRANSAC | **48.0** / **63.0** / 75.9 | 0.99 | 16 |
 
-<p align="center">
-  <img src="assets/absolute_pose_experiments.png" width="840"/>
-</p>
-
-| Dataset | Problems | Method | $\text{AUC}@(5^\circ,25\text{cm}) \uparrow$ | $\text{AUC}@(10^\circ,50\text{cm}) \uparrow$ | $\text{AUC}@(20^\circ,1\text{m}) \uparrow$ | Med Rot ($^\circ$) $\downarrow$ | Med Trans (cm) $\downarrow$ | Mean Time (ms) $\downarrow$ |
-| :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **7Scenes RGB-D** | 63 | **`SupeRANSAC`** | **`81.55%`** | **`90.78%`** | **`95.39%`** | **`0.65°`** | **`1.60 cm`** | **`33.37`** |
-| **7Scenes RGB-D** | 63 | `OpenCV RANSAC` | `42.13%` | `51.85%` | `59.56%` | `3.29°` | `6.98 cm` | `288.81` |
-| **pose6dscene** (`33%–91%` outliers) | 140 | **`SupeRANSAC`** | **`48.75%`** | **`73.19%`** | **`86.60%`** | **`1.51°`** | **`8.28 cm`** | **`52.79`** |
-| **pose6dscene** (`33%–91%` outliers) | 140 | `OpenCV RANSAC` | `25.00%` | `42.89%` | `60.44%` | `2.52°` | `18.94 cm` | `212.84` |
-| **Overall ($PnP$)** | **203** | **`SupeRANSAC`** | **`58.75%`** | **`78.56%`** (**`+33.07 pt`**) | **`89.28%`** | **`1.28°`** | **`5.54 cm`** | **`46.77`** (**`5.1x` faster**) |
-| **Overall ($PnP$)** | **203** | `OpenCV RANSAC` | `30.12%` | `45.49%` | `60.00%` | `2.67°` | `16.20 cm` | `236.42` |
-
-### 6D Rigid Transformation Estimation (3D–3D $SE(3)$, `168` problems)
-
-Across `7Scenes RGB-D` (`68` real 3D–3D RGB-D registration problems) and `rigid_pose_example` (`100` 3D point cloud registration problems across 4 difficulty tiers), `SupeRANSAC` achieves **`80.60%`** Pose $\text{AUC}@(5^\circ, 10\text{cm})$ (`0.57°` median rotation error, `1.54 cm` median translation error) compared to `OpenCV RANSAC`'s **`16.46%`** (`15.18°` median rotation error, `30.02 cm` median translation error, **`+64.14 pt`**):
-
-<p align="center">
-  <img src="assets/rigid_transform_experiments.png" width="840"/>
-</p>
-
-| Dataset | Problems | Method | $\text{AUC}@(2.5^\circ,5\text{cm}) \uparrow$ | $\text{AUC}@(5^\circ,10\text{cm}) \uparrow$ | $\text{AUC}@(10^\circ,20\text{cm}) \uparrow$ | Med Rot ($^\circ$) $\downarrow$ | Med Trans (cm) $\downarrow$ | Mean Time (ms) $\downarrow$ |
-| :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| **7Scenes RGB-D** | 68 | **`SupeRANSAC`** | **`54.68%`** | **`74.51%`** | **`87.22%`** | **`0.79°`** | **`1.67 cm`** | `13.20` |
-| **7Scenes RGB-D** | 68 | `OpenCV RANSAC` | `12.21%` | `18.38%` | `23.82%` | `20.99°` | `41.41 cm` | `10.28` |
-| **rigid_pose_example** (4 Tiers) | 100 | **`SupeRANSAC`** | **`69.83%`** | **`84.99%`** | **`92.50%`** | **`0.51°`** | **`1.40 cm`** | `11.72` |
-| **rigid_pose_example** (4 Tiers) | 100 | `OpenCV RANSAC` | `9.67%` | `15.62%` | `26.92%` | `12.65°` | `20.06 cm` | `10.38` |
-| **Overall ($SE(3)$)** | **168** | **`SupeRANSAC`** | **`63.50%`** | **`80.60%`** (**`+64.14 pt`**) | **`90.28%`** | **`0.57°`** | **`1.54 cm`** | `12.32` |
-| **Overall ($SE(3)$)** | **168** | `OpenCV RANSAC` | `10.44%` | `16.46%` | `25.38%` | `15.18°` | `30.02 cm` | `10.34` |
-
-### Exact Reproduction Command (Section 4)
 ```bash
-source ~/ransac/.venv/bin/activate
+python tests/test_classic_labelled.py
+```
+
+---
+
+## 4. 6D absolute pose (PnP) and rigid registration
+
+**Real data.** The 100 frozen 7Scenes pairs × 6 matchers (LoMa, RoMa, DISK+LG, RootSIFT, SIFT, ORB). Matches are lifted through the depth map of image 1 (and image 2 for 3D–3D); ground truth = the dataset pose files; the outliers are the matcher's own mismatches and depth noise. (7Scenes depth and colour are only approximately registered, which biases the GT slightly for all methods alike.) Error = max(rotation error, 0.5 × translation error in cm); AUC@(2°,4cm) / (5°,10cm) / (10°,20cm).
+
+**Baselines.** PnP: PoseLib `estimate_absolute_pose` (LO-RANSAC + bundle adjustment) and `cv2.solvePnPRansac` (EPnP, plain RANSAC). Rigid: a 3-point Procrustes RANSAC with MSAC scoring, adaptive termination and a final least-squares fit on the inliers (`tests/test_6d_pose.py::procrustes_ransac`) — neither OpenCV nor PoseLib ships a rigid-registration RANSAC (`cv2.estimateAffine3D` fits a 12-DoF affine and is not comparable).
+
+**Synthetic stress tests** (reported separately): `pose6dscene` with 33–91 % uniformly random 2D–3D outliers (140 problems) and `rigid_pose_example` with 70–92 % random 3D–3D outliers (50 problems) plus the shipped real scan pair.
+
+<p align="center"><img src="assets/absolute_pose_experiments.png" width="900"/></p>
+<p align="center"><img src="assets/rigid_transform_experiments.png" width="900"/></p>
+
+| Problem | Data | Method | AUC@(2°,4cm) | AUC@(5°,10cm) | AUC@(10°,20cm) | Med rot / trans | Mean ms |
+|---|---|---|---:|---:|---:|---:|---:|
+| PnP | 7Scenes RGB-D, 600 | SupeRANSAC | 7.6 | **37.2** | **62.4** | 2.39° / 4.8 cm | 72 |
+| PnP | 7Scenes RGB-D, 600 | PoseLib | **7.9** | 37.1 | 61.6 | 2.40° / 4.7 cm | 18 |
+| PnP | 7Scenes RGB-D, 600 | OpenCV RANSAC | 5.4 | 30.7 | 53.7 | 2.84° / 5.8 cm | 190 |
+| PnP | pose6dscene synthetic, 140 | SupeRANSAC | 5.7 | 24.5 | 46.7 | 1.46° / 9.2 cm | 55 |
+| PnP | pose6dscene synthetic, 140 | PoseLib | **9.3** | **30.1** | **51.3** | 1.35° / 8.2 cm | 21 |
+| PnP | pose6dscene synthetic, 140 | OpenCV RANSAC | 1.7 | 10.2 | 24.1 | 2.66° / 19.2 cm | 219 |
+| Rigid | 7Scenes RGB-D, 599 | SupeRANSAC | 7.2 | 39.1 | 65.2 | 2.23° / 4.4 cm | 24 |
+| Rigid | 7Scenes RGB-D, 599 | Procrustes RANSAC | **8.9** | **41.3** | **65.8** | 2.12° / 4.3 cm | 244 |
+| Rigid | rigid_pose_example synthetic, 51 | SupeRANSAC | **1.3** | **53.4** | **75.7** | 2.27° / 4.2 cm | 20 |
+| Rigid | rigid_pose_example synthetic, 51 | Procrustes RANSAC | 1.2 | 41.9 | 63.7 | 2.33° / 4.7 cm | 502 |
+
+Per-matcher breakdowns on 7Scenes are printed by the script; on PnP, SupeRANSAC and PoseLib are within ±1 point for every matcher, and on rigid registration the Procrustes baseline is 1–3 points ahead of SupeRANSAC for every matcher while being 10× slower.
+
+```bash
 python tests/test_6d_pose.py --problem all
 ```
 
@@ -446,42 +428,36 @@ config.neighborhood = NeighborhoodType.Grid
 
 ## Evaluation - Python
 
-All evaluation scripts are self-contained and located in `tests/`:
+All evaluation scripts are self-contained and live in `tests/`. They print Markdown tables, write JSON results to `data/`, and regenerate the figures in `assets/`.
 
-1. **Download & Prepare Public Benchmark Datasets**:
+1. **Download the public datasets** (PhotoTourism tutorial scene, ETH3D, 7Scenes, kusvod2 / AdelaideRMF / Multi-H / Homogr / EVD; HPatches optional):
    ```bash
    python tests/download_datasets.py --dataset all
    ```
-   Downloads and prepares **PhotoTourism** (*CVPR 2020 RANSAC Tutorial*), **ETH3D** (*High-Res Multi-View*), **7Scenes** (*RGB-D indoor*), **Kusvod2**, **AdelaideRMF / Multi-H**, **Strecha Fountain**, **EVD**, **Homogr**, **pose6dscene**, and **rigid_pose_example** into `data/`.
-
-2. **Relative Pose Benchmark (`Fundamental` & `Essential` Matrix)**:
+2. **Relative pose** ($F$ and $E$) on the 300 frozen calibrated pairs:
    ```bash
-   # Evaluate both F and E across all datasets and matchers (LoMa, RoMa, DISK+LG)
-   python tests/test_relative_pose.py --problem all --features all
-
-   # Or filter by problem, dataset, or feature matcher:
-   python tests/test_relative_pose.py --problem fundamental --dataset phototourism --features LoMa
-   python tests/test_relative_pose.py --problem essential --dataset eth3d --features RoMa
+   python tests/test_relative_pose.py --problem all --features all          # LoMa, RoMa, DISK+LG
+   python tests/test_relative_pose.py --problem fundamental --dataset eth3d --features LoMa
+   python tests/test_relative_pose.py --problem fundamental --ablate_pp     # F with/without Plane-and-Parallax post-refinement
    ```
-
-3. **Homography Benchmark**:
+3. **Homography** on Homogr + EVD (+ HPatches if downloaded):
    ```bash
-   # Evaluate Homography across EVD, Homogr, AdelaideRMF/Multi-H, ETH3D, PhotoTourism
    python tests/test_homography.py --features all
-
-   # Or evaluate a specific dataset / matcher:
-   python tests/test_homography.py --dataset evd --features LoMa
    ```
-
-4. **7-Detector Benchmark (`LoMa`, `RoMa`, `LoFTR`, `DISK+LG`, `RootSIFT`, `SIFT`, `ORB`)**:
+4. **Seven matchers** (LoMa, RoMa, LoFTR, DISK+LG, RootSIFT, SIFT, ORB) on the same pairs:
    ```bash
    python tests/test_detectors.py --problem all
    ```
-
-5. **6D Absolute Pose ($PnP$) & 6D Rigid Registration ($SE(3)$) Benchmark**:
+5. **Classic labelled tentative matches** (kusvod2, AdelaideRMF / Multi-H, Homogr, EVD):
+   ```bash
+   python tests/test_classic_labelled.py
+   ```
+6. **6D absolute pose and rigid registration** (7Scenes RGB-D + synthetic stress tests):
    ```bash
    python tests/test_6d_pose.py --problem all
    ```
+
+Feature matches are cached in `data/multi_detector_cache.pkl`; the first run extracts them (CPU, roughly 1 s per pair and matcher).
 
 ### Install Feature Detectors
 

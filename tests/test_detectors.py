@@ -1,16 +1,6 @@
-"""Runnable benchmark script for Multi-Detector Evaluation across 7 Feature Matchers (Section 3).
-
-Evaluates SupeRANSAC vs. PoseLib across 7 feature detectors/matchers:
-1. LoMa (ECCV 2026 Oral - DaD + DeDoDe-G + LoMa-B)
-2. RoMa (Dense Foundation Matcher)
-3. LoFTR (Detector-Free Transformer Matcher)
-4. DISK + LightGlue (Learned Keypoints + Graph Attention Matcher)
-5. RootSIFT (Hellinger-Normalized SIFT + SNN Ratio)
-6. SIFT (Standard SIFT + SNN Ratio)
-7. ORB (Binary Descriptor + Hamming SNN Ratio)
-
-Across all 3 two-view geometry tasks (Fundamental F, Essential E, Homography H)
-and all benchmark datasets (PhotoTourism, ETH3D, 7Scenes, Kusvod2/AdelaideRMF, Homogr/EVD).
+"""Multi-detector benchmark: SupeRANSAC vs. PoseLib across 7 feature matchers
+(LoMa, RoMa, LoFTR, DISK+LightGlue, RootSIFT, SIFT, ORB) on the same real pairs and protocol as
+test_relative_pose.py (F, E: 300 calibrated pairs) and test_homography.py (H: Homogr/EVD[/HPatches]).
 
 Usage:
     python tests/test_detectors.py --problem all
@@ -24,8 +14,6 @@ import sys
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 SUPERANSAC_DIR = os.path.dirname(TESTS_DIR)
@@ -37,227 +25,122 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from datasets.multi_benchmark import (
+from datasets.benchmark_pairs import (
     ALL_DETECTORS,
     DEFAULT_DATA_DIR,
     canonical_detector_name,
     ensure_cached_matches,
-    get_essential_benchmark_pairs,
-    get_fundamental_benchmark_pairs,
-    get_homography_benchmark_pairs,
+    load_calibrated_pairs,
+    load_planar_pairs,
 )
-from evaluation import pose_auc
-from test_homography import _eval_h_pair, prepare_homography_gt
-from test_relative_pose import _eval_e_pair, _eval_f_pair
+import test_relative_pose as trp
+import test_homography as th
+
+PROBLEMS = {
+    "fundamental": (trp._eval_f_pair, trp.summarize, "Fundamental matrix (F)", "Pose AUC@10° (%)", "detector_fundamental.png"),
+    "essential": (trp._eval_e_pair, trp.summarize, "Essential matrix (E)", "Pose AUC@10° (%)", "detector_essential.png"),
+    "homography": (th._eval_h_pair, th.summarize, "Homography (H)", "Corner AUC@5px (%)", "detector_homography.png"),
+}
 
 
-def run_multi_detector_eval(problem, pairs, cache, detectors, max_workers=24):
-    if problem == "fundamental":
-        eval_fn = _eval_f_pair
-        auc_thresholds = [5.0, 10.0, 20.0]
-        valid_pairs = pairs
-    elif problem == "essential":
-        eval_fn = _eval_e_pair
-        auc_thresholds = [5.0, 10.0, 20.0]
-        valid_pairs = pairs
-    else:
-        eval_fn = _eval_h_pair
-        auc_thresholds = [2.5, 5.0, 10.0]
-        valid_pairs = [hp for hp in (prepare_homography_gt(p, cache) for p in pairs) if hp is not None]
-
-    n_runs = 1
+def run(problem, pairs, cache, detectors, workers):
+    eval_fn, summarize, *_ = PROBLEMS[problem]
     out = {}
     for det in detectors:
-        det_key = canonical_detector_name(det)
-        tasks = [
-            (p, cache[p["cache_key"]][det_key][0], cache[p["cache_key"]][det_key][1], 5000, 1000, n_runs)
-            for p in valid_pairs
-        ]
-        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+        if problem == "homography":
+            tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], 5000, 1000) for p in pairs]
+        else:
+            tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], 5000, 1000, False) for p in pairs]
+        with ProcessPoolExecutor(max_workers=workers) as ex:
             results = [r for r in ex.map(eval_fn, tasks) if r is not None]
-
-        su_e = [e for r in results for e in r["su_errs"]]
-        pl_e = [e for r in results for e in r["pl_errs"]]
-        su_t = [t for r in results for t in r["su_ts"]]
-        pl_t = [t for r in results for t in r["pl_ts"]]
-        su_i = [i for r in results for i in r["su_inls"]]
-        pl_i = [i for r in results for i in r["pl_inls"]]
-
-        su_aucs = [x * 100.0 for x in pose_auc(su_e, auc_thresholds)]
-        pl_aucs = [x * 100.0 for x in pose_auc(pl_e, auc_thresholds)]
-
-        out[det_key] = {
-            "num_pairs": len(results),
-            "SupeRANSAC": {
-                "auc": su_aucs,
-                "mean_err": float(np.mean(su_e)),
-                "med_err": float(np.median(su_e)),
-                "time_ms": float(np.mean(su_t)),
-                "med_ms": float(np.median(su_t)),
-                "inliers": float(np.mean(su_i)),
-            },
-            "PoseLib": {
-                "auc": pl_aucs,
-                "mean_err": float(np.mean(pl_e)),
-                "med_err": float(np.median(pl_e)),
-                "time_ms": float(np.mean(pl_t)),
-                "med_ms": float(np.median(pl_t)),
-                "inliers": float(np.mean(pl_i)),
-            },
-        }
+        s = summarize(results, ["SupeRANSAC", "PoseLib"]) if problem != "homography" else summarize(results)
+        out[det] = s
     return out
 
 
-def plot_detector_chart(problem, res_dict, assets_dir):
-    os.makedirs(assets_dir, exist_ok=True)
-    detectors = list(res_dict.keys())
-    x = np.arange(len(detectors))
-    w = 0.36
+def print_table(problem, res):
+    _, _, title, metric, _ = PROBLEMS[problem]
+    cols = ("AUC@5°", "AUC@10°", "AUC@20°") if problem != "homography" else ("AUC@2.5px", "AUC@5px", "AUC@10px")
+    print(f"\n### {title} -- 7 matchers, SupeRANSAC vs. PoseLib\n")
+    print(f"| Matcher | Pairs | PoseLib {cols[0]} / {cols[1]} / {cols[2]} | SupeRANSAC {cols[0]} / {cols[1]} / {cols[2]} | Δ {cols[1]} | Med err PoseLib / SupeRANSAC | ms PoseLib / SupeRANSAC |")
+    print("|---|---:|---|---|---:|---|---|")
+    su_all, pl_all = [], []
+    for det, s in res.items():
+        o = s["Overall"]
+        su, pl = o["SupeRANSAC"], o["PoseLib"]
+        su_all.append(su["auc"]); pl_all.append(pl["auc"])
+        d = su["auc"][1] - pl["auc"][1]
+        print(f"| {det} | {o['num_pairs']} | {pl['auc'][0]:.1f} / {pl['auc'][1]:.1f} / {pl['auc'][2]:.1f} | "
+              f"{su['auc'][0]:.1f} / {su['auc'][1]:.1f} / {su['auc'][2]:.1f} | {d:+.2f} | "
+              f"{pl['med_err']:.2f} / {su['med_err']:.2f} | {pl['time_ms']:.0f} / {su['time_ms']:.0f} |")
+    su_m, pl_m = np.mean(su_all, axis=0), np.mean(pl_all, axis=0)
+    print(f"| **Average** | | {pl_m[0]:.1f} / {pl_m[1]:.1f} / {pl_m[2]:.1f} | {su_m[0]:.1f} / {su_m[1]:.1f} / {su_m[2]:.1f} | {su_m[1]-pl_m[1]:+.2f} | | |")
 
-    if problem == "fundamental":
-        title = "Fundamental Matrix (F) Across 7 Feature Matchers"
-        m_labels = ["AUC@5° (%)", "AUC@10° (%)", "AUC@20° (%)"]
-        fname = "detector_fundamental.png"
-    elif problem == "essential":
-        title = "Essential Matrix (E) Across 7 Feature Matchers"
-        m_labels = ["AUC@5° (%)", "AUC@10° (%)", "AUC@20° (%)"]
-        fname = "detector_essential.png"
-    else:
-        title = "Homography (H) Across 7 Feature Matchers"
-        m_labels = ["AUC@2.5 px (%)", "AUC@5.0 px (%)", "AUC@10.0 px (%)"]
-        fname = "detector_homography.png"
 
-    fig, axes = plt.subplots(1, 4, figsize=(18.5, 4.6), dpi=180)
+def plot(problem, res, assets_dir):
+    _, _, title, metric, fname = PROBLEMS[problem]
+    dets = list(res.keys())
+    x = np.arange(len(dets))
+    w = 0.38
+    fig, ax = plt.subplots(1, 1, figsize=(9, 4.5), dpi=180)
     fig.patch.set_facecolor("white")
-
-    for idx_m in range(3):
-        ax = axes[idx_m]
-        su_vals = [res_dict[d]["SupeRANSAC"]["auc"][idx_m] for d in detectors]
-        pl_vals = [res_dict[d]["PoseLib"]["auc"][idx_m] for d in detectors]
-
-        b1 = ax.bar(x - w / 2, su_vals, w, label="SupeRANSAC (Ours)", color="#1b9e77", edgecolor="black", linewidth=0.6)
-        b2 = ax.bar(x + w / 2, pl_vals, w, label="PoseLib", color="#377eb8", edgecolor="black", linewidth=0.6)
-
-        for bar in b1:
-            h = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2, h + 0.8, f"{h:.1f}", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#0f6b4e")
-        for bar in b2:
-            h = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2, h + 0.8, f"{h:.1f}", ha="center", va="bottom", fontsize=7.5, color="#235784")
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(detectors, rotation=28, ha="right", fontsize=9, fontweight="bold")
-        ax.set_ylabel(m_labels[idx_m], fontsize=10, fontweight="bold")
-        ax.set_title(m_labels[idx_m].split(" ")[0], fontsize=11, fontweight="bold")
-        ax.set_ylim(0, max(max(su_vals), max(pl_vals)) * 1.18 + 3.0)
-        ax.grid(True, axis="y", linestyle="--", alpha=0.35)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        if idx_m == 0:
-            ax.legend(loc="upper right", frameon=True, fontsize=8.5)
-
-    # Panel 4: Runtime comparison
-    ax_t = axes[3]
-    su_t = [res_dict[d]["SupeRANSAC"]["time_ms"] for d in detectors]
-    pl_t = [res_dict[d]["PoseLib"]["time_ms"] for d in detectors]
-    b1 = ax_t.bar(x - w / 2, su_t, w, label="SupeRANSAC (Ours)", color="#1b9e77", edgecolor="black", linewidth=0.6)
-    b2 = ax_t.bar(x + w / 2, pl_t, w, label="PoseLib", color="#377eb8", edgecolor="black", linewidth=0.6)
-    for bar in b1:
-        h = bar.get_height()
-        ax_t.text(bar.get_x() + bar.get_width() / 2, h * 1.02, f"{h:.1f}", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#0f6b4e")
-    for bar in b2:
-        h = bar.get_height()
-        ax_t.text(bar.get_x() + bar.get_width() / 2, h * 1.02, f"{h:.1f}", ha="center", va="bottom", fontsize=7.5, color="#235784")
-    ax_t.set_xticks(x)
-    ax_t.set_xticklabels(detectors, rotation=28, ha="right", fontsize=9, fontweight="bold")
-    ax_t.set_ylabel("Mean Runtime (ms)", fontsize=10, fontweight="bold")
-    ax_t.set_title("Runtime (ms) ↓", fontsize=11, fontweight="bold")
-    ax_t.set_ylim(0, max(max(su_t), max(pl_t)) * 1.22 + 1.0)
-    ax_t.grid(True, axis="y", linestyle="--", alpha=0.35)
-    ax_t.spines["top"].set_visible(False)
-    ax_t.spines["right"].set_visible(False)
-
-    fig.suptitle(f"{title} (Multi-Dataset Benchmark)", fontsize=13, fontweight="bold", y=1.02)
+    su = [res[d]["Overall"]["SupeRANSAC"]["auc"][1] for d in dets]
+    pl = [res[d]["Overall"]["PoseLib"]["auc"][1] for d in dets]
+    for off, vals, name, col in ((-w / 2, su, "SupeRANSAC", "#1b9e77"), (w / 2, pl, "PoseLib", "#377eb8")):
+        bars = ax.bar(x + off, vals, w, label=name, color=col, edgecolor="black", linewidth=0.5)
+        for bar in bars:
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.6, f"{bar.get_height():.1f}", ha="center", fontsize=8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(dets, fontsize=10)
+    ax.set_ylabel(metric)
+    ax.set_title(f"{title} -- {res[dets[0]]['Overall']['num_pairs']} real pairs", fontsize=12)
+    ax.set_ylim(0, max(max(su), max(pl)) * 1.2 + 2)
+    ax.grid(True, axis="y", linestyle="--", alpha=0.35)
+    ax.legend(loc="upper right")
     plt.tight_layout()
-    out_path = os.path.join(assets_dir, fname)
-    plt.savefig(out_path, bbox_inches="tight", dpi=180)
+    out = os.path.join(assets_dir, fname)
+    plt.savefig(out, bbox_inches="tight", dpi=180)
     plt.close(fig)
-    print(f"Saved plot: {out_path}")
-
-
-def print_detector_table(problem, res_dict):
-    if problem == "fundamental":
-        title = "Fundamental Matrix (F)"
-        cols = ("AUC@5°", "AUC@10°", "AUC@20°")
-    elif problem == "essential":
-        title = "Essential Matrix (E)"
-        cols = ("AUC@5°", "AUC@10°", "AUC@20°")
-    else:
-        title = "Homography (H)"
-        cols = ("AUC@2.5px", "AUC@5.0px", "AUC@10.0px")
-
-    print(f"\n### {title} — 7 Feature Matchers\n")
-    print(f"| Detector / Matcher | Method | {cols[0]} ↑ | {cols[1]} ↑ | {cols[2]} ↑ | Med Error ↓ | Mean ms ↓ | Med ms ↓ |")
-    print("|---|---|---:|---:|---:|---:|---:|---:|")
-    for det_key, m_dict in res_dict.items():
-        for m_name in ["SupeRANSAC", "PoseLib"]:
-            st = m_dict[m_name]
-            a0, a1, a2 = st["auc"]
-            b = "**" if m_name == "SupeRANSAC" else ""
-            print(
-                f"| {det_key} | {b}{m_name}{b} | "
-                f"{b}{a0:.2f}%{b} | {b}{a1:.2f}%{b} | {b}{a2:.2f}%{b} | "
-                f"{st['med_err']:.2f} | {st['time_ms']:.2f} | {st['med_ms']:.2f} |"
-            )
+    print(f"Saved plot: {out}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Multi-Detector Evaluation Across 7 Feature Matchers")
+    parser = argparse.ArgumentParser(description="Multi-detector evaluation (7 matchers)")
     parser.add_argument("--problem", choices=["all", "fundamental", "essential", "homography"], default="all")
     parser.add_argument("--detectors", "--features", dest="detectors", nargs="+", default=ALL_DETECTORS)
     parser.add_argument("--data_dir", type=str, default=DEFAULT_DATA_DIR)
     parser.add_argument("--workers", type=int, default=24)
     parser.add_argument("--no_plots", action="store_true")
     args = parser.parse_args()
-    if "all" in [d.lower() for d in args.detectors]:
-        args.detectors = list(ALL_DETECTORS)
+    detectors = list(ALL_DETECTORS) if "all" in [d.lower() for d in args.detectors] else [canonical_detector_name(d) for d in args.detectors]
 
     assets_dir = os.path.join(SUPERANSAC_DIR, "assets")
-    out_json = {}
-
-    if args.problem in ("all", "fundamental"):
-        f_pairs = get_fundamental_benchmark_pairs(args.data_dir)
-        cache = ensure_cached_matches(f_pairs, args.detectors, data_dir=args.data_dir, max_workers=min(16, args.workers))
-        f_res = run_multi_detector_eval("fundamental", f_pairs, cache, args.detectors, max_workers=args.workers)
-        print_detector_table("fundamental", f_res)
-        if not args.no_plots:
-            plot_detector_chart("fundamental", f_res, assets_dir)
-        out_json["fundamental"] = f_res
-
-    if args.problem in ("all", "essential"):
-        e_pairs = get_essential_benchmark_pairs(args.data_dir)
-        cache = ensure_cached_matches(e_pairs, args.detectors, data_dir=args.data_dir, max_workers=min(16, args.workers))
-        e_res = run_multi_detector_eval("essential", e_pairs, cache, args.detectors, max_workers=args.workers)
-        print_detector_table("essential", e_res)
-        if not args.no_plots:
-            plot_detector_chart("essential", e_res, assets_dir)
-        out_json["essential"] = e_res
-
-    if args.problem in ("all", "homography"):
-        h_pairs = get_homography_benchmark_pairs(args.data_dir)
-        cache = ensure_cached_matches(h_pairs, args.detectors, data_dir=args.data_dir, max_workers=min(16, args.workers))
-        h_res = run_multi_detector_eval("homography", h_pairs, cache, args.detectors, max_workers=args.workers)
-        print_detector_table("homography", h_res)
-        if not args.no_plots:
-            plot_detector_chart("homography", h_res, assets_dir)
-        out_json["homography"] = h_res
-
     json_path = os.path.join(args.data_dir, "detector_results.json")
+    out_json = {}
+    if os.path.exists(json_path):
+        with open(json_path, "r") as f:
+            out_json = json.load(f)
+    cal_pairs = planar_pairs = None
+    for problem in ("fundamental", "essential", "homography"):
+        if args.problem not in ("all", problem):
+            continue
+        if problem == "homography":
+            planar_pairs = planar_pairs or load_planar_pairs(args.data_dir)
+            pairs = planar_pairs
+        else:
+            cal_pairs = cal_pairs or load_calibrated_pairs(args.data_dir)
+            pairs = cal_pairs
+        cache = ensure_cached_matches(pairs, detectors, data_dir=args.data_dir, max_workers=min(16, args.workers))
+        res = run(problem, pairs, cache, detectors, args.workers)
+        print_table(problem, res)
+        if not args.no_plots:
+            plot(problem, res, assets_dir)
+        out_json[problem] = res
+
     with open(json_path, "w") as f:
-        json.dump(out_json, f, indent=2)
+        json.dump(out_json, f, indent=1)
     print(f"\nSaved JSON results to {json_path}")
 
 
 if __name__ == "__main__":
     main()
-

@@ -93,6 +93,7 @@ namespace superansac {
         size_t essentialCheiralityPointNumber = 1; // Cheirality-vote points for E pose disambiguation (raise to ~25 for dense/RoMA matches; splg gains nothing as cv2.recoverPose redoes cheirality)
         bool homographyBundleRefinement = false; // Nonlinear (LM) reprojection-error refinement of the non-minimal homography fit (H only)
         size_t homographyBundleMaxIterations = 5; // LM iterations: early stopping regularizes (full convergence over-fits the plane) and stays within the runtime budget
+        bool fundamentalPlaneParallaxPostRefinement = false; // Post-RANSAC dominant-plane detection + Plane-and-Parallax re-estimation (F only). Off: no measurable effect on real data (see tests/test_relative_pose.py --ablate_pp)
         
         scoring::ScoringType scoring = 
             scoring::ScoringType::MAGSAC; // Scoring type

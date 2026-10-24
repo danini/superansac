@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import glob
 import os
 import shutil
 import subprocess
@@ -180,6 +181,34 @@ def setup_7scenes(data_dir, scenes=None):
     print("[7scenes] Ready at", s7_dir)
 
 
+def setup_hpatches(data_dir):
+    """Optional: HPatches sequences (580 viewpoint/illumination pairs with GT homographies)."""
+    import tarfile
+
+    hp_dir = os.path.join(data_dir, "hpatches")
+    if os.path.isdir(hp_dir) and len(glob.glob(os.path.join(hp_dir, "v_*"))) >= 50:
+        print("[hpatches] Already present at", hp_dir)
+        return
+    tar_path = os.path.join(data_dir, "hpatches-sequences-release.tar.gz")
+    urls = [
+        "http://icvl.ee.ic.ac.uk/vbalnt/hpatches/hpatches-sequences-release.tar.gz",
+        "https://huggingface.co/datasets/vbalnt/hpatches/resolve/main/hpatches-sequences-release.tar.gz",
+    ]
+    if not any(download_url(u, tar_path) for u in urls):
+        print("[hpatches] Optional dataset not reachable from this machine -- skipping (homography track uses Homogr + EVD).")
+        return
+    os.makedirs(hp_dir, exist_ok=True)
+    with tarfile.open(tar_path, "r:gz") as tf:
+        tf.extractall(hp_dir)
+    nested = os.path.join(hp_dir, "hpatches-sequences-release")
+    if os.path.isdir(nested):
+        for item in os.listdir(nested):
+            shutil.move(os.path.join(nested, item), os.path.join(hp_dir, item))
+        os.rmdir(nested)
+    os.remove(tar_path)
+    print("[hpatches] Ready at", hp_dir)
+
+
 def verify_6d_examples():
     ex_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "examples", "data")
     required = [
@@ -210,14 +239,14 @@ def main():
         dest="datasets",
         nargs="+",
         default=["all"],
-        choices=["all", "magsac_data", "phototourism", "eth3d", "7scenes"],
+        choices=["all", "magsac_data", "phototourism", "eth3d", "7scenes", "hpatches"],
         help="Which datasets to download.",
     )
     args = parser.parse_args()
     os.makedirs(args.data_dir, exist_ok=True)
     selected = set(args.datasets)
     if "all" in selected:
-        selected = {"magsac_data", "phototourism", "eth3d", "7scenes"}
+        selected = {"magsac_data", "phototourism", "eth3d", "7scenes", "hpatches"}
 
     if "magsac_data" in selected:
         setup_magsac_data(args.data_dir)
@@ -227,6 +256,8 @@ def main():
         setup_eth3d(args.data_dir)
     if "7scenes" in selected:
         setup_7scenes(args.data_dir)
+    if "hpatches" in selected:
+        setup_hpatches(args.data_dir)
     verify_6d_examples()
 
 

@@ -217,6 +217,7 @@ PYBIND11_MODULE(pysuperansac, m) {
         .def_readwrite("final_refinement_weighted", &superansac::RANSACSettings::finalRefinementWeighted)
         .def_readwrite("essential_cheirality_point_number", &superansac::RANSACSettings::essentialCheiralityPointNumber)
         .def_readwrite("homography_bundle_refinement", &superansac::RANSACSettings::homographyBundleRefinement)
+        .def_readwrite("fundamental_plane_parallax_post_refinement", &superansac::RANSACSettings::fundamentalPlaneParallaxPostRefinement)
         .def_readwrite("homography_bundle_max_iterations", &superansac::RANSACSettings::homographyBundleMaxIterations);
 
     // Expose the function to Python

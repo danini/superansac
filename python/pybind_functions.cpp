@@ -527,11 +527,6 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
     const superansac::termination::TerminationType kTerminationCriterion = settings_.terminationCriterion;
 
     // Create the solvers and the estimator
-    // Scale coarse 3D inlier thresholds to the tight 3D consensus regime so MAGSAC++
-    // does not absorb structured outlier surfaces into the Procrustes fit.
-    settings_.inlierThreshold *= 0.275;
-    if (settings_.maxIterations == 5000)
-        settings_.maxIterations = 1800;
     std::unique_ptr<superansac::estimator::RigidTransformationEstimator> estimator = 
         std::unique_ptr<superansac::estimator::RigidTransformationEstimator>(new superansac::estimator::RigidTransformationEstimator());
     estimator->setInlierThreshold(settings_.inlierThreshold);
@@ -820,58 +815,6 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
         normalizingTransformSource,
         normalizingTransformDestination);   
         
-    // Check if the probability distribution matches the calibrated benchmark prior band
-    bool kCalibratedPriorBand = false;
-    bool kSaturatedDenseScores = false;
-    bool kCoarseGridScores = false;
-    bool kQuantizedKeypoints = false;
-    if (kCorrespondences_.rows() >= 8)
-    {
-        const size_t nRows = static_cast<size_t>(kCorrespondences_.rows());
-        size_t intCoordCount = 0;
-        for (size_t i = 0; i < nRows; ++i)
-        {
-            const double x1 = kCorrespondences_(i, 0);
-            const double y1 = kCorrespondences_(i, 1);
-            if (std::abs(x1 - std::round(x1)) < 1e-5 && std::abs(y1 - std::round(y1)) < 1e-5)
-                ++intCoordCount;
-        }
-        kQuantizedKeypoints = (intCoordCount > nRows / 6);
-    }
-    if (kPointProbabilities_.size() == static_cast<size_t>(kCorrespondences_.rows()) &&
-        kCorrespondences_.rows() >= 8)
-    {
-        const size_t nPts = kPointProbabilities_.size();
-        std::vector<double> sortedProbs = kPointProbabilities_;
-        std::nth_element(sortedProbs.begin(), sortedProbs.begin() + nPts / 2, sortedProbs.end());
-        const double medProb = sortedProbs[nPts / 2];
-        std::nth_element(sortedProbs.begin(), sortedProbs.begin() + nPts / 4, sortedProbs.end());
-        const double q25Prob = sortedProbs[nPts / 4];
-        std::nth_element(sortedProbs.begin(), sortedProbs.begin() + (3 * nPts) / 4, sortedProbs.end());
-        const double q75Prob = sortedProbs[(3 * nPts) / 4];
-        std::nth_element(sortedProbs.begin(), sortedProbs.begin() + (9 * nPts) / 10, sortedProbs.end());
-        const double q90Prob = sortedProbs[(9 * nPts) / 10];
-        const double minProb = *std::min_element(sortedProbs.begin(), sortedProbs.end());
-        kCalibratedPriorBand = (medProb >= 0.38 && medProb <= 0.61 &&
-                                q25Prob >= 0.22 && q25Prob <= 0.40 &&
-                                q75Prob >= 0.56 && q75Prob <= 0.76);
-        kSaturatedDenseScores = (!kCalibratedPriorBand && q90Prob >= 0.9999 && nPts >= 1000);
-        kCoarseGridScores = (!kCalibratedPriorBand && minProb >= 0.195 && minProb <= 0.215);
-        kQuantizedKeypoints = (kQuantizedKeypoints && minProb < 0.08);
-    }
-
-    // When the caller leaves the default 1.5px threshold untouched, scale it to 2.5px
-    // on calibrated wide-baseline priors so 7-point minimal models capture sufficient
-    // off-plane correspondences before local optimization and DEGENSAC, or to 2.0px
-    // for quantized integer keypoint detectors (e.g., ORB).
-    if (std::abs(settings_.inlierThreshold - 1.5) < 1e-9)
-    {
-        if (kCalibratedPriorBand)
-            settings_.inlierThreshold = 2.5;
-        else if (kQuantizedKeypoints)
-            settings_.inlierThreshold = 2.0;
-    }
-
     const double kScale =
         0.5 * (normalizingTransformSource(0, 0) + normalizingTransformDestination(0, 0));
     settings_.inlierThreshold *= kScale;
@@ -895,13 +838,6 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
         settings_.finalRefinementScheduleEnd = 0.5;
     }
 
-    if (kSaturatedDenseScores || kCoarseGridScores)
-        settings_.scoring = superansac::scoring::ScoringType::MSAC;
-    if (kSaturatedDenseScores)
-        settings_.sampler = superansac::samplers::SamplerType::Uniform;
-    if (kCoarseGridScores)
-        settings_.finalOptimization = superansac::local_optimization::LocalOptimizationType::LSQ;
-
     // Get the values from the settings
     const superansac::scoring::ScoringType kScoring = settings_.scoring;
     const superansac::samplers::SamplerType kSampler = settings_.sampler;
@@ -918,15 +854,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     estimator->setNonMinimalSolver(new superansac::estimator::solver::FundamentalMatrixBundleAdjustmentSolver());
     superansac::estimator::solver::FundamentalMatrixBundleAdjustmentSolver * nonminimalSolver = 
         dynamic_cast<superansac::estimator::solver::FundamentalMatrixBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver());
-    if (kCalibratedPriorBand && kPointProbabilities_.size() > 0)
-        nonminimalSolver->setWeights(&kPointProbabilities_);
     auto &solverOptions = nonminimalSolver->getMutableOptions();
-    solverOptions.loss_type = kCalibratedPriorBand
-        ? poselib::BundleOptions::LossType::TRUNCATED
-        : poselib::BundleOptions::LossType::CAUCHY;
-    solverOptions.loss_scale = kCalibratedPriorBand
-        ? settings_.inlierThreshold
-        : 0.5 * settings_.inlierThreshold;
+    solverOptions.loss_type = poselib::BundleOptions::LossType::CAUCHY;
+    solverOptions.loss_scale = 0.5 * settings_.inlierThreshold;
     solverOptions.max_iterations = 25;
 
     // Create the sampler
@@ -1003,8 +933,6 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
             dynamic_cast<superansac::scoring::MAGSACSPRTScoring *>(scorer.get())->initialize(estimator.get());
         else
             dynamic_cast<superansac::scoring::MAGSACScoring *>(scorer.get())->initialize(estimator.get());
-        if (kCalibratedPriorBand)
-            solverOptions.loss_type = poselib::BundleOptions::LossType::MAGSACPlusPlus;
     }
 
     // Create termination criterion object
@@ -1196,42 +1124,8 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     fundamentalMatrix = normalizingTransformDestination.transpose() * fundamentalMatrix * normalizingTransformSource;
     fundamentalMatrix.normalize();
 
-    // Final Hartley-normalized 8-point SVD polish on the consensus set so that
-    // uncalibrated/zoom pairs are not distorted by singular-value ratio drift.
-    if (kCalibratedPriorBand && finalInliers.size() >= 8 && finalInliers.size() <= 480)
-    {
-        std::vector<size_t> polishSubset;
-        if (finalInliers.size() >= 115)
-        {
-            const double kTightSqThresh = (0.72 * settings_.inlierThreshold) * (0.72 * settings_.inlierThreshold);
-            const size_t kCols = normalizedCorrespondences.cols();
-            const double *kNormPtr = normalizedCorrespondences.data();
-            polishSubset.reserve(finalInliers.size());
-            for (const size_t idx : finalInliers)
-            {
-                if (estimator->squaredResidual(kNormPtr + idx * kCols, bestModel) < kTightSqThresh)
-                    polishSubset.push_back(idx);
-            }
-        }
-        const std::vector<size_t> &fitInliers =
-            (polishSubset.size() >= 80) ? polishSubset : finalInliers;
-
-        superansac::estimator::solver::FundamentalMatrixEightPointSolver eightPtSolver;
-        std::vector<superansac::models::Model> eightPtModels;
-        if (eightPtSolver.estimateModel(
-            kCorrespondences_,
-            fitInliers.data(),
-            fitInliers.size(),
-            eightPtModels,
-            nullptr) && !eightPtModels.empty() && eightPtModels.back().getData().allFinite())
-        {
-            fundamentalMatrix = eightPtModels.back().getData().block<3, 3>(0, 0);
-            fundamentalMatrix.normalize();
-        }
-    }
-
     // Post-loop Plane-and-Parallax rescue and off-plane epipole cleaning in pixel space
-    if (kCalibratedPriorBand &&
+    if (settings_.fundamentalPlaneParallaxPostRefinement &&
         settings_.degensacSettings.enabled &&
         finalInliers.size() >= 10 && finalInliers.size() <= 160)
     {
@@ -1487,16 +1381,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
             // the dominant plane accounts for >= 55% of inliers and current off-plane support is weak,
             // followed by parallax-and-probability-filtered Cauchy-weighted 8-point SVD polish.
             const bool kHasProbs = (kPointProbabilities_.size() == kTotalPts);
-            bool kCalibratedProbs = false;
-            if (kHasProbs && kTotalPts >= 8)
-            {
-                std::vector<double> sortedProbs = kPointProbabilities_;
-                std::nth_element(sortedProbs.begin(), sortedProbs.begin() + kTotalPts / 2, sortedProbs.end());
-                const double medProb = sortedProbs[kTotalPts / 2];
-                std::nth_element(sortedProbs.begin(), sortedProbs.begin() + kTotalPts / 4, sortedProbs.end());
-                const double q25Prob = sortedProbs[kTotalPts / 4];
-                kCalibratedProbs = (medProb >= 0.22 && q25Prob < 0.85);
-            }
+            const bool kCalibratedProbs = kHasProbs;
             std::vector<double> allHerr(kTotalPts, 0.0);
             std::vector<size_t> offAll;
             offAll.reserve(kTotalPts);
@@ -2016,23 +1901,6 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     if (std::abs(settings_.inlierThreshold - 1.5) < 1e-9)
         settings_.inlierThreshold = 4.0;
 
-    bool kHomogCalibratedPriorBand = false;
-    if (kPointProbabilities_.size() == static_cast<size_t>(kCorrespondences_.rows()) &&
-        kCorrespondences_.rows() >= 4)
-    {
-        const size_t nPts = kPointProbabilities_.size();
-        std::vector<double> sortedProbs = kPointProbabilities_;
-        std::nth_element(sortedProbs.begin(), sortedProbs.begin() + nPts / 2, sortedProbs.end());
-        const double medProb = sortedProbs[nPts / 2];
-        std::nth_element(sortedProbs.begin(), sortedProbs.begin() + nPts / 4, sortedProbs.end());
-        const double q25Prob = sortedProbs[nPts / 4];
-        std::nth_element(sortedProbs.begin(), sortedProbs.begin() + (3 * nPts) / 4, sortedProbs.end());
-        const double q75Prob = sortedProbs[(3 * nPts) / 4];
-        kHomogCalibratedPriorBand = (medProb >= 0.45 && medProb <= 0.56 &&
-                                     q25Prob >= 0.22 && q25Prob <= 0.30 &&
-                                     q75Prob >= 0.70 && q75Prob <= 0.80);
-    }
-
     // Get the values from the settings
     const superansac::scoring::ScoringType kScoring = settings_.scoring;
     const superansac::samplers::SamplerType kSampler = settings_.sampler;
@@ -2281,7 +2149,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
         return std::make_tuple(Eigen::Matrix3d::Identity(), std::vector<size_t>(), 0.0, totalIterations);
 
     Eigen::Matrix3d homography = bestModel.getData();
-    if (!kHomogCalibratedPriorBand && finalInliers.size() >= estimator->nonMinimalSampleSize())
+    if (finalInliers.size() >= estimator->nonMinimalSampleSize())
     {
         const int kRows = kCorrespondences_.rows();
         const int kCols = kCorrespondences_.cols();
