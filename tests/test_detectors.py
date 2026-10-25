@@ -35,6 +35,7 @@ from datasets.benchmark_pairs import (
 )
 import test_relative_pose as trp
 import test_homography as th
+from benchmark_protocol import TABLE_MAX_ITERS, TABLE_MIN_ITERS, default_workers, plots_dir
 
 PROBLEMS = {
     "fundamental": (trp._eval_f_pair, trp.summarize, "Fundamental matrix (F)", "Pose AUC@10° (%)", "detector_fundamental.png"),
@@ -48,9 +49,10 @@ def run(problem, pairs, cache, detectors, workers):
     out = {}
     for det in detectors:
         if problem == "homography":
-            tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], 5000, 1000) for p in pairs]
+            tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], TABLE_MAX_ITERS, TABLE_MIN_ITERS) for p in pairs]
         else:
-            tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], 5000, 1000, False) for p in pairs]
+            tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], TABLE_MAX_ITERS, TABLE_MIN_ITERS, False)
+                     for p in pairs]
         with ProcessPoolExecutor(max_workers=workers) as ex:
             results = [r for r in ex.map(eval_fn, tasks) if r is not None]
         s = summarize(results, ["SupeRANSAC", "PoseLib"]) if problem != "homography" else summarize(results)
@@ -109,12 +111,12 @@ def main():
     parser.add_argument("--problem", choices=["all", "fundamental", "essential", "homography"], default="all")
     parser.add_argument("--detectors", "--features", dest="detectors", nargs="+", default=ALL_DETECTORS)
     parser.add_argument("--data_dir", type=str, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--workers", type=int, default=24)
+    parser.add_argument("--workers", type=int, default=default_workers())
     parser.add_argument("--no_plots", action="store_true")
     args = parser.parse_args()
     detectors = list(ALL_DETECTORS) if "all" in [d.lower() for d in args.detectors] else [canonical_detector_name(d) for d in args.detectors]
 
-    assets_dir = os.path.join(SUPERANSAC_DIR, "assets")
+    assets_dir = plots_dir(args.data_dir)
     json_path = os.path.join(args.data_dir, "detector_results.json")
     out_json = {}
     if os.path.exists(json_path):

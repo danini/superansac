@@ -4,7 +4,8 @@ Datasets: Homogr + EVD (GT H from the dataset), HPatches viewpoint sequences if 
 
 Protocol (identical for both methods):
     * input  : raw detector matches sorted by confidence (same array for both)
-    * budget : min 1000 / max 5000 iterations (main table); min = max = b for the sweep
+    * budget : each method's own adaptive termination within 1000-5000 iterations (no sweep: 16 pairs are
+               too few for a stable speed-accuracy curve, one pair moves the AUC by up to 6 points)
     * thresh : 4.0 px reprojection error for both (SupeRANSAC's default for H; PoseLib max_reproj_error)
     * metric : mean transfer error of the 4 corners of the GT-inlier bounding box under H_est vs. H_gt
                -> AUC@2.5/5/10 px
@@ -20,7 +21,6 @@ import os
 import sys
 import time
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -31,9 +31,6 @@ if TESTS_DIR not in sys.path:
     sys.path.insert(0, TESTS_DIR)
 
 import cv2
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import poselib
 import pysuperansac
@@ -45,19 +42,13 @@ from datasets.benchmark_pairs import (
     load_planar_pairs,
 )
 from evaluation import pose_auc
+from benchmark_protocol import TABLE_MAX_ITERS, TABLE_MIN_ITERS, default_workers, per_problem_record
 
 cv2.setNumThreads(1)
 
-BUDGETS = [25, 50, 100, 250, 500, 1000, 2500, 5000]
 DEFAULT_FEATURES = ["loma", "roma", "splg"]
 THRESHOLD_PX = 4.0
 AUC_THRESHOLDS = [2.5, 5.0, 10.0]
-FEATURE_FILE_TAG = {"LoMa": "loma", "RoMa": "roma", "DISK+LG": "splg", "LoFTR": "loftr",
-                    "RootSIFT": "rootsift", "SIFT": "sift", "ORB": "orb"}
-FEATURE_TITLE_TAG = {"LoMa": "LoMa", "RoMa": "RoMa", "DISK+LG": "DISK + LightGlue", "LoFTR": "LoFTR",
-                     "RootSIFT": "RootSIFT", "SIFT": "SIFT", "ORB": "ORB"}
-METHOD_COLORS = {"SupeRANSAC": "#1b9e77", "PoseLib": "#377eb8"}
-METHOD_STYLES = {"SupeRANSAC": "-o", "PoseLib": "--s"}
 
 
 def corner_error(pair, H_est, n_inliers):
@@ -126,26 +117,19 @@ def summarize(results, methods=("SupeRANSAC", "PoseLib")):
                 "med_ms": float(np.median([r[m][1] for r in rs])),
                 "inliers": float(np.mean([r[m][2] for r in rs])),
             }
+    summary["Overall"]["per_pair"] = per_problem_record(results, methods)
     return summary
 
 
 def run_benchmark(pairs, cache, features, max_workers):
-    summary, curves = {}, {}
+    summary = {}
     for feat in features:
         det = canonical_detector_name(feat)
-        tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], 5000, 1000) for p in pairs]
+        tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], TABLE_MAX_ITERS, TABLE_MIN_ITERS) for p in pairs]
         with ProcessPoolExecutor(max_workers=max_workers) as ex:
             results = [r for r in ex.map(_eval_h_pair, tasks) if r is not None]
         summary[det] = summarize(results)
-        curves[det] = {"SupeRANSAC": [], "PoseLib": []}
-        for b in BUDGETS:
-            b_tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], b, b) for p in pairs]
-            with ProcessPoolExecutor(max_workers=max_workers) as ex:
-                b_res = [r for r in ex.map(_eval_h_pair, b_tasks) if r is not None]
-            s = summarize(b_res)["Overall"]
-            for m in ("SupeRANSAC", "PoseLib"):
-                curves[det][m].append({"budget": b, "time_ms": s[m]["time_ms"], "auc": s[m]["auc"]})
-    return summary, curves
+    return summary
 
 
 def print_markdown(summary):
@@ -162,36 +146,12 @@ def print_markdown(summary):
                       f"{st['med_err']:.2f} | {st['time_ms']:.1f} | {st['med_ms']:.1f} |")
 
 
-def plot_curves(curves, assets_dir):
-    os.makedirs(assets_dir, exist_ok=True)
-    for det, data in curves.items():
-        fig, ax = plt.subplots(1, 1, figsize=(7.0, 5.0), dpi=180)
-        fig.patch.set_facecolor("white")
-        for m, pts in data.items():
-            ax.plot([p["time_ms"] for p in pts], [p["auc"][1] for p in pts], METHOD_STYLES[m],
-                    color=METHOD_COLORS[m], linewidth=2.5, markersize=7, label=m)
-        ax.set_xscale("log")
-        ax.set_xlabel("Average runtime (ms, log scale)", fontsize=12)
-        ax.set_ylabel("Corner AUC@5px (%)", fontsize=12)
-        ax.set_title(f"Homography (H) -- {FEATURE_TITLE_TAG.get(det, det)}", fontsize=13)
-        ax.grid(True, which="both", linestyle="--", alpha=0.4)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.legend(loc="lower right", frameon=True, fontsize=11)
-        plt.tight_layout()
-        out = os.path.join(assets_dir, f"homography_matrix_{FEATURE_FILE_TAG.get(det, det.lower())}.png")
-        plt.savefig(out, bbox_inches="tight", dpi=180)
-        plt.close(fig)
-        print(f"Saved plot: {out}")
-
-
 def main():
     parser = argparse.ArgumentParser(description="Homography benchmark: SupeRANSAC vs. PoseLib")
     parser.add_argument("--dataset", choices=["all", "homogr", "evd", "hpatches"], default="all")
     parser.add_argument("--features", nargs="+", default=DEFAULT_FEATURES)
     parser.add_argument("--data_dir", type=str, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--workers", type=int, default=24)
-    parser.add_argument("--no_plots", action="store_true")
+    parser.add_argument("--workers", type=int, default=default_workers())
     args = parser.parse_args()
     if "all" in [f.lower() for f in args.features]:
         args.features = list(DEFAULT_FEATURES)
@@ -202,14 +162,12 @@ def main():
         pairs = [p for p in pairs if p["dataset"] == name]
     cache = ensure_cached_matches(pairs, args.features, data_dir=args.data_dir, max_workers=min(12, args.workers))
 
-    summary, curves = run_benchmark(pairs, cache, args.features, args.workers)
+    summary = run_benchmark(pairs, cache, args.features, args.workers)
     print_markdown(summary)
-    if not args.no_plots:
-        plot_curves(curves, os.path.join(SUPERANSAC_DIR, "assets"))
 
     json_path = os.path.join(args.data_dir, "homography_results.json")
     with open(json_path, "w") as f:
-        json.dump({"summary": summary, "curves": curves, "num_pairs": len(pairs)}, f, indent=1)
+        json.dump({"summary": summary, "num_pairs": len(pairs)}, f, indent=1)
     print(f"\nSaved JSON results to {json_path}")
 
 

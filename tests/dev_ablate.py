@@ -168,9 +168,11 @@ def _pnp(args):
             out[name] = (t6.pose_error(prob["R_gt"], prob["t_gt"], R, np.asarray(t).flatten() - R @ min_c, cm)[0], dt)
     cam = {"model": "PINHOLE", "width": int(prob["width"]), "height": int(prob["height"]),
            "params": [float(K[0, 0]), float(K[1, 1]), float(K[0, 2]), float(K[1, 2])]}
+    ropt = {"max_reproj_error": thr, "min_iterations": 1000, "max_iterations": 5000}
+    if len(prob["probs"]):  # confidence-ordered matches: PROSAC, as SupeRANSAC
+        ropt.update({"progressive_sampling": True, "max_prosac_iterations": 5000})
     t0 = time.perf_counter()
-    pose, info = poselib.estimate_absolute_pose(pts2d, pts3d, cam, {"max_reproj_error": thr, "min_iterations": 1000, "max_iterations": 5000},
-                                                {"loss_type": "CAUCHY", "loss_scale": 0.5 * thr})
+    pose, info = poselib.estimate_absolute_pose(pts2d, pts3d, cam, ropt, {"loss_type": "CAUCHY", "loss_scale": 0.5 * thr})
     dt = (time.perf_counter() - t0) * 1e3
     out["PoseLib"] = ((180.0, dt) if pose is None else (t6.pose_error(prob["R_gt"], prob["t_gt"], pose.R, pose.t, cm)[0], dt))
     return prob["detector"], out
@@ -197,7 +199,7 @@ def _rigid(args):
             M = (T1 @ T @ T2).T
             out[name] = (t6.pose_error(prob["R_gt"], prob["t_gt"], M[:3, :3], M[:3, 3], cm)[0], dt)
     t0 = time.perf_counter()
-    R, t, _ = t6.procrustes_ransac(corrs, thr, 5000, 1000)
+    R, t, _ = t6.procrustes_ransac(corrs, thr, 5000, 1000, ordered=len(prob["probs"]) > 0)
     dt = (time.perf_counter() - t0) * 1e3
     out["PoseLib"] = ((180.0, dt) if R is None else (t6.pose_error(prob["R_gt"], prob["t_gt"], R, t, cm)[0], dt))  # column = Procrustes RANSAC baseline
     return prob["detector"], out

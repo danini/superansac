@@ -6,8 +6,9 @@ Datasets (frozen list in tests/datasets/pairs/calibrated_pairs.json):
 
 Protocol (identical for both methods):
     * input  : the raw matches of the detector, sorted by its confidence, same array for both
-    * budget : min_iterations = 1000, max_iterations = 5000 (main table);
-               min = max = b for b in BUDGETS (speed-accuracy sweep)
+    * budget : each method's own adaptive termination within min_iterations = 1000 and
+               max_iterations = 5000 (main table); the speed-accuracy sweep varies min_iterations
+               (SWEEP_MIN_ITERS, max 5000), so its min_iterations = 1000 point is the table configuration
     * thresh : 1.5 px Sampson error (PoseLib normalises it by the focal length for E; so does SupeRANSAC)
     * PROSAC : enabled for both; PoseLib's max_prosac_iterations is set to max_iterations
     * metric : max(rotation error, translation angular error) from the pose recovered on the
@@ -50,10 +51,11 @@ from datasets.benchmark_pairs import (
     load_calibrated_pairs,
 )
 from evaluation import evaluate_R_t, pose_auc
+from benchmark_protocol import (SWEEP_MIN_ITERS, TABLE_MAX_ITERS, TABLE_MIN_ITERS, default_workers,
+                                per_problem_record, plots_dir)
 
 cv2.setNumThreads(1)
 
-BUDGETS = [25, 50, 100, 250, 500, 1000, 2500, 5000]
 DEFAULT_FEATURES = ["loma", "roma", "splg"]
 THRESHOLD_PX = 1.5
 AUC_THRESHOLDS = [5.0, 10.0, 20.0]
@@ -207,6 +209,7 @@ def summarize(results, methods):
                 "med_ms": float(np.median(ts)),
                 "inliers": float(np.mean(inls)),
             }
+    summary["Overall"]["per_pair"] = per_problem_record(results, methods)
     return summary
 
 
@@ -216,20 +219,22 @@ def run_problem(problem, pairs, cache, features, ablate_pp, max_workers):
     summary, curves = {}, {}
     for feat in features:
         det = canonical_detector_name(feat)
-        tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], 5000, 1000, ablate_pp) for p in pairs]
+        tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], TABLE_MAX_ITERS, TABLE_MIN_ITERS, ablate_pp)
+                 for p in pairs]
         with ProcessPoolExecutor(max_workers=max_workers) as ex:
             results = [r for r in ex.map(eval_fn, tasks) if r is not None]
         summary[det] = summarize(results, methods)
         summary[det]["_methods"] = methods
 
         curves[det] = {m: [] for m in methods}
-        for b in BUDGETS:
-            b_tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], b, b, ablate_pp) for p in pairs]
+        for mi in SWEEP_MIN_ITERS:
+            b_tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], TABLE_MAX_ITERS, mi, ablate_pp)
+                       for p in pairs]
             with ProcessPoolExecutor(max_workers=max_workers) as ex:
                 b_res = [r for r in ex.map(eval_fn, b_tasks) if r is not None]
             s = summarize(b_res, methods)["Overall"]
             for m in methods:
-                curves[det][m].append({"budget": b, "time_ms": s[m]["time_ms"], "auc": s[m]["auc"]})
+                curves[det][m].append({"min_iterations": mi, "time_ms": s[m]["time_ms"], "auc": s[m]["auc"]})
     return summary, curves
 
 
@@ -264,6 +269,9 @@ def plot_curves(problem, curves, assets_dir):
         for m, pts in data.items():
             ax.plot([p["time_ms"] for p in pts], [p["auc"][1] for p in pts], METHOD_STYLES.get(m, "-o"),
                     color=METHOD_COLORS.get(m, "gray"), linewidth=2.5, markersize=7, label=m)
+            star = [p for p in pts if p["min_iterations"] == TABLE_MIN_ITERS]
+            ax.plot([p["time_ms"] for p in star], [p["auc"][1] for p in star], "*", color=METHOD_COLORS.get(m, "gray"),
+                    markersize=18, markeredgecolor="black")
         ax.set_xscale("log")
         ax.set_xlabel("Average runtime (ms, log scale)", fontsize=12)
         ax.set_ylabel("Pose AUC@10° (%)", fontsize=12)
@@ -287,7 +295,7 @@ def main():
     parser.add_argument("--ablate_pp", action="store_true",
                         help="Also evaluate SupeRANSAC with the F Plane-and-Parallax post-refinement disabled")
     parser.add_argument("--data_dir", type=str, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--workers", type=int, default=24)
+    parser.add_argument("--workers", type=int, default=default_workers())
     parser.add_argument("--no_plots", action="store_true")
     args = parser.parse_args()
     if "all" in [f.lower() for f in args.features]:
@@ -299,7 +307,7 @@ def main():
         pairs = [p for p in pairs if p["dataset"] == name]
     cache = ensure_cached_matches(pairs, args.features, data_dir=args.data_dir, max_workers=min(12, args.workers))
 
-    assets_dir = os.path.join(SUPERANSAC_DIR, "assets")
+    assets_dir = plots_dir(args.data_dir)
     json_path = os.path.join(args.data_dir, "relative_pose_results.json")
     out_json = {}
     if os.path.exists(json_path):

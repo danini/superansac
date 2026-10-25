@@ -47,6 +47,7 @@ from datasets.benchmark_pairs import (
 )
 from evaluation import pose_auc
 from test_homography import corner_error
+from benchmark_protocol import TABLE_MAX_ITERS, TABLE_MIN_ITERS, default_workers, per_problem_record, plots_dir
 
 cv2.setNumThreads(1)
 
@@ -130,6 +131,7 @@ def summarize(results, aucs):
                 "time_ms": float(np.mean([r[m][1] for r in rs])),
                 "inliers": float(np.mean([r[m][2] for r in rs])),
             }
+    summary["Overall"]["per_pair"] = per_problem_record(results, ("SupeRANSAC", "PoseLib"))
     return summary
 
 
@@ -186,7 +188,7 @@ def main():
     parser = argparse.ArgumentParser(description="Classic labelled-correspondence benchmark (F, H)")
     parser.add_argument("--problem", choices=["all", "fundamental", "homography"], default="all")
     parser.add_argument("--data_dir", type=str, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--workers", type=int, default=24)
+    parser.add_argument("--workers", type=int, default=default_workers())
     parser.add_argument("--no_plots", action="store_true")
     args = parser.parse_args()
 
@@ -199,7 +201,7 @@ def main():
     f_summary = h_summary = None
     if args.problem in ("all", "fundamental"):
         probs = load_classic_f_problems(args.data_dir)
-        tasks = [(p, r, 5000, 1000) for p in probs for r in range(N_REPEATS)]
+        tasks = [(p, r, TABLE_MAX_ITERS, TABLE_MIN_ITERS) for p in probs for r in range(N_REPEATS)]
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             res = list(ex.map(_eval_f, tasks))
         f_summary = summarize(res, F_AUC)
@@ -208,7 +210,7 @@ def main():
         out_json["fundamental"] = f_summary
     if args.problem in ("all", "homography"):
         probs = load_classic_h_problems(args.data_dir)
-        tasks = [(p, r, 5000, 1000) for p in probs for r in range(N_REPEATS)]
+        tasks = [(p, r, TABLE_MAX_ITERS, TABLE_MIN_ITERS) for p in probs for r in range(N_REPEATS)]
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             res = list(ex.map(_eval_h, tasks))
         h_summary = summarize(res, H_AUC)
@@ -216,7 +218,7 @@ def main():
                        ("AUC@2.5px", "AUC@5px", "AUC@10px"), "px")
         out_json["homography"] = h_summary
     if not args.no_plots:
-        plot_summary(out_json.get("fundamental"), out_json.get("homography"), os.path.join(SUPERANSAC_DIR, "assets"))
+        plot_summary(out_json.get("fundamental"), out_json.get("homography"), plots_dir(args.data_dir))
 
     with open(json_path, "w") as f:
         json.dump(out_json, f, indent=1)

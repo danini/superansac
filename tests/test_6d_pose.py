@@ -7,10 +7,15 @@ Synthetic stress tests (reported separately): pose6dscene outlier sweep, rigid_p
 Baselines
     PnP   : PoseLib estimate_absolute_pose (LO-RANSAC + bundle), OpenCV solvePnPRansac (EPnP, plain RANSAC)
     Rigid : a transparent 3-point Procrustes RANSAC (MSAC scoring, adaptive termination, final LSQ on inliers)
-            implemented below -- neither OpenCV nor PoseLib ships a rigid-registration RANSAC
-            (cv2.estimateAffine3D fits a 12-DoF affine and is not comparable).
+            implemented below in Python/NumPy -- neither OpenCV nor PoseLib ships a rigid-registration RANSAC
+            (cv2.estimateAffine3D fits a 12-DoF affine and is not comparable). Being Python, its runtime is
+            NOT comparable to the C++ methods and is reported for reference only.
 
-All methods: same threshold (3.5 px / 5 cm), same budget (1000-5000 iterations; min = max = b in the sweep).
+All methods: same threshold (3.5 px / 5 cm), same budget (each method's adaptive termination within 1000-5000
+iterations). Where the matches are ordered by matcher confidence (real 7Scenes problems), every method samples
+with PROSAC (SupeRANSAC's default; PoseLib progressive_sampling; PROSAC in the Procrustes baseline); the synthetic
+problems have no order and use uniform sampling everywhere. PnP speed-accuracy sweep: min_iterations in
+SWEEP_MIN_ITERS (max 5000) for SupeRANSAC and PoseLib, the iteration cap in SWEEP_CAPS for OpenCV (no minimum).
 Metric: pose error = max(rotation error [deg], 0.5 * translation error [cm]) -> AUC@(2deg,4cm)/(5deg,10cm)/(10deg,20cm).
 
 Usage:
@@ -48,10 +53,11 @@ from datasets.pose6d_problems import (
     load_rigid_pose_example_problems,
 )
 from evaluation import pose_auc
+from benchmark_protocol import (SWEEP_CAPS, SWEEP_MIN_ITERS, TABLE_MAX_ITERS, TABLE_MIN_ITERS, default_workers,
+                                per_problem_record, plots_dir)
 
 cv2.setNumThreads(1)
 
-BUDGETS = [25, 50, 100, 250, 500, 1000, 2500, 5000]
 AUC_THRESHOLDS = [2.0, 5.0, 10.0]
 TRANS_WEIGHT = 0.5  # deg per cm: 5 deg ~ 10 cm
 PNP_METHODS = ["SupeRANSAC", "PoseLib", "OpenCV RANSAC"]
@@ -85,15 +91,40 @@ def procrustes(X, Y):
     return R, cy - R @ cx
 
 
-def procrustes_ransac(corrs, th, max_iters, min_iters, confidence=0.9999, seed=0):
+class ProsacSampler:
+    """PROSAC (Chum & Matas, CVPR 2005) as implemented in PoseLib: samples from a progressively growing
+    top-ranked subset of the (confidence-ordered) data, uniform after `max_prosac` samples."""
+
+    def __init__(self, n, k, max_prosac, rng):
+        self.N, self.k, self.rng = n, k, rng
+        self.T_n = float(max_prosac)
+        for i in range(k):
+            self.T_n *= (k - i) / (n - i)
+        self.T_n_p, self.n, self.t = 1, k, 0
+
+    def sample(self):
+        self.t += 1
+        if self.t > self.T_n_p and self.n < self.N:
+            T_next = self.T_n * (self.n + 1) / (self.n + 1 - self.k)
+            self.T_n_p += int(np.ceil(T_next - self.T_n))
+            self.T_n = T_next
+            self.n += 1
+        if self.T_n_p < self.t:
+            return self.rng.choice(self.n, self.k, replace=False)
+        return np.append(self.rng.choice(self.n - 1, self.k - 1, replace=False), self.n - 1)
+
+
+def procrustes_ransac(corrs, th, max_iters, min_iters, confidence=0.9999, seed=0, ordered=False):
+    """ordered=True: the rows are sorted by matcher confidence and are sampled with PROSAC."""
     rng = np.random.default_rng(seed)
     X, Y = corrs[:, :3], corrs[:, 3:6]
     N = len(X)
     th2 = th * th
     best_score, best_mask = -1.0, None
     it, needed = 0, max_iters
+    prosac = ProsacSampler(N, 3, max_iters, rng) if ordered and N > 3 else None
     while it < needed:
-        idx = rng.choice(N, 3, replace=False)
+        idx = prosac.sample() if prosac is not None else rng.choice(N, 3, replace=False)
         R, t = procrustes(X[idx], Y[idx])
         r2 = np.sum((X @ R.T + t - Y) ** 2, axis=1)
         mask = r2 < th2
@@ -117,7 +148,9 @@ def procrustes_ransac(corrs, th, max_iters, min_iters, confidence=0.9999, seed=0
 # Per-problem evaluation
 # --------------------------------------------------------------------------------------
 def _eval_pnp(args):
-    prob, max_iters, min_iters = args
+    prob, max_iters, min_iters = args[:3]
+    methods = args[3] if len(args) > 3 else PNP_METHODS
+    ordered = len(prob["probs"]) > 0
     corrs, K, th, cm = prob["corrs"], prob["K"], prob["threshold_px"], prob["cm_scale"]
     R_gt, t_gt = prob["R_gt"], prob["t_gt"]
     pts2d = np.ascontiguousarray(corrs[:, :2], dtype=np.float64)
@@ -125,6 +158,8 @@ def _eval_pnp(args):
     out = {"dataset": prob["dataset"], "detector": prob["detector"], "scene": prob["scene"], "n": len(corrs)}
 
     # SupeRANSAC (expects a non-negative bounding box: shift the 3D points, un-shift the translation)
+    if "SupeRANSAC" not in methods:
+        return _eval_pnp_opencv(prob, pts2d, pts3d, K, th, cm, max_iters, out)
     min_c = pts3d.min(axis=0)
     corrs_su = np.ascontiguousarray(np.hstack([pts2d, pts3d - min_c]))
     bbox = list(np.max(corrs_su, axis=0))
@@ -146,6 +181,8 @@ def _eval_pnp(args):
     cam = {"model": "PINHOLE", "width": int(prob["width"]), "height": int(prob["height"]),
            "params": [float(K[0, 0]), float(K[1, 1]), float(K[0, 2]), float(K[1, 2])]}
     ropt = {"max_reproj_error": th, "min_iterations": min_iters, "max_iterations": max_iters}
+    if ordered:
+        ropt.update({"progressive_sampling": True, "max_prosac_iterations": max_iters})
     t0 = time.perf_counter()
     pose, info = poselib.estimate_absolute_pose(pts2d, pts3d, cam, ropt, {"loss_type": "CAUCHY", "loss_scale": 0.5 * th})
     dt = (time.perf_counter() - t0) * 1000.0
@@ -154,8 +191,14 @@ def _eval_pnp(args):
         out["PoseLib"] = (180.0, 180.0, 1e6, dt, 0)
     else:
         out["PoseLib"] = pose_error(R_gt, t_gt, pose.R, pose.t, cm) + (dt, n_inl)
+    if "OpenCV RANSAC" not in methods:
+        return out
+    return _eval_pnp_opencv(prob, pts2d, pts3d, K, th, cm, max_iters, out)
 
-    # OpenCV
+
+def _eval_pnp_opencv(prob, pts2d, pts3d, K, th, cm, max_iters, out):
+    """OpenCV solvePnPRansac (EPnP, uniform sampling, no minimum iteration count): max_iters is its cap."""
+    R_gt, t_gt = prob["R_gt"], prob["t_gt"]
     t0 = time.perf_counter()
     ok, rvec, tvec, inl_cv = cv2.solvePnPRansac(pts3d.astype(np.float32), pts2d.astype(np.float32), K.astype(np.float64), None,
                                                 iterationsCount=max_iters, reprojectionError=float(th), confidence=0.9999,
@@ -195,7 +238,7 @@ def _eval_rigid(args):
         out["SupeRANSAC"] = pose_error(R_gt, t_gt, M[:3, :3], M[:3, 3], cm) + (dt, len(inl))
 
     t0 = time.perf_counter()
-    R, t, n_inl = procrustes_ransac(corrs, th, max_iters, min_iters)
+    R, t, n_inl = procrustes_ransac(corrs, th, max_iters, min_iters, ordered=len(prob["probs"]) > 0)
     dt = (time.perf_counter() - t0) * 1000.0
     out["Procrustes RANSAC"] = (pose_error(R_gt, t_gt, R, t, cm) if R is not None else (180.0, 180.0, 1e6)) + (dt, n_inl)
     return out
@@ -220,6 +263,7 @@ def summarize(results, methods, group_key="dataset"):
                 "time_ms": float(np.mean([r[m][3] for r in rs])),
                 "inliers": float(np.mean([r[m][4] for r in rs])),
             }
+        summary[g]["per_pair"] = per_problem_record(rs, methods)
     return summary
 
 
@@ -237,7 +281,7 @@ def print_markdown(title, summary, methods, group_label="Dataset"):
 
 
 def plot_task(title, by_dataset, by_detector, curves, methods, out_path):
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.6), dpi=180)
+    fig, axes = plt.subplots(1, 3 if curves else 2, figsize=(16 if curves else 11, 4.6), dpi=180)
     fig.patch.set_facecolor("white")
     w = 0.8 / len(methods)
     for ax, summary, sub in ((axes[0], by_dataset, "by dataset"), (axes[1], by_detector, "7Scenes RGB-D by detector")):
@@ -255,10 +299,18 @@ def plot_task(title, by_dataset, by_detector, curves, methods, out_path):
         ax.set_ylim(0, 105)
         ax.grid(True, axis="y", linestyle="--", alpha=0.35)
         ax.legend(fontsize=8, loc="upper left")
+    if not curves:
+        plt.tight_layout()
+        plt.savefig(out_path, bbox_inches="tight", dpi=180)
+        plt.close(fig)
+        print(f"Saved plot: {out_path}")
+        return
     ax = axes[2]
     for m in methods:
         pts = curves[m]
         ax.plot([p["time_ms"] for p in pts], [p["auc"][1] for p in pts], STYLES[m], color=COLORS[m], linewidth=2.2, markersize=6, label=m)
+        star = [p for p in pts if p.get("min_iterations", TABLE_MIN_ITERS) == TABLE_MIN_ITERS and p.get("max_iterations", TABLE_MAX_ITERS) == TABLE_MAX_ITERS]
+        ax.plot([p["time_ms"] for p in star], [p["auc"][1] for p in star], "*", color=COLORS[m], markersize=16, markeredgecolor="black")
     ax.set_xscale("log")
     ax.set_xlabel("Average runtime (ms, log)")
     ax.set_ylabel("AUC@(5°,10cm) (%)")
@@ -271,11 +323,11 @@ def plot_task(title, by_dataset, by_detector, curves, methods, out_path):
     print(f"Saved plot: {out_path}")
 
 
-def run_task(name, real_probs, synth_probs, eval_fn, methods, workers, assets_dir, no_plots):
+def run_task(name, real_probs, synth_probs, eval_fn, methods, workers, assets_dir, no_plots, sweep=False):
     probs = real_probs + synth_probs
     print(f"[{name}] real 7Scenes problems: {len(real_probs)}, synthetic stress problems: {len(synth_probs)}")
     with ProcessPoolExecutor(max_workers=workers) as ex:
-        results = list(ex.map(eval_fn, [(p, 5000, 1000) for p in probs]))
+        results = list(ex.map(eval_fn, [(p, TABLE_MAX_ITERS, TABLE_MIN_ITERS) for p in probs]))
     real_res = [r for r in results if r["dataset"] == "7Scenes RGB-D"]
     by_dataset = summarize(results, methods)
     by_detector = summarize(real_res, methods, group_key="detector")
@@ -286,13 +338,23 @@ def run_task(name, real_probs, synth_probs, eval_fn, methods, workers, assets_di
     if synth_probs:
         print_markdown(f"{name} -- synthetic stress tests by level", synth_by_level, methods, "Level")
 
-    curves = {m: [] for m in methods}
-    for b in BUDGETS:
-        with ProcessPoolExecutor(max_workers=workers) as ex:
-            b_res = list(ex.map(eval_fn, [(p, b, b) for p in real_probs]))
-        s = summarize(b_res, methods)["Overall"]
-        for m in methods:
-            curves[m].append({"budget": b, "time_ms": s[m]["time_ms"], "auc": s[m]["auc"]})
+    curves = {}
+    if sweep:  # PnP only: min_iterations sweep for SupeRANSAC / PoseLib, iteration-cap sweep for OpenCV
+        curves = {m: [] for m in methods}
+        lib = [m for m in methods if m != "OpenCV RANSAC"]
+        for mi in SWEEP_MIN_ITERS:
+            with ProcessPoolExecutor(max_workers=workers) as ex:
+                b_res = list(ex.map(eval_fn, [(p, TABLE_MAX_ITERS, mi, lib) for p in real_probs]))
+            s = summarize(b_res, lib)["Overall"]
+            for m in lib:
+                curves[m].append({"min_iterations": mi, "time_ms": s[m]["time_ms"], "auc": s[m]["auc"]})
+        if "OpenCV RANSAC" in methods:
+            for cap in SWEEP_CAPS:
+                with ProcessPoolExecutor(max_workers=workers) as ex:
+                    b_res = list(ex.map(eval_fn, [(p, cap, 0, ["OpenCV RANSAC"]) for p in real_probs]))
+                s = summarize(b_res, ["OpenCV RANSAC"])["Overall"]
+                curves["OpenCV RANSAC"].append({"max_iterations": cap, "time_ms": s["OpenCV RANSAC"]["time_ms"],
+                                                "auc": s["OpenCV RANSAC"]["auc"]})
     if not no_plots:
         fname = "absolute_pose_experiments.png" if "Absolute" in name else "rigid_transform_experiments.png"
         plot_task(name, by_dataset, by_detector, curves, methods, os.path.join(assets_dir, fname))
@@ -303,11 +365,11 @@ def main():
     parser = argparse.ArgumentParser(description="6D pose benchmark (PnP & rigid registration)")
     parser.add_argument("--problem", choices=["all", "absolute_pose", "rigid_transform"], default="all")
     parser.add_argument("--data_dir", type=str, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--workers", type=int, default=24)
+    parser.add_argument("--workers", type=int, default=default_workers())
     parser.add_argument("--no_plots", action="store_true")
     args = parser.parse_args()
 
-    assets_dir = os.path.join(SUPERANSAC_DIR, "assets")
+    assets_dir = plots_dir(args.data_dir)
     json_path = os.path.join(args.data_dir, "pose_6d_results.json")
     out_json = {}
     if os.path.exists(json_path):
@@ -316,7 +378,8 @@ def main():
 
     if args.problem in ("all", "absolute_pose"):
         out_json["absolute_pose"] = run_task("6D Absolute Pose (PnP)", load_7scenes_pnp_problems(args.data_dir),
-                                             load_pose6dscene_pnp_problems(), _eval_pnp, PNP_METHODS, args.workers, assets_dir, args.no_plots)
+                                             load_pose6dscene_pnp_problems(), _eval_pnp, PNP_METHODS, args.workers, assets_dir, args.no_plots,
+                                             sweep=True)
     if args.problem in ("all", "rigid_transform"):
         out_json["rigid_transform"] = run_task("6D Rigid Registration (SE(3))", load_7scenes_rigid_problems(args.data_dir),
                                                load_rigid_pose_example_problems(), _eval_rigid, RIGID_METHODS, args.workers, assets_dir, args.no_plots)
