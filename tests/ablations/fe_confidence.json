@@ -1,0 +1,6 @@
+{
+  "base": {},
+  "conf": {"final_bundle_confidence_weights": 1},
+  "conf_g05": {"final_bundle_confidence_weights": 1, "final_bundle_confidence_exponent": 0.5},
+  "conf_g2": {"final_bundle_confidence_weights": 1, "final_bundle_confidence_exponent": 2.0}
+}

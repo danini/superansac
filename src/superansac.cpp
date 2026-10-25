@@ -1,4 +1,5 @@
 #include "superansac.h"
+#include <algorithm>
 
 #include "estimators/degensac.h"
 #include "estimators/estimator_fundamental_matrix.h"
@@ -354,9 +355,40 @@ void SupeRansac::run(const DataMatrix &kData_)
         const int kLastIdxToCheck =
             bestModels.size() >= settings.topKForLocalOptimization ?
                 bestModels.size() - settings.topKForLocalOptimization : 0;
+        std::vector<std::vector<size_t>> optimizedInlierSets; // sorted inlier sets of the candidates optimized so far
         for (int idx = bestModels.size() - 1; idx >= kLastIdxToCheck; --idx)
         {
             const auto &[currModel, currInliers, currScore] = bestModels[idx];
+
+            // Skip candidates that are near-duplicates (by inlier-set overlap) of an already optimized one:
+            // the local optimization would converge to the same model.
+            if (settings.localOptimizationDuplicateOverlap > 0.0)
+            {
+                std::vector<size_t> sortedInliers(currInliers.begin(), currInliers.end());
+                std::sort(sortedInliers.begin(), sortedInliers.end());
+                bool duplicate = false;
+                for (const auto &prevInliers : optimizedInlierSets)
+                {
+                    size_t common = 0;
+                    auto a = sortedInliers.cbegin();
+                    auto b = prevInliers.cbegin();
+                    while (a != sortedInliers.cend() && b != prevInliers.cend())
+                    {
+                        if (*a < *b) ++a;
+                        else if (*b < *a) ++b;
+                        else { ++common; ++a; ++b; }
+                    }
+                    const size_t kUnion = sortedInliers.size() + prevInliers.size() - common;
+                    if (kUnion > 0 && static_cast<double>(common) >= settings.localOptimizationDuplicateOverlap * static_cast<double>(kUnion))
+                    {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate)
+                    continue;
+                optimizedInlierSets.emplace_back(std::move(sortedInliers));
+            }
 
             tmpInliers.clear();
             localOptimizer->run(kData_, // Data matrix

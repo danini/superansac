@@ -1,0 +1,7 @@
+{
+  "min0": {"min_iterations": 0},
+  "min0_nobundle": {"min_iterations": 0, "final_bundle_rounds": 0},
+  "min0_k1": {"min_iterations": 0, "local_opt_k": 1},
+  "min0_nolo": {"min_iterations": 0, "local_optimization": "Nothing"},
+  "min0_fb30": {"min_iterations": 0, "final_bundle_max_iterations": 30}
+}

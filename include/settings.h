@@ -84,6 +84,7 @@ namespace superansac {
             minIterations = 1000, // Minimum number of iterations
             maxIterations = 5000, // Maximum number of iterations
             finalRefinementRounds = 0; // Extra score-gated re-collect-and-refit rounds in the final LSQ optimization
+        double localOptimizationDuplicateOverlap = -1.0; // Skip the local optimization of a top-K candidate whose inlier set overlaps (Jaccard) an already optimized candidate's by at least this fraction: -1 = auto (F, E: 0.95; other problems: off; chosen on the dev split), 0 = off
         double finalRefinementScheduleStart = 3.0, // Widest sigma multiplier in the final-refinement schedule
             finalRefinementScheduleEnd = 0.5; // Narrowest sigma multiplier in the final-refinement schedule
         double inlierThreshold = 1.5; // Inlier threshold
@@ -109,6 +110,8 @@ namespace superansac {
         double finalBundleScheduleStart = 2.0; // First-round collection threshold multiplier (shrinks geometrically to 1.0 over the rounds)
         size_t finalBundleMaxIterations = 100; // LM iterations per round
         int finalBundleWeighting = -1; // -1 = auto (F: 2, E and absolute pose: 1, H: 0; chosen on the dev split), 0 = Cauchy loss in every round, 1 = MAGSAC++ (sigma-consensus) weighted least squares in every round, 2 = weighted rounds followed by a final unweighted Cauchy round
+        int finalBundleConfidenceWeights = -1; // Multiply the final-bundle weights by the caller-provided match confidences: -1 = auto (F, E: on; H, absolute pose: off; chosen on the dev split), 0 = off, 1 = on
+        double finalBundleConfidenceExponent = 1.0; // Confidence weights are raised to this power
         bool nonminimalConfidenceWeights = true; // Feed caller-provided confidences as weights into the non-minimal (LM) solver
         double prosacConvergenceMultiplier = 1.0; // > 0: PROSAC becomes uniform after multiplier * maxIterations samples (0 = legacy schedule: 200000 samples)
         bool lowInlierUniformFallback = false; // Re-run with uniform sampling when PROSAC ends with a small consensus set (result-dependent; off: no accuracy gain, up to 2x runtime)

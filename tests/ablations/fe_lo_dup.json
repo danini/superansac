@@ -1,0 +1,8 @@
+{
+  "default": {},
+  "dup095": {"local_optimization_duplicate_overlap": 0.95},
+  "dup09": {"local_optimization_duplicate_overlap": 0.9},
+  "dup08": {"local_optimization_duplicate_overlap": 0.8},
+  "min0": {"min_iterations": 0},
+  "min0_dup09": {"min_iterations": 0, "local_optimization_duplicate_overlap": 0.9}
+}
