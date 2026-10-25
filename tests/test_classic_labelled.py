@@ -190,7 +190,12 @@ def main():
     parser.add_argument("--no_plots", action="store_true")
     args = parser.parse_args()
 
+    # Merge into existing results so that running a single problem keeps the other one.
+    json_path = os.path.join(args.data_dir, "classic_labelled_results.json")
     out_json = {}
+    if os.path.exists(json_path):
+        with open(json_path, "r") as f:
+            out_json = json.load(f)
     f_summary = h_summary = None
     if args.problem in ("all", "fundamental"):
         probs = load_classic_f_problems(args.data_dir)
@@ -211,9 +216,8 @@ def main():
                        ("AUC@2.5px", "AUC@5px", "AUC@10px"), "px")
         out_json["homography"] = h_summary
     if not args.no_plots:
-        plot_summary(f_summary, h_summary, os.path.join(SUPERANSAC_DIR, "assets"))
+        plot_summary(out_json.get("fundamental"), out_json.get("homography"), os.path.join(SUPERANSAC_DIR, "assets"))
 
-    json_path = os.path.join(args.data_dir, "classic_labelled_results.json")
     with open(json_path, "w") as f:
         json.dump(out_json, f, indent=1)
     print(f"\nSaved JSON results to {json_path}")

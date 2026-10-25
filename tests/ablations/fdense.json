@@ -1,0 +1,10 @@
+{
+  "new_default": {},
+  "old_default": {"adaptive_termination": false, "confidence": 0.99, "prosac_convergence_multiplier": 0.0, "low_inlier_uniform_fallback": true, "final_optimization": "IteratedLSQ", "final_bundle_weighting": 0},
+  "w_hybrid": {"final_bundle_weighting": 2},
+  "w_cauchy": {"final_bundle_weighting": 0},
+  "w1_irls1": {"final_bundle_weighting": 1, "final_optimization": "IteratedLSQ", "final_optimization_settings.max_iterations": 1},
+  "hybrid_irls1": {"final_bundle_weighting": 2, "final_optimization": "IteratedLSQ", "final_optimization_settings.max_iterations": 1},
+  "hybrid_r4": {"final_bundle_weighting": 2, "final_bundle_rounds": 4}
+}
+

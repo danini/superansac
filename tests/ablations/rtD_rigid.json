@@ -1,0 +1,5 @@
+{
+  "base": {},
+  "fast_p1_nofin": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0, "final_optimization": "Nothing"},
+  "fast_p1": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0}
+}

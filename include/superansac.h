@@ -137,9 +137,6 @@ class SupeRansac
         // Get the number of iterations
         size_t getIterationNumber() const;
 
-        // Get the locally optimized top-K candidate models of the last run (for post-hoc re-selection)
-        const std::vector<models::Model> &getCandidateModels() const;
-
     protected:
         // The sampler for selecting the minimal samples
         samplers::AbstractSampler *sampler;
@@ -156,9 +153,6 @@ class SupeRansac
 
         // The termination criterion object
         termination::AbstractCriterion *terminationCriterion;
-
-        // The locally optimized top-K candidates of the last run
-        std::vector<models::Model> candidateModels;
 
         // The space partitioning inlier selector object
         inlier_selector::AbstractInlierSelector *inlierSelector;

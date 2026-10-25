@@ -1,0 +1,11 @@
+{
+  "base": {},
+  "msac": {"scoring": "MSAC"},
+  "no_fb": {"final_bundle_rounds": 0},
+  "lo_none": {"local_optimization": "Nothing"},
+  "fin_none": {"final_optimization": "Nothing"},
+  "no_fallback": {"low_inlier_uniform_fallback": false},
+  "no_sprt": {"use_sprt": false},
+  "cheir25": {"essential_cheirality_point_number": 25}
+}
+

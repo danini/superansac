@@ -1,0 +1,9 @@
+{
+  "base": {},
+  "fast": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false},
+  "fast_p1": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0},
+  "fast_p1_fi3": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0, "final_optimization_settings.max_iterations": 3},
+  "fast_p1_fi1": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0, "final_optimization_settings.max_iterations": 1},
+  "fast_p1_lsq": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0, "final_optimization": "LSQ"},
+  "fast_p1_nofin": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0, "final_optimization": "Nothing"}
+}

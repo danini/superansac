@@ -1,0 +1,5 @@
+{
+  "new_default": {},
+  "old_default": {"adaptive_termination": false, "confidence": 0.99, "prosac_convergence_multiplier": 0.0, "low_inlier_uniform_fallback": true, "final_optimization": "IteratedLSQ", "final_bundle_weighting": 0}
+}
+

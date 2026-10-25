@@ -1,0 +1,10 @@
+{
+  "base": {},
+  "at99": {"adaptive_termination": true, "confidence": 0.99},
+  "at9999": {"adaptive_termination": true, "confidence": 0.9999},
+  "at9999_k1": {"adaptive_termination": true, "confidence": 0.9999, "local_opt_k": 1},
+  "at9999_nofin": {"adaptive_termination": true, "confidence": 0.9999, "final_optimization": "Nothing"},
+  "at9999_nofb": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false},
+  "at9999_lo10": {"adaptive_termination": true, "confidence": 0.9999, "local_optimization_settings.max_iterations": 10}
+}
+

@@ -1,0 +1,9 @@
+{
+  "base": {},
+  "fast_p1": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0},
+  "fast_p1_nofin": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0, "final_optimization": "Nothing"},
+  "nofin_w1": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0, "final_optimization": "Nothing", "final_bundle_weighting": 1},
+  "nofin_w2": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0, "final_optimization": "Nothing", "final_bundle_weighting": 2},
+  "nofin_w1_r5": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0, "final_optimization": "Nothing", "final_bundle_weighting": 1, "final_bundle_rounds": 5},
+  "fi1_w1": {"adaptive_termination": true, "confidence": 0.9999, "low_inlier_uniform_fallback": false, "prosac_convergence_multiplier": 1.0, "final_optimization_settings.max_iterations": 1, "final_bundle_weighting": 1}
+}

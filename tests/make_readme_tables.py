@@ -62,7 +62,7 @@ def det_ms():
     for m in ("LoMa", "RoMa", "LoFTR", "DISK+LG", "RootSIFT", "SIFT", "ORB"):
         f, e, h = (det[p][m]["Overall"] for p in ("fundamental", "essential", "homography"))
         rows.append(f"| {m} | {f['PoseLib']['time_ms']:.0f} / {f['SupeRANSAC']['time_ms']:.0f} | {e['PoseLib']['time_ms']:.0f} / {e['SupeRANSAC']['time_ms']:.0f} | {h['PoseLib']['time_ms']:.0f} / {h['SupeRANSAC']['time_ms']:.0f} |")
-    return "\n".join(["| Matcher | $F$ ms PoseLib / SupeRANSAC | $E$ ms | $H$ ms |", "|---|---:|---:|---:|"] + rows)
+    return "\n".join(["| Matcher | $F$ ms PoseLib / SupeRANSAC | $E$ ms PoseLib / SupeRANSAC | $H$ ms PoseLib / SupeRANSAC |", "|---|---:|---:|---:|"] + rows)
 
 
 def cls_table():

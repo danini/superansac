@@ -51,20 +51,20 @@ Summary (AUC@10° for $F$/$E$, AUC@5px for $H$, AUC@(5°,10cm) for 6D; higher is
 
 | Task | Data | Baseline | SupeRANSAC | Δ | Runtime SupeRANSAC / baseline |
 |---|---|---:|---:|---:|---:|
-| $F$, LoMa / RoMa / LoFTR / DISK+LG | 300 calibrated pairs | 71.5 / 66.8 / 59.5 / 49.9 (PoseLib) | 71.9 / 66.9 / 59.3 / 49.8 | +0.4 / +0.1 / -0.2 / -0.2 | 49 / 18, 106 / 67, 85 / 43, 50 / 18 ms |
-| $F$, RootSIFT / SIFT / ORB | 300 calibrated pairs | 29.9 / 25.9 / 17.0 (PoseLib) | 38.2 / 32.9 / 21.0 | +8.4 / +7.0 / +4.0 | 89 / 96, 91 / 103, 122 / 154 ms |
-| $E$, LoMa / RoMa / LoFTR / DISK+LG | 300 calibrated pairs | 78.3 / 74.0 / 69.2 / 63.8 (PoseLib) | 77.7 / 74.3 / 68.9 / 63.0 | -0.6 / +0.3 / -0.3 / -0.8 | 104 / 32, 214 / 107, 174 / 64, 102 / 33 ms |
-| $E$, RootSIFT / SIFT / ORB | 300 calibrated pairs | 54.7 / 50.9 / 39.4 (PoseLib) | 53.9 / 51.0 / 40.7 | -0.8 / +0.1 / +1.2 | 110 / 73, 105 / 74, 143 / 86 ms |
-| $H$, LoMa / RoMa / LoFTR / DISK+LG | 16 Homogr + EVD pairs | 59.5 / 56.5 / 46.2 / 43.9 (PoseLib) | 58.8 / 56.8 / 46.2 / 43.6 | -0.7 / +0.3 / -0.0 / -0.2 | 18 / 8, 36 / 32, 28 / 19, 16 / 8 ms |
-| $H$, RootSIFT / SIFT / ORB | 16 Homogr + EVD pairs | 39.8 / 39.9 / 33.8 (PoseLib) | 47.6 / 47.3 / 36.7 | +7.9 / +7.4 / +2.9 | 25 / 7, 26 / 7, 32 / 9 ms |
-| $F$, labelled tentative matches | 30 kusvod2 + AdelaideRMF scenes × 5 | 77.7 @2px (PoseLib) | 78.6 | +0.9 | 49 / 23 ms |
-| $H$, labelled tentative matches | 35 Homogr + EVD + AdelaideRMF scenes × 5 | 62.5 @5px (PoseLib) | 64.2 | +1.6 | 12 / 6 ms |
-| PnP, 6 matchers | 600 real 7Scenes RGB-D problems | 37.1 (PoseLib), 30.7 (OpenCV) | 37.2 | +0.1 / +6.5 | 69 / 18 / 191 ms |
-| Rigid, 6 matchers | 599 real 7Scenes RGB-D problems | 41.3 (Procrustes RANSAC) | 39.1 | -2.1 | 23 / 237 ms |
+| $F$, LoMa / RoMa / LoFTR / DISK+LG | 300 calibrated pairs | 71.5 / 66.8 / 59.5 / 49.9 (PoseLib) | 71.3 / 66.6 / 58.7 / 49.1 | -0.2 / -0.2 / -0.9 / -0.8 | 16 / 20, 33 / 67, 29 / 47, 16 / 19 ms |
+| $F$, RootSIFT / SIFT / ORB | 300 calibrated pairs | 29.9 / 25.9 / 17.0 (PoseLib) | 38.1 / 33.3 / 21.0 | +8.2 / +7.4 / +4.0 | 64 / 92, 70 / 102, 81 / 141 ms |
+| $E$, LoMa / RoMa / LoFTR / DISK+LG | 300 calibrated pairs | 78.3 / 74.0 / 69.2 / 63.8 (PoseLib) | 78.2 / 74.9 / 68.4 / 64.2 | -0.1 / +0.9 / -0.8 / +0.4 | 27 / 34, 58 / 110, 43 / 65, 27 / 34 ms |
+| $E$, RootSIFT / SIFT / ORB | 300 calibrated pairs | 54.7 / 50.9 / 39.4 (PoseLib) | 53.4 / 52.8 / 41.3 | -1.3 / +1.9 / +1.9 | 55 / 74, 56 / 76, 67 / 92 ms |
+| $H$, LoMa / RoMa / LoFTR / DISK+LG | 16 Homogr + EVD pairs | 59.5 / 56.5 / 46.2 / 43.9 (PoseLib) | 58.8 / 56.7 / 46.1 / 43.7 | -0.7 / +0.2 / -0.0 / -0.2 | 8 / 10, 17 / 33, 16 / 21, 7 / 8 ms |
+| $H$, RootSIFT / SIFT / ORB | 16 Homogr + EVD pairs | 39.8 / 39.9 / 33.8 (PoseLib) | 47.6 / 47.3 / 33.4 | +7.9 / +7.4 / -0.4 | 16 / 7, 18 / 8, 17 / 9 ms |
+| $F$, labelled tentative matches | 30 kusvod2 + AdelaideRMF scenes × 5 | 77.7 @2px (PoseLib) | 79.0 | +1.2 | 22 / 24 ms |
+| $H$, labelled tentative matches | 35 Homogr + EVD + AdelaideRMF scenes × 5 | 62.5 @5px (PoseLib) | 64.6 | +2.1 | 6 / 6 ms |
+| PnP, 6 matchers | 600 real 7Scenes RGB-D problems | 37.1 (PoseLib), 30.7 (OpenCV) | 37.2 | +0.0 / +6.5 | 19 / 18 / 189 ms |
+| Rigid, 6 matchers | 599 real 7Scenes RGB-D problems | 41.3 (Procrustes RANSAC) | 39.1 | -2.2 | 12 / 247 ms |
 
-In short: on real correspondences from modern learned matchers (LoMa, RoMa, LoFTR, DISK+LightGlue), SupeRANSAC and PoseLib are statistically indistinguishable on $F$, $E$ and $H$ (every difference is within ±0.8 AUC points, i.e. inside the noise of 300 pairs); PoseLib is 2–3× faster. SupeRANSAC's advantage is on inputs with low inlier ratios and weak confidence ordering — classical sparse matchers (RootSIFT, SIFT, ORB) on $F$ and $H$ (+4 to +8 points), the labelled tentative-match benchmarks, and the synthetic high-outlier 6D sweeps — where its MAGSAC++ scoring and local optimisation pay off at equal or lower runtime. On PnP it ties PoseLib and clearly beats OpenCV; on rigid registration a plain Procrustes RANSAC is 2 points more accurate but 10× slower.
+In short: on real correspondences from modern learned matchers (LoMa, RoMa, LoFTR, DISK+LightGlue), SupeRANSAC and PoseLib are statistically indistinguishable on $F$, $E$ and $H$ (every difference is within ±0.9 AUC points, i.e. inside the noise of 300 pairs), and SupeRANSAC is the faster of the two on $F$ and $E$ for all seven matchers (e.g. 16 vs 20 ms on $F$ and 27 vs 34 ms on $E$ with LoMa, 33 vs 67 ms and 58 vs 110 ms with RoMa) and on $H$ with the learned matchers. SupeRANSAC's accuracy advantage is on inputs with low inlier ratios and weak confidence ordering — classical sparse matchers on $F$ (+4 to +8 points) and on $H$ with RootSIFT / SIFT (+7 to +8), the labelled tentative-match benchmarks (+1.2 / +2.1), and the synthetic high-outlier rigid sweep — where its MAGSAC++ scoring and local optimisation pay off; there it is also faster than PoseLib on $F$ and $E$, but about 2× slower on $H$ (16–18 vs 7–9 ms). On PnP it ties PoseLib at about the same runtime and clearly beats OpenCV; on rigid registration a plain Procrustes RANSAC is 2 points more accurate but 20× slower.
 
-All defaults are data-independent and were chosen on a separate development split (`tests/datasets/pairs/calibrated_pairs_dev.json`, disjoint from the 300 test pairs; ablations in `tests/ablations/`, harness `tests/dev_ablate.py`). The test split was evaluated once with the final defaults.
+All defaults are data-independent and were chosen on a separate development split (`tests/datasets/pairs/calibrated_pairs_dev.json`, 600 pairs disjoint from the 300 test pairs; ablations in `tests/ablations/`, harness `tests/dev_ablate.py` with paired bootstrap confidence intervals). The final defaults of every problem were evaluated once on the test split. One choice was prompted by a test result: an intermediate run showed $F$ slightly worse with the dense matchers, after which the $F$ final-bundle weighting was re-selected on the development split.
 
 ---
 
@@ -78,53 +78,53 @@ All defaults are data-independent and were chosen on a separate development spli
 
 | Matcher | Dataset | Pairs | PoseLib | SupeRANSAC | Δ | ms PoseLib / SupeRANSAC |
 |---|---|---:|---:|---:|---:|---:|
-| LoMa | PhotoTourism | 100 | 70.0 | **70.3** | +0.3 | 15 / 44 |
-| LoMa | ETH3D | 100 | 90.5 | **90.6** | +0.1 | 20 / 52 |
-| LoMa | 7Scenes | 100 | 55.0 | **55.7** | +0.7 | 19 / 50 |
-| LoMa | **Overall** | 300 | 71.5 | **71.9** | +0.4 | 18 / 49 |
-| RoMa | PhotoTourism | 100 | 58.8 | **59.3** | +0.5 | 75 / 120 |
-| RoMa | ETH3D | 100 | **81.2** | 81.1 | -0.1 | 66 / 95 |
-| RoMa | 7Scenes | 100 | **61.1** | 61.1 | -0.0 | 61 / 115 |
-| RoMa | **Overall** | 300 | 66.8 | **66.9** | +0.1 | 67 / 110 |
-| DISK+LG | PhotoTourism | 100 | **50.1** | 47.0 | -3.1 | 14 / 41 |
-| DISK+LG | ETH3D | 99 | 57.9 | **59.8** | +1.9 | 22 / 64 |
-| DISK+LG | 7Scenes | 100 | 42.9 | **43.5** | +0.6 | 18 / 46 |
-| DISK+LG | **Overall** | 299 | **49.9** | 49.8 | -0.2 | 18 / 50 |
+| LoMa | PhotoTourism | 100 | **70.0** | 69.7 | -0.3 | 16 / 15 |
+| LoMa | ETH3D | 100 | **90.5** | 90.1 | -0.4 | 22 / 16 |
+| LoMa | 7Scenes | 100 | 55.0 | **55.0** | +0.1 | 20 / 15 |
+| LoMa | **Overall** | 300 | **71.5** | 71.3 | -0.2 | 20 / 15 |
+| RoMa | PhotoTourism | 100 | **58.8** | 58.8 | -0.0 | 76 / 39 |
+| RoMa | ETH3D | 100 | **81.2** | 80.6 | -0.6 | 67 / 31 |
+| RoMa | 7Scenes | 100 | 61.1 | **61.2** | +0.1 | 63 / 33 |
+| RoMa | **Overall** | 300 | **66.8** | 66.6 | -0.2 | 69 / 34 |
+| DISK+LG | PhotoTourism | 100 | **50.1** | 47.0 | -3.1 | 16 / 15 |
+| DISK+LG | ETH3D | 99 | 57.9 | **58.1** | +0.3 | 22 / 17 |
+| DISK+LG | 7Scenes | 100 | 42.9 | **43.2** | +0.3 | 19 / 14 |
+| DISK+LG | **Overall** | 299 | **49.9** | 49.1 | -0.8 | 19 / 15 |
 
 ### Essential matrix (AUC@10°, 1.5 px, 1000–5000 iterations)
 
 | Matcher | Dataset | Pairs | PoseLib | SupeRANSAC | Δ | ms PoseLib / SupeRANSAC |
 |---|---|---:|---:|---:|---:|---:|
-| LoMa | PhotoTourism | 100 | **81.6** | 79.6 | -2.0 | 29 / 97 |
-| LoMa | ETH3D | 100 | **95.7** | 95.6 | -0.1 | 35 / 108 |
-| LoMa | 7Scenes | 100 | 58.4 | **58.6** | +0.2 | 34 / 110 |
-| LoMa | **Overall** | 300 | **78.3** | 77.7 | -0.6 | 33 / 105 |
-| RoMa | PhotoTourism | 100 | **71.1** | 71.0 | -0.1 | 123 / 222 |
-| RoMa | ETH3D | 100 | 91.0 | **91.3** | +0.3 | 99 / 182 |
-| RoMa | 7Scenes | 100 | 60.9 | **61.6** | +0.7 | 99 / 236 |
-| RoMa | **Overall** | 300 | 74.0 | **74.3** | +0.3 | 107 / 214 |
-| DISK+LG | PhotoTourism | 100 | **62.9** | 62.0 | -0.8 | 29 / 90 |
-| DISK+LG | ETH3D | 99 | **77.2** | 77.0 | -0.2 | 34 / 110 |
-| DISK+LG | 7Scenes | 100 | **52.4** | 51.0 | -1.4 | 32 / 100 |
-| DISK+LG | **Overall** | 299 | **63.8** | 63.0 | -0.8 | 32 / 100 |
+| LoMa | PhotoTourism | 100 | **81.6** | 81.3 | -0.3 | 30 / 25 |
+| LoMa | ETH3D | 100 | **95.7** | 95.6 | -0.1 | 38 / 28 |
+| LoMa | 7Scenes | 100 | 58.4 | **58.5** | +0.1 | 38 / 31 |
+| LoMa | **Overall** | 300 | **78.3** | 78.2 | -0.1 | 35 / 28 |
+| RoMa | PhotoTourism | 100 | 71.1 | **72.8** | +1.7 | 127 / 65 |
+| RoMa | ETH3D | 100 | **91.0** | 91.0 | -0.0 | 101 / 49 |
+| RoMa | 7Scenes | 100 | 60.9 | **61.7** | +0.9 | 98 / 60 |
+| RoMa | **Overall** | 300 | 74.0 | **74.9** | +0.9 | 109 / 58 |
+| DISK+LG | PhotoTourism | 100 | 62.9 | **64.4** | +1.6 | 28 / 23 |
+| DISK+LG | ETH3D | 99 | **77.2** | 76.7 | -0.5 | 34 / 28 |
+| DISK+LG | 7Scenes | 100 | **52.4** | 52.3 | -0.0 | 31 / 25 |
+| DISK+LG | **Overall** | 299 | 63.8 | **64.2** | +0.4 | 31 / 25 |
 
 ### Homography (AUC@5px, 4.0 px, 1000–5000 iterations)
 
 | Matcher | Dataset | Pairs | PoseLib | SupeRANSAC | Δ | ms PoseLib / SupeRANSAC |
 |---|---|---:|---:|---:|---:|---:|
-| LoMa | EVD | 11 | 56.4 | **56.5** | +0.2 | 9 / 20 |
-| LoMa | Homogr | 5 | **71.0** | 69.7 | -1.4 | 13 / 29 |
-| LoMa | **Overall** | 16 | **59.5** | 58.8 | -0.7 | 10 / 23 |
-| RoMa | EVD | 11 | **56.8** | 56.7 | -0.1 | 31 / 34 |
-| RoMa | Homogr | 5 | 59.8 | **60.5** | +0.7 | 30 / 28 |
-| RoMa | **Overall** | 16 | 56.5 | **56.8** | +0.3 | 31 / 32 |
-| DISK+LG | EVD | 11 | **42.8** | 42.6 | -0.2 | 7 / 13 |
-| DISK+LG | Homogr | 5 | **54.8** | 54.6 | -0.2 | 7 / 14 |
-| DISK+LG | **Overall** | 16 | **43.9** | 43.6 | -0.2 | 7 / 13 |
+| LoMa | EVD | 11 | 56.4 | **56.5** | +0.2 | 6 / 6 |
+| LoMa | Homogr | 5 | **71.0** | 69.7 | -1.4 | 11 / 7 |
+| LoMa | **Overall** | 16 | **59.5** | 58.8 | -0.7 | 8 / 6 |
+| RoMa | EVD | 11 | **56.8** | 56.6 | -0.2 | 32 / 15 |
+| RoMa | Homogr | 5 | 59.8 | **60.5** | +0.7 | 32 / 16 |
+| RoMa | **Overall** | 16 | 56.5 | **56.7** | +0.2 | 32 / 15 |
+| DISK+LG | EVD | 11 | **42.8** | 42.6 | -0.2 | 8 / 7 |
+| DISK+LG | Homogr | 5 | **54.8** | 54.7 | -0.1 | 7 / 6 |
+| DISK+LG | **Overall** | 16 | **43.9** | 43.7 | -0.2 | 7 / 7 |
 
 ### Speed–accuracy trade-off
 
-Both methods with `min_iterations = max_iterations = b`, $b \in \{25, 50, 100, 250, 500, 1000, 2500, 5000\}$; no per-budget tuning of either method. SupeRANSAC has a fixed per-call overhead (neighbourhood graph, local optimisation of the top-3 candidates, final robust bundle) of roughly 15–40 ms, so its curve starts where PoseLib's already saturates.
+Both methods with `min_iterations = max_iterations = b`, $b \in \{25, 50, 100, 250, 500, 1000, 2500, 5000\}$; no per-budget tuning of either method. SupeRANSAC has a per-call overhead (neighbourhood graph, local optimisation of the top-3 candidates, final robust bundle): at $b = 25$ it takes 8–22 ms on $F$, 14–39 ms on $E$ and 4–11 ms on $H$ (PoseLib: 4–14, 3–11 and 3–12 ms), but it is already within 0.8 AUC points of its 5000-iteration result there (2.3 for $F$ with DISK+LG), and from roughly 250–1000 iterations on it is faster than PoseLib at the same budget.
 
 <table align="center">
   <tr>
@@ -172,14 +172,26 @@ Same 300 calibrated pairs (and the 16 planar pairs) with **LoMa**, **RoMa**, **L
 
 | Matcher | $F$ AUC@10° PoseLib / SupeRANSAC | $E$ AUC@10° PoseLib / SupeRANSAC | $H$ AUC@5px PoseLib / SupeRANSAC |
 |---|---:|---:|---:|
-| LoMa | 71.5 / **71.9** (+0.4) | **78.3** / 77.7 (-0.6) | **59.5** / 58.8 (-0.7) |
-| RoMa | 66.8 / **66.9** (+0.1) | 74.0 / **74.3** (+0.3) | 56.5 / **56.8** (+0.3) |
-| LoFTR | **59.5** / 59.3 (-0.2) | **69.2** / 68.9 (-0.3) | **46.2** / 46.2 (-0.0) |
-| DISK+LG | **49.9** / 49.8 (-0.2) | **63.8** / 63.0 (-0.8) | **43.9** / 43.6 (-0.2) |
-| RootSIFT | 29.9 / **38.2** (+8.4) | **54.7** / 53.9 (-0.8) | 39.8 / **47.6** (+7.9) |
-| SIFT | 25.9 / **32.9** (+7.0) | 50.9 / **51.0** (+0.1) | 39.9 / **47.3** (+7.4) |
-| ORB | 17.0 / **21.0** (+4.0) | 39.4 / **40.7** (+1.2) | 33.8 / **36.7** (+2.9) |
-| Average | 45.8 / **48.6** (+2.8) | **61.5** / 61.4 (-0.1) | 45.6 / **48.1** (+2.5) |
+| LoMa | **71.5** / 71.3 (-0.2) | **78.3** / 78.2 (-0.1) | **59.5** / 58.8 (-0.7) |
+| RoMa | **66.8** / 66.6 (-0.2) | 74.0 / **74.9** (+0.9) | 56.5 / **56.7** (+0.2) |
+| LoFTR | **59.5** / 58.7 (-0.9) | **69.2** / 68.4 (-0.8) | **46.2** / 46.1 (-0.0) |
+| DISK+LG | **49.9** / 49.1 (-0.8) | 63.8 / **64.2** (+0.4) | **43.9** / 43.7 (-0.2) |
+| RootSIFT | 29.9 / **38.1** (+8.2) | **54.7** / 53.4 (-1.3) | 39.8 / **47.6** (+7.9) |
+| SIFT | 25.9 / **33.3** (+7.4) | 50.9 / **52.8** (+1.9) | 39.9 / **47.3** (+7.4) |
+| ORB | 17.0 / **21.0** (+4.0) | 39.4 / **41.3** (+1.9) | **33.8** / 33.4 (-0.4) |
+| Average | 45.8 / **48.3** (+2.5) | 61.5 / **61.9** (+0.4) | 45.6 / **47.6** (+2.0) |
+
+Mean runtime per problem (ms, single thread):
+
+| Matcher | $F$ ms PoseLib / SupeRANSAC | $E$ ms PoseLib / SupeRANSAC | $H$ ms PoseLib / SupeRANSAC |
+|---|---:|---:|---:|
+| LoMa | 20 / 16 | 34 / 27 | 10 / 8 |
+| RoMa | 67 / 33 | 110 / 58 | 33 / 17 |
+| LoFTR | 47 / 29 | 65 / 43 | 21 / 16 |
+| DISK+LG | 19 / 16 | 34 / 27 | 8 / 7 |
+| RootSIFT | 92 / 64 | 74 / 55 | 7 / 16 |
+| SIFT | 102 / 70 | 76 / 56 | 8 / 18 |
+| ORB | 141 / 81 | 92 / 67 | 9 / 17 |
 
 ```bash
 python tests/test_detectors.py --problem all
@@ -195,20 +207,20 @@ The original SIFT tentative matches shipped with **kusvod2**, **AdelaideRMF / Mu
 
 | Problem | Scenes × repeats | Method | AUC@1px / 2px / 5px ($F$) — AUC@2.5 / 5 / 10 px ($H$) | Med err (px) | Mean ms |
 |---|---:|---|---|---:|---:|
-| $F$ AdelaideRMF/Multi-H | 19 × 5 | PoseLib | 55.1 / 76.6 / 90.6 | 0.34 | 30 |
-| $F$ AdelaideRMF/Multi-H | 19 × 5 | SupeRANSAC | **57.8** / **78.9** / **91.6** | 0.33 | 59 |
+| $F$ AdelaideRMF/Multi-H | 19 × 5 | PoseLib | 55.1 / 76.6 / 90.6 | 0.34 | 31 |
+| $F$ AdelaideRMF/Multi-H | 19 × 5 | SupeRANSAC | **58.0** / **79.0** / **91.6** | 0.33 | 24 |
 | $F$ kusvod2 | 11 × 5 | PoseLib | 63.1 / **80.6** / **92.3** | 0.29 | 12 |
-| $F$ kusvod2 | 11 × 5 | SupeRANSAC | **65.7** / 78.3 / 85.9 | 0.29 | 32 |
-| $F$ **Overall** | 30 × 5 | PoseLib | 57.9 / 77.7 / **91.1** | 0.33 | 23 |
-| $F$ **Overall** | 30 × 5 | SupeRANSAC | **60.5** / **78.6** / 89.4 | 0.32 | 49 |
+| $F$ kusvod2 | 11 × 5 | SupeRANSAC | **65.7** / 79.4 / 87.4 | 0.29 | 18 |
+| $F$ **Overall** | 30 × 5 | PoseLib | 57.9 / 77.7 / **91.1** | 0.33 | 24 |
+| $F$ **Overall** | 30 × 5 | SupeRANSAC | **60.7** / **79.0** / 90.0 | 0.32 | 22 |
 | $H$ EVD | 11 × 5 | PoseLib | 38.5 / **61.4** / **80.7** | 1.73 | 2 |
-| $H$ EVD | 11 × 5 | SupeRANSAC | **38.8** / 58.7 / 79.3 | 1.52 | 9 |
+| $H$ EVD | 11 × 5 | SupeRANSAC | **38.8** / 58.4 / 79.2 | 1.52 | 4 |
 | $H$ Homogr | 5 × 5 | PoseLib | **38.5** / **67.6** / **83.8** | 1.55 | 2 |
-| $H$ Homogr | 5 × 5 | SupeRANSAC | 38.4 / 67.2 / 83.6 | 1.57 | 7 |
-| $H$ AdelaideRMF/Multi-H | 19 × 5 | PoseLib | 51.9 / 62.6 / 71.8 | 0.99 | 9 |
-| $H$ AdelaideRMF/Multi-H | 19 × 5 | SupeRANSAC | **57.2** / **67.0** / **74.0** | 0.50 | 15 |
+| $H$ Homogr | 5 × 5 | SupeRANSAC | 38.4 / 67.2 / 83.6 | 1.57 | 3 |
+| $H$ AdelaideRMF/Multi-H | 19 × 5 | PoseLib | 51.9 / 62.6 / 71.8 | 0.99 | 10 |
+| $H$ AdelaideRMF/Multi-H | 19 × 5 | SupeRANSAC | **58.2** / **68.0** / **75.0** | 0.50 | 9 |
 | $H$ **Overall** | 35 × 5 | PoseLib | 45.3 / 62.5 / 76.1 | 1.40 | 6 |
-| $H$ **Overall** | 35 × 5 | SupeRANSAC | **48.3** / **64.2** / **76.8** | 1.10 | 12 |
+| $H$ **Overall** | 35 × 5 | SupeRANSAC | **48.8** / **64.6** / **77.3** | 1.09 | 6 |
 
 ```bash
 python tests/test_classic_labelled.py
@@ -229,18 +241,18 @@ python tests/test_classic_labelled.py
 
 | Problem | Data | Method | AUC@(2°,4cm) | AUC@(5°,10cm) | AUC@(10°,20cm) | Med rot / trans | Mean ms |
 |---|---|---|---:|---:|---:|---:|---:|
-| PnP | 7Scenes RGB-D, 600 | SupeRANSAC | 7.6 | **37.2** | **62.4** | 2.34° / 4.7 cm | 69 |
+| PnP | 7Scenes RGB-D, 600 | SupeRANSAC | 7.8 | **37.2** | **61.9** | 2.41° / 4.7 cm | 19 |
 | PnP | 7Scenes RGB-D, 600 | PoseLib | **7.9** | 37.1 | 61.6 | 2.40° / 4.7 cm | 18 |
-| PnP | 7Scenes RGB-D, 600 | OpenCV RANSAC | 5.4 | 30.7 | 53.7 | 2.84° / 5.8 cm | 191 |
-| PnP | pose6dscene synthetic, 140 | SupeRANSAC | 8.4 | 28.6 | 50.4 | 1.40° / 8.8 cm | 52 |
-| PnP | pose6dscene synthetic, 140 | PoseLib | **9.3** | **30.1** | **51.3** | 1.35° / 8.2 cm | 21 |
-| PnP | pose6dscene synthetic, 140 | OpenCV RANSAC | 1.7 | 10.2 | 24.1 | 2.66° / 19.2 cm | 217 |
-| Rigid | 7Scenes RGB-D, 599 | SupeRANSAC | 7.2 | 39.1 | 65.2 | 2.23° / 4.4 cm | 23 |
-| Rigid | 7Scenes RGB-D, 599 | Procrustes RANSAC | **8.9** | **41.3** | **65.8** | 2.12° / 4.3 cm | 237 |
-| Rigid | rigid_pose_example synthetic, 51 | SupeRANSAC | **1.3** | **53.4** | **75.7** | 2.27° / 4.2 cm | 21 |
-| Rigid | rigid_pose_example synthetic, 51 | Procrustes RANSAC | 1.2 | 41.9 | 63.7 | 2.33° / 4.7 cm | 506 |
+| PnP | 7Scenes RGB-D, 600 | OpenCV RANSAC | 5.4 | 30.7 | 53.7 | 2.84° / 5.8 cm | 189 |
+| PnP | pose6dscene synthetic, 140 | SupeRANSAC | 8.5 | **30.5** | **51.5** | 1.31° / 8.3 cm | 33 |
+| PnP | pose6dscene synthetic, 140 | PoseLib | **9.3** | 30.1 | 51.3 | 1.35° / 8.2 cm | 21 |
+| PnP | pose6dscene synthetic, 140 | OpenCV RANSAC | 1.7 | 10.2 | 24.1 | 2.66° / 19.2 cm | 215 |
+| Rigid | 7Scenes RGB-D, 599 | SupeRANSAC | 7.1 | 39.1 | 65.1 | 2.23° / 4.4 cm | 12 |
+| Rigid | 7Scenes RGB-D, 599 | Procrustes RANSAC | **8.9** | **41.3** | **65.8** | 2.12° / 4.3 cm | 247 |
+| Rigid | rigid_pose_example synthetic, 51 | SupeRANSAC | **1.3** | **53.4** | **75.7** | 2.27° / 4.2 cm | 16 |
+| Rigid | rigid_pose_example synthetic, 51 | Procrustes RANSAC | 1.2 | 41.9 | 63.7 | 2.33° / 4.7 cm | 488 |
 
-Per-matcher breakdowns on 7Scenes are printed by the script; on PnP, SupeRANSAC and PoseLib are within ±1 point for every matcher, and on rigid registration the Procrustes baseline is 1–3 points ahead of SupeRANSAC for every matcher while being 10× slower.
+Per-matcher breakdowns on 7Scenes are printed by the script; on PnP, SupeRANSAC and PoseLib are within ±0.4 points for four of the six matchers (SIFT +2.1, ORB −1.5), and on rigid registration the Procrustes baseline is 1–3 points ahead of SupeRANSAC for every matcher while being 20× slower.
 
 ```bash
 python tests/test_6d_pose.py --problem all
@@ -387,12 +399,17 @@ config = RANSACSettings()
 config.min_iterations = 1000
 config.max_iterations = 5000
 config.inlier_threshold = 1.5
-config.confidence = 0.999999
+config.confidence = 0.9999
+config.adaptive_termination = True       # stop once `confidence` is reached, within [min_iterations, max_iterations]
 config.scoring = ScoringType.MAGSAC
 config.sampler = SamplerType.PROSAC
-config.local_optimization = LocalOptimizationType.GCRANSAC
-config.final_optimization = LocalOptimizationType.LSQ
+config.local_optimization = LocalOptimizationType.NestedRANSAC
+config.final_optimization = LocalOptimizationType.Nothing   # the final robust bundle below replaces it
 config.neighborhood = NeighborhoodType.Grid
+# Final robust bundle on the re-collected inliers (F, E, H, absolute pose)
+config.final_bundle_rounds = 3
+config.final_bundle_weighting = -1       # -1 = auto (F: 2, E and PnP: 1, H: 0); 0 = Cauchy loss,
+                                         # 1 = MAGSAC++ weights, 2 = weighted rounds + a final Cauchy round
 ```
 
 ### Enumerations and Their Values
@@ -401,8 +418,9 @@ config.neighborhood = NeighborhoodType.Grid
 - `ScoringType.RANSAC`
 - `ScoringType.MSAC`
 - `ScoringType.MAGSAC`
+- `ScoringType.MINPRAN`
 - `ScoringType.ACRANSAC`
-- `ScoringType.GRID`
+- `ScoringType.Grid`
 
 **Sampler Types**
 - `SamplerType.Uniform`
@@ -411,14 +429,16 @@ config.neighborhood = NeighborhoodType.Grid
 - `SamplerType.ProgressiveNAPSAC`
 - `SamplerType.ImportanceSampler`
 - `SamplerType.ARSampler`
+- `SamplerType.Exhaustive`
 
 **Local Optimization Types**
 - `LocalOptimizationType.Nothing`
 - `LocalOptimizationType.LSQ`
-- `LocalOptimizationType.IRLS`
+- `LocalOptimizationType.IteratedLSQ`
 - `LocalOptimizationType.NestedRANSAC`
 - `LocalOptimizationType.GCRANSAC`
-- `LocalOptimizationType.IteratedLM`
+- `LocalOptimizationType.IteratedLMEDS`
+- `LocalOptimizationType.CrossValidation`
 
 **Neighborhood Types**
 - `NeighborhoodType.Grid`

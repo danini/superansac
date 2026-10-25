@@ -40,7 +40,7 @@ from datasets.benchmark_pairs import (
     load_classic_h_problems,
     load_planar_pairs,
 )
-from datasets.pose6d_problems import PNP_DETECTORS, load_7scenes_pnp_problems
+from datasets.pose6d_problems import PNP_DETECTORS, load_7scenes_pnp_problems, load_7scenes_rigid_problems
 from evaluation import pose_auc
 import test_relative_pose as trp
 import test_homography as th
@@ -176,9 +176,55 @@ def _pnp(args):
     return prob["detector"], out
 
 
+def _rigid(args):
+    prob, overrides = args
+    corrs, thr, cm = prob["corrs"], prob["threshold_3d"], prob["cm_scale"]
+    mn = corrs.min(axis=0)
+    shifted = np.ascontiguousarray(corrs - mn)
+    bbox = np.ascontiguousarray(shifted.max(axis=0) + 1e-3)
+    out = {}
+    for name, ov in overrides.items():
+        cfg = make_cfg(ov)
+        cfg.inlier_threshold = thr
+        t0 = time.perf_counter()
+        T, inl, _, _ = pysuperansac.estimateRigidTransform(shifted, bbox, prob["probs"] if len(prob["probs"]) else [], config=cfg)
+        dt = (time.perf_counter() - t0) * 1e3
+        if T is None or len(inl) < 3 or not np.all(np.isfinite(T)):
+            out[name] = (180.0, dt)
+        else:
+            T1 = np.eye(4); T1[3, :3] = -mn[:3]
+            T2 = np.eye(4); T2[3, :3] = mn[3:]
+            M = (T1 @ T @ T2).T
+            out[name] = (t6.pose_error(prob["R_gt"], prob["t_gt"], M[:3, :3], M[:3, 3], cm)[0], dt)
+    t0 = time.perf_counter()
+    R, t, _ = t6.procrustes_ransac(corrs, thr, 5000, 1000)
+    dt = (time.perf_counter() - t0) * 1e3
+    out["PoseLib"] = ((180.0, dt) if R is None else (t6.pose_error(prob["R_gt"], prob["t_gt"], R, t, cm)[0], dt))  # column = Procrustes RANSAC baseline
+    return prob["detector"], out
+
+
 # ---------------------------------------------------------------- driver
-def report(title, results, names, aucs, idx):
-    """results: list of (group, {name: (err, ms)})."""
+def _bootstrap_delta(err_a, err_b, aucs, idx, n_boot=1000, seed=0):
+    """Paired bootstrap of AUC(err_a) - AUC(err_b): returns (delta, lo95, hi95)."""
+    err_a, err_b = np.asarray(err_a), np.asarray(err_b)
+    n = len(err_a)
+    rng = np.random.default_rng(seed)
+    d0 = 100 * (pose_auc(err_a, aucs)[idx] - pose_auc(err_b, aucs)[idx])
+    ds = np.empty(n_boot)
+    for i in range(n_boot):
+        s = rng.integers(0, n, n)
+        ds[i] = 100 * (pose_auc(err_a[s], aucs)[idx] - pose_auc(err_b[s], aucs)[idx])
+    return d0, np.percentile(ds, 2.5), np.percentile(ds, 97.5)
+
+
+def report(title, results, names, aucs, idx, fail_thr=None):
+    """results: list of (group, {name: (err, ms)}).
+
+    Per group: AUC (delta vs PoseLib) and mean runtime. Then, over ALL pairs, paired statistics for each
+    config: bootstrap 95% CI of the AUC delta vs PoseLib and vs the first config, and win/loss counts
+    (W = this config succeeds (< fail_thr) where the other fails (>= fail_thr), L = the reverse).
+    """
+    fail_thr = fail_thr if fail_thr is not None else aucs[-1]
     groups = sorted({g for g, _ in results})
     cols = names + ["PoseLib"]
     print(f"\n{title}  (metric: AUC@{aucs[idx]}; n={len(results)})")
@@ -192,17 +238,33 @@ def report(title, results, names, aucs, idx):
         line = f"{g:22s}" + "".join(f"{aucv[c]:8.2f} ({aucv[c]-pl:+5.2f})" if c != "PoseLib" else f"{aucv[c]:20.2f}" for c in cols)
         line += "   " + "".join(f"{ms[c]:12.1f}" for c in cols)
         print(line)
+    errs = {c: np.array([r[c][0] for _, r in results]) for c in cols}
+    base = names[0]
+    print(f"  paired (fail >= {fail_thr}):")
+    for c in names:
+        d, lo, hi = _bootstrap_delta(errs[c], errs["PoseLib"], aucs, idx)
+        w = int(np.sum((errs[c] < fail_thr) & (errs["PoseLib"] >= fail_thr)))
+        l = int(np.sum((errs[c] >= fail_thr) & (errs["PoseLib"] < fail_thr)))
+        line = f"    {c[:20]:20s} vs PoseLib {d:+5.2f} [{lo:+5.2f},{hi:+5.2f}] W/L {w:3d}/{l:3d}"
+        if c != base:
+            d, lo, hi = _bootstrap_delta(errs[c], errs[base], aucs, idx)
+            w = int(np.sum((errs[c] < fail_thr) & (errs[base] >= fail_thr)))
+            l = int(np.sum((errs[c] >= fail_thr) & (errs[base] < fail_thr)))
+            line += f"   | vs {base[:12]} {d:+5.2f} [{lo:+5.2f},{hi:+5.2f}] W/L {w:3d}/{l:3d}"
+        print(line)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--problems", nargs="+", default=["F", "E", "H", "PnP"], choices=["F", "E", "H", "PnP"])
+    ap.add_argument("--problems", nargs="+", default=["F", "E", "H", "PnP"], choices=["F", "E", "H", "PnP", "Rigid"])
     ap.add_argument("--features", nargs="+", default=["LoMa", "splg", "sift"])
     ap.add_argument("--config", nargs=2, action="append", metavar=("NAME", "JSON"), default=[])
     ap.add_argument("--configs", type=str, default=None, help="JSON file {name: overrides}")
     ap.add_argument("--split", default="dev", choices=["dev", "test"])
     ap.add_argument("--workers", type=int, default=24)
+    ap.add_argument("--save", type=str, default=None, help="Pickle all per-pair results to this path")
     args = ap.parse_args()
+    saved = {}
 
     overrides = {}
     if args.configs:
@@ -227,6 +289,7 @@ def main():
                 tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], overrides) for p in pairs if len(cache[p["cache_key"]][det][0]) >= 8]
                 with ProcessPoolExecutor(max_workers=args.workers) as ex:
                     res = list(ex.map(fn, tasks))
+                saved[(prob, det)] = [(t[0]["scene"], g, r) for t, (g, r) in zip(tasks, res)]
                 report(f"[{prob}] {det}", res, names, aucs, 1)
 
     if "H" in args.problems:
@@ -240,6 +303,7 @@ def main():
                 tasks.append((p, p["corrs"][perm], p["scores"][perm], overrides, True))
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             res = list(ex.map(_h, tasks))
+        saved[("H", "classic")] = [(t[0]["scene"], g, r) for t, (g, r) in zip(tasks, res)]
         report("[H] classic tentative matches (uniform)", res, names, [2.5, 5.0, 10.0], 1)
         planar = load_planar_pairs(DEFAULT_DATA_DIR, verbose=False)
         cache = ensure_cached_matches(planar, feats, data_dir=DEFAULT_DATA_DIR, max_workers=16)
@@ -247,13 +311,28 @@ def main():
             tasks = [(p, cache[p["cache_key"]][det][0], cache[p["cache_key"]][det][1], overrides, False) for p in planar]
             with ProcessPoolExecutor(max_workers=args.workers) as ex:
                 res = list(ex.map(_h, tasks))
+            saved[("H", det)] = [(t[0]["scene"], g, r) for t, (g, r) in zip(tasks, res)]
             report(f"[H] detector matches {det} (PROSAC)", res, names, [2.5, 5.0, 10.0], 1)
 
     if "PnP" in args.problems:
         probs = load_7scenes_pnp_problems(DEFAULT_DATA_DIR, detectors=tuple(feats), split=args.split)
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             res = list(ex.map(_pnp, [(p, overrides) for p in probs]))
+        saved[("PnP", "all")] = [(p["scene"], g, r) for p, (g, r) in zip(probs, res)]
         report("[PnP] 7Scenes dev", res, names, [2.0, 5.0, 10.0], 1)
+
+    if "Rigid" in args.problems:
+        probs = load_7scenes_rigid_problems(DEFAULT_DATA_DIR, detectors=tuple(feats), split=args.split)
+        with ProcessPoolExecutor(max_workers=args.workers) as ex:
+            res = list(ex.map(_rigid, [(p, overrides) for p in probs]))
+        saved[("Rigid", "all")] = [(p["scene"], g, r) for p, (g, r) in zip(probs, res)]
+        report("[Rigid] 7Scenes dev (baseline column = Procrustes RANSAC)", res, names, [2.0, 5.0, 10.0], 1)
+
+    if args.save:
+        import pickle
+        with open(args.save, "wb") as f:
+            pickle.dump({"configs": overrides, "results": saved}, f)
+        print(f"saved per-pair results to {args.save}")
 
 
 if __name__ == "__main__":

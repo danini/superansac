@@ -188,8 +188,10 @@ void initializeLocalOptimizer(
 // Final robust bundle polish shared by F / E / H / absolute pose.
 //
 // After RANSAC and the (score-gated) local optimizers, re-collect the inliers of the best model
-// with the inlier threshold and run a robust Cauchy LM refinement (PoseLib's bundle routines) on
-// them, for settings.finalBundleRounds rounds. The refined model is accepted unless its consensus
+// with the inlier threshold and run a robust LM refinement (PoseLib's bundle routines) on them,
+// for settings.finalBundleRounds rounds: Cauchy loss, MAGSAC++ sigma-consensus weighted least
+// squares, or weighted rounds followed by a Cauchy round (settings.finalBundleWeighting; auto is
+// resolved per problem in the estimate* functions). The refined model is accepted unless its consensus
 // set collapses (fewer than 80% of the previous inliers), in which case the previous model is kept.
 // Everything here is result-dependent and identical for all inputs.
 // ---------------------------------------------------------------------------------------------
@@ -215,13 +217,24 @@ namespace
     inline poselib::BundleOptions finalBundleOptions(const superansac::RANSACSettings &kSettings_)
     {
         poselib::BundleOptions opt;
+        // Unweighted rounds use the Cauchy loss; rounds that receive sigma-consensus weights switch to
+        // weighted least squares inside the refine lambdas (see withWeights()).
         opt.loss_type = poselib::BundleOptions::LossType::CAUCHY;
         opt.loss_scale = kSettings_.finalBundleLossScale * kSettings_.inlierThreshold;
         opt.max_iterations = kSettings_.finalBundleMaxIterations;
         return opt;
     }
 
-    // Generic driver: refineFn_(inlierIndices, modelInOut) -> bool.
+    // Options for one refinement round: weighted rounds solve a weighted least-squares problem.
+    inline poselib::BundleOptions withWeights(const poselib::BundleOptions &kOpt_, const std::vector<double> &kWeights_)
+    {
+        poselib::BundleOptions opt = kOpt_;
+        if (!kWeights_.empty())
+            opt.loss_type = poselib::BundleOptions::LossType::TRIVIAL;
+        return opt;
+    }
+
+    // Generic driver: refineFn_(inlierIndices, modelInOut, weights) -> bool (empty weights = unweighted round).
     // Round r collects the fit set with a threshold multiplier that shrinks geometrically from
     // settings.finalBundleScheduleStart to 1.0 (LO-RANSAC style iterative re-collection), so that
     // true inliers excluded by a locally tight fit can be re-admitted before the final robust fit.
@@ -241,6 +254,7 @@ namespace
         const double kSqTh = kSettings_.inlierThreshold * kSettings_.inlierThreshold;
         const double kStart = std::max(1.0, kSettings_.finalBundleScheduleStart);
         std::vector<size_t> current, fitSet, next;
+        std::vector<double> weights;
         collectInliers(kData_, kEstimator_, model_, kSqTh, current);
         if (current.size() < kMinInliers_)
             return;
@@ -252,8 +266,20 @@ namespace
             collectInliers(kData_, kEstimator_, model_, kSqTh * kMult * kMult, fitSet);
             if (fitSet.size() < kMinInliers_)
                 break;
+            weights.clear();
+            // 1: sigma-consensus weights in every round; 2: in every round but the last (which is an unweighted Cauchy fit)
+            const bool kWeighted = kSettings_.finalBundleWeighting == 1 ||
+                (kSettings_.finalBundleWeighting == 2 && round + 1 < kRounds);
+            if (kWeighted)
+            {
+                // sigma-consensus (MAGSAC++) weights of the fit set at this round's scale
+                superansac::scoring::MAGSACScoring magsac;
+                magsac.setThreshold(kSettings_.inlierThreshold * kMult);
+                magsac.initialize(kEstimator_);
+                magsac.getWeights(kData_, model_, kEstimator_, weights, &fitSet);
+            }
             superansac::models::Model candidate = model_;
-            if (!refineFn_(fitSet, candidate) || !candidate.getData().allFinite())
+            if (!refineFn_(fitSet, candidate, weights) || !candidate.getData().allFinite())
                 break;
             collectInliers(kData_, kEstimator_, candidate, kSqTh, next);
             if (next.size() * 5 < kInitialInliers * 4 || next.size() < kMinInliers_)
@@ -262,59 +288,6 @@ namespace
             current.swap(next);
         }
         inliers_ = current;
-    }
-
-    // MSAC-style tie-breaker: sum of (1 - r^2/th^2) over the inliers.
-    inline double truncatedScore(
-        const DataMatrix &kData_,
-        const superansac::estimator::Estimator *kEstimator_,
-        const superansac::models::Model &kModel_,
-        const double kSquaredThreshold_,
-        const std::vector<size_t> &kInliers_)
-    {
-        const size_t kCols = kData_.cols();
-        double s = 0.0;
-        for (const size_t idx : kInliers_)
-            s += 1.0 - kEstimator_->squaredResidual(kData_.data() + idx * kCols, kModel_) / kSquaredThreshold_;
-        return s;
-    }
-
-    // Final bundle over the best model and (optionally) every top-K locally optimized candidate;
-    // the model with the largest consensus set after refinement wins (ties: truncated score).
-    template <typename RefineFn>
-    void runFinalBundleWithCandidates(
-        const DataMatrix &kData_,
-        const superansac::estimator::Estimator *kEstimator_,
-        const superansac::RANSACSettings &kSettings_,
-        const size_t kMinInliers_,
-        const std::vector<superansac::models::Model> &kCandidates_,
-        superansac::models::Model &model_,
-        std::vector<size_t> &inliers_,
-        RefineFn refineFn_)
-    {
-        runFinalBundle(kData_, kEstimator_, kSettings_, kMinInliers_, model_, inliers_, refineFn_);
-        if (!kSettings_.finalBundleOverCandidates || kSettings_.finalBundleRounds == 0)
-            return;
-        const double kSqTh = kSettings_.inlierThreshold * kSettings_.inlierThreshold;
-        double bestScore = truncatedScore(kData_, kEstimator_, model_, kSqTh, inliers_);
-        for (const auto &cand : kCandidates_)
-        {
-            superansac::models::Model m = cand;
-            std::vector<size_t> inl;
-            collectInliers(kData_, kEstimator_, m, kSqTh, inl);
-            if (inl.size() < kMinInliers_)
-                continue;
-            runFinalBundle(kData_, kEstimator_, kSettings_, kMinInliers_, m, inl, refineFn_);
-            if (inl.size() < inliers_.size())
-                continue;
-            const double sc = truncatedScore(kData_, kEstimator_, m, kSqTh, inl);
-            if (inl.size() > inliers_.size() || sc > bestScore)
-            {
-                model_ = m;
-                inliers_.swap(inl);
-                bestScore = sc;
-            }
-        }
     }
 }
 
@@ -328,6 +301,8 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
     superansac::RANSACSettings settings_ = kSettingsIn_;
+    if (settings_.finalBundleWeighting < 0) // auto
+        settings_.finalBundleWeighting = 1;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 5) 
         throw std::invalid_argument("The input matrix must have 5 columns (x1, y1, x2, y2, z2).");
@@ -399,7 +374,11 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     {
         auto *prosacSampler = dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get());
         prosacSampler->setSampleSize(estimator->sampleSize());
-        if (settings_.maxIterations < 1000)
+        if (settings_.prosacConvergenceMultiplier > 0.0)
+            // PROSAC reaches uniform sampling after (multiplier x maxIterations) samples
+            prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200,
+                static_cast<size_t>(settings_.prosacConvergenceMultiplier * static_cast<double>(settings_.maxIterations))));
+        else if (settings_.maxIterations < 1000)
             prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200, settings_.maxIterations * 10));
     }
     else if (kSampler == superansac::samplers::SamplerType::ProgressiveNAPSAC)
@@ -587,8 +566,8 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     if (settings_.finalBundleRounds > 0)
     {
         const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
-        runFinalBundleWithCandidates(normalizedCorrespondences, estimator.get(), settings_, 4, robustEstimator.getCandidateModels(), bestModel, finalInliers,
-            [&](const std::vector<size_t> &inl, superansac::models::Model &model) -> bool
+        runFinalBundle(normalizedCorrespondences, estimator.get(), settings_, 4, bestModel, finalInliers,
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w) -> bool
             {
                 std::vector<Eigen::Vector2d> x(inl.size());
                 std::vector<Eigen::Vector3d> X(inl.size());
@@ -602,7 +581,7 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
                 const Eigen::Matrix3d R = model.getData().block<3, 3>(0, 0);
                 pose.q = poselib::rotmat_to_quat(R);
                 pose.t = model.getData().block<3, 1>(0, 3);
-                poselib::bundle_adjust(x, X, &pose, kOpt);
+                poselib::bundle_adjust(x, X, &pose, withWeights(kOpt, w), w);
                 model.getMutableData().block<3, 3>(0, 0) = pose.R();
                 model.getMutableData().block<3, 1>(0, 3) = pose.t;
                 return true;
@@ -713,7 +692,11 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
     {
         auto *prosacSampler = dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get());
         prosacSampler->setSampleSize(estimator->sampleSize());
-        if (settings_.maxIterations < 1000)
+        if (settings_.prosacConvergenceMultiplier > 0.0)
+            // PROSAC reaches uniform sampling after (multiplier x maxIterations) samples
+            prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200,
+                static_cast<size_t>(settings_.prosacConvergenceMultiplier * static_cast<double>(settings_.maxIterations))));
+        else if (settings_.maxIterations < 1000)
             prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200, settings_.maxIterations * 10));
     }
     else if (kSampler == superansac::samplers::SamplerType::ProgressiveNAPSAC)
@@ -961,6 +944,8 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
     superansac::RANSACSettings settings_ = kSettingsIn_;
+    if (settings_.finalBundleWeighting < 0) // auto: sigma-consensus weighted rounds + final unweighted Cauchy round
+        settings_.finalBundleWeighting = 2;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 4) 
         throw std::invalid_argument("The input matrix must have 4 columns (x1, y1, x2, y2).");
@@ -1040,7 +1025,11 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     {
         auto *prosacSampler = dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get());
         prosacSampler->setSampleSize(estimator->sampleSize());
-        if (settings_.maxIterations < 1000)
+        if (settings_.prosacConvergenceMultiplier > 0.0)
+            // PROSAC reaches uniform sampling after (multiplier x maxIterations) samples
+            prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200,
+                static_cast<size_t>(settings_.prosacConvergenceMultiplier * static_cast<double>(settings_.maxIterations))));
+        else if (settings_.maxIterations < 1000)
             prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200, settings_.maxIterations * 10));
     }
     else if (kSampler == superansac::samplers::SamplerType::ProgressiveNAPSAC)
@@ -1291,8 +1280,8 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     if (settings_.finalBundleRounds > 0)
     {
         const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
-        runFinalBundleWithCandidates(normalizedCorrespondences, estimator.get(), settings_, 8, robustEstimator.getCandidateModels(), bestModel, finalInliers,
-            [&](const std::vector<size_t> &inl, superansac::models::Model &model) -> bool
+        runFinalBundle(normalizedCorrespondences, estimator.get(), settings_, 8, bestModel, finalInliers,
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w) -> bool
             {
                 std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
                 for (size_t i = 0; i < inl.size(); ++i)
@@ -1302,7 +1291,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
                     x2[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 2), normalizedCorrespondences(idx, 3));
                 }
                 Eigen::Matrix3d F = model.getData().block<3, 3>(0, 0);
-                poselib::refine_fundamental(x1, x2, &F, kOpt);
+                poselib::refine_fundamental(x1, x2, &F, withWeights(kOpt, w), w);
                 F.normalize();
                 model.getMutableData() = F;
                 return true;
@@ -1776,6 +1765,8 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
     superansac::RANSACSettings settings_ = kSettingsIn_;
+    if (settings_.finalBundleWeighting < 0) // auto
+        settings_.finalBundleWeighting = 1;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 4) 
         throw std::invalid_argument("The input matrix must have 4 columns (x1, y1, x2, y2).");
@@ -1852,7 +1843,11 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     {
         auto *prosacSampler = dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get());
         prosacSampler->setSampleSize(estimator->sampleSize());
-        if (settings_.maxIterations < 1000)
+        if (settings_.prosacConvergenceMultiplier > 0.0)
+            // PROSAC reaches uniform sampling after (multiplier x maxIterations) samples
+            prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200,
+                static_cast<size_t>(settings_.prosacConvergenceMultiplier * static_cast<double>(settings_.maxIterations))));
+        else if (settings_.maxIterations < 1000)
             prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200, settings_.maxIterations * 10));
     }
     else if (kSampler == superansac::samplers::SamplerType::ProgressiveNAPSAC)
@@ -2064,8 +2059,8 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     if (settings_.finalBundleRounds > 0)
     {
         const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
-        runFinalBundleWithCandidates(normalizedCorrespondences, estimator.get(), settings_, 8, robustEstimator.getCandidateModels(), bestModel, finalInliers,
-            [&](const std::vector<size_t> &inl, superansac::models::Model &model) -> bool
+        runFinalBundle(normalizedCorrespondences, estimator.get(), settings_, 8, bestModel, finalInliers,
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w) -> bool
             {
                 const Eigen::Matrix3d E = model.getData().block<3, 3>(0, 0);
                 std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
@@ -2097,7 +2092,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
                 if (best < 0)
                     return false;
                 poselib::CameraPose pose = poses[best];
-                poselib::refine_relpose(x1, x2, &pose, kOpt);
+                poselib::refine_relpose(x1, x2, &pose, withWeights(kOpt, w), w);
                 Eigen::Matrix3d refined;
                 poselib::essential_from_motion(pose, &refined);
                 model.getMutableData() = refined;
@@ -2122,6 +2117,8 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
     superansac::RANSACSettings settings_ = kSettingsIn_;
+    if (settings_.finalBundleWeighting < 0) // auto
+        settings_.finalBundleWeighting = 0;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 4) 
         throw std::invalid_argument("The input matrix must have 4 columns (x1, y1, x2, y2).");
@@ -2168,7 +2165,11 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     {
         auto *prosacSampler = dynamic_cast<superansac::samplers::PROSACSampler *>(sampler.get());
         prosacSampler->setSampleSize(estimator->sampleSize());
-        if (settings_.maxIterations < 1000)
+        if (settings_.prosacConvergenceMultiplier > 0.0)
+            // PROSAC reaches uniform sampling after (multiplier x maxIterations) samples
+            prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200,
+                static_cast<size_t>(settings_.prosacConvergenceMultiplier * static_cast<double>(settings_.maxIterations))));
+        else if (settings_.maxIterations < 1000)
             prosacSampler->setRansacConvergenceIterations(std::max<size_t>(200, settings_.maxIterations * 10));
     }
     else if (kSampler == superansac::samplers::SamplerType::ProgressiveNAPSAC)
@@ -2391,8 +2392,8 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     {
         // Final robust bundle polish: PoseLib's homography LM (Cauchy on the transfer error) on the re-collected inliers.
         const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
-        runFinalBundleWithCandidates(kCorrespondences_, estimator.get(), settings_, estimator->nonMinimalSampleSize(), robustEstimator.getCandidateModels(), bestModel, finalInliers,
-            [&](const std::vector<size_t> &inl, superansac::models::Model &model) -> bool
+        runFinalBundle(kCorrespondences_, estimator.get(), settings_, estimator->nonMinimalSampleSize(), bestModel, finalInliers,
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w) -> bool
             {
                 std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
                 for (size_t i = 0; i < inl.size(); ++i)
@@ -2402,7 +2403,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
                     x2[i] = Eigen::Vector2d(kCorrespondences_(idx, 2), kCorrespondences_(idx, 3));
                 }
                 Eigen::Matrix3d H = model.getData().block<3, 3>(0, 0);
-                poselib::refine_homography(x1, x2, &H, kOpt);
+                poselib::refine_homography(x1, x2, &H, withWeights(kOpt, w), w);
                 if (std::abs(H(2, 2)) > 1e-12)
                     H /= H(2, 2);
                 model.getMutableData() = H;

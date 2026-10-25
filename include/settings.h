@@ -87,8 +87,9 @@ namespace superansac {
         double finalRefinementScheduleStart = 3.0, // Widest sigma multiplier in the final-refinement schedule
             finalRefinementScheduleEnd = 0.5; // Narrowest sigma multiplier in the final-refinement schedule
         double inlierThreshold = 1.5; // Inlier threshold
-        double confidence = 0.99; // Confidence
+        double confidence = 0.9999; // Confidence of the adaptive termination criterion
         bool localOptimizationInsideTheLoop = false, // Whether to locally optimize models when you find a new best or later
+            adaptiveTermination = true, // Confidence-based early termination (within [minIterations, maxIterations]) also when LO is not run inside the loop
             useSprt = true, // Whether to use SPRT test to speed up
             fundamentalOrientationCheck = true, // Reject minimal F models violating the oriented epipolar constraint
             fundamentalSymmetricValidation = true, // Validate new-best F models with the symmetric epipolar distance
@@ -100,16 +101,17 @@ namespace superansac {
         size_t homographyBundleMaxIterations = 5; // LM iterations: early stopping regularizes (full convergence over-fits the plane) and stays within the runtime budget
         bool fundamentalPlaneParallaxPostRefinement = false; // Post-RANSAC dominant-plane detection + Plane-and-Parallax re-estimation (F only). Off: no measurable effect on real data (see tests/test_relative_pose.py --ablate_pp)
         // Final robust bundle polish (F, E, H, absolute pose): after RANSAC + local optimization, re-collect the
-        // inliers of the best model and run a robust (Cauchy) LM refinement on them; repeat for the given number
-        // of rounds. Unlike the score-gated optimizers above, the result is accepted unless the consensus set
-        // collapses (divergence guard). 0 = off.
+        // inliers of the best model and run a robust LM refinement on them (Cauchy loss or MAGSAC++ sigma-consensus
+        // weights, see finalBundleWeighting); repeat for the given number of rounds. Unlike the score-gated
+        // optimizers above, the result is accepted unless the consensus set collapses (divergence guard). 0 = off.
         size_t finalBundleRounds = 3; // Dev-split ablation (tests/ablations/): 3 rounds, start 2.0, Cauchy 0.5*threshold
         double finalBundleLossScale = 0.5; // Cauchy scale as a multiple of the inlier threshold
-        bool finalBundleOverCandidates = false; // Run the final bundle on every top-K locally optimized candidate and keep the one with the largest consensus set
         double finalBundleScheduleStart = 2.0; // First-round collection threshold multiplier (shrinks geometrically to 1.0 over the rounds)
         size_t finalBundleMaxIterations = 100; // LM iterations per round
-        bool nonminimalConfidenceWeights = true;
-        bool lowInlierUniformFallback = true; // Re-run with uniform sampling when PROSAC ends with a small consensus set (result-dependent) // Feed caller-provided confidences as weights into the non-minimal (LM) solver
+        int finalBundleWeighting = -1; // -1 = auto (F: 2, E and absolute pose: 1, H: 0; chosen on the dev split), 0 = Cauchy loss in every round, 1 = MAGSAC++ (sigma-consensus) weighted least squares in every round, 2 = weighted rounds followed by a final unweighted Cauchy round
+        bool nonminimalConfidenceWeights = true; // Feed caller-provided confidences as weights into the non-minimal (LM) solver
+        double prosacConvergenceMultiplier = 1.0; // > 0: PROSAC becomes uniform after multiplier * maxIterations samples (0 = legacy schedule: 200000 samples)
+        bool lowInlierUniformFallback = false; // Re-run with uniform sampling when PROSAC ends with a small consensus set (result-dependent; off: no accuracy gain, up to 2x runtime)
         
         scoring::ScoringType scoring = 
             scoring::ScoringType::MAGSAC; // Scoring type
@@ -124,7 +126,7 @@ namespace superansac {
             local_optimization::LocalOptimizationType::NestedRANSAC; // Local optimization type
 
         local_optimization::LocalOptimizationType finalOptimization = 
-            local_optimization::LocalOptimizationType::IRLS; // Final optimization type
+            local_optimization::LocalOptimizationType::None; // Final optimization type (None: the final robust bundle above replaces IRLS at a fraction of the cost)
 
         termination::TerminationType terminationCriterion = 
             termination::TerminationType::RANSAC; // Termination criterion type

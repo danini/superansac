@@ -223,13 +223,15 @@ PYBIND11_MODULE(pysuperansac, m) {
         .def_readwrite("fundamental_plane_parallax_post_refinement", &superansac::RANSACSettings::fundamentalPlaneParallaxPostRefinement)
         .def_readwrite("final_bundle_rounds", &superansac::RANSACSettings::finalBundleRounds)
         .def_readwrite("local_optimization_inside_the_loop", &superansac::RANSACSettings::localOptimizationInsideTheLoop)
+        .def_readwrite("adaptive_termination", &superansac::RANSACSettings::adaptiveTermination)
         .def_readwrite("fundamental_symmetric_validation_enabled", &superansac::RANSACSettings::fundamentalSymmetricValidation)
         .def_readwrite("final_bundle_loss_scale", &superansac::RANSACSettings::finalBundleLossScale)
         .def_readwrite("final_bundle_schedule_start", &superansac::RANSACSettings::finalBundleScheduleStart)
-        .def_readwrite("final_bundle_over_candidates", &superansac::RANSACSettings::finalBundleOverCandidates)
         .def_readwrite("final_bundle_max_iterations", &superansac::RANSACSettings::finalBundleMaxIterations)
+        .def_readwrite("final_bundle_weighting", &superansac::RANSACSettings::finalBundleWeighting)
         .def_readwrite("nonminimal_confidence_weights", &superansac::RANSACSettings::nonminimalConfidenceWeights)
         .def_readwrite("low_inlier_uniform_fallback", &superansac::RANSACSettings::lowInlierUniformFallback)
+        .def_readwrite("prosac_convergence_multiplier", &superansac::RANSACSettings::prosacConvergenceMultiplier)
         .def_readwrite("homography_bundle_max_iterations", &superansac::RANSACSettings::homographyBundleMaxIterations);
 
     // Expose the function to Python
