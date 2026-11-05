@@ -46,6 +46,7 @@ protected:
     double nMinus1Per2 = 0.0;
     double twoNPlus1 = 0.0;
     double lossOutlier = 0.0;
+    double minPointGain_ = 0.0;
     double premultiplier = 0.0;
     double value0 = 0.0;
     double squaredTruncatedThreshold = 0.0;
@@ -56,14 +57,16 @@ protected:
     const double* gammaTable_ = nullptr;
 
     FORCE_INLINE std::pair<double,double> getGammaValues(double residual_) const {
-        size_t idx = static_cast<size_t>(residual_ * lookupTableSize);
-        if (idx >= lookupTableSize) idx = lookupTableSize - 1;
+        int idx = static_cast<int>(residual_ * static_cast<double>(lookupTableSize));
+        if (idx >= static_cast<int>(lookupTableSize)) idx = static_cast<int>(lookupTableSize) - 1;
+        if (idx < 0) idx = 0;
         const double* kEntry = gammaTable_ + 2 * idx;
         return { kEntry[0], kEntry[1] };
     }
     FORCE_INLINE double getUpperGammaValue(double residual_) const {
-        size_t idx = static_cast<size_t>(residual_ * lookupTableSize);
-        if (idx >= lookupTableSize) idx = lookupTableSize - 1;
+        int idx = static_cast<int>(residual_ * static_cast<double>(lookupTableSize));
+        if (idx >= static_cast<int>(lookupTableSize)) idx = static_cast<int>(lookupTableSize) - 1;
+        if (idx < 0) idx = 0;
         return gammaTable_[2 * idx + 1];
     }
 
@@ -234,15 +237,33 @@ public:
         dofIndex_ = degreesOfFreedom - 2;  // Cache DOF index for lookup table optimization
         gammaTable_ = interleavedGammaLookupTable(dofIndex_); // Interleaved (lower, upper) row
         k  = getK(degreesOfFreedom);
-        Cn = 1.0 / (std::pow(2.0, degreesOfFreedom / 2.0) * boost::math::tgamma(degreesOfFreedom / 2.0));
+        nPlus1Per2  = (degreesOfFreedom + 1) / 2.0;
+        nMinus1Per2 = (degreesOfFreedom - 1) / 2.0;
+        if (degreesOfFreedom >= 2 && degreesOfFreedom <= 6)
+        {
+            struct DofConsts { double cn[5]; double twoNPlus1[5]; };
+            static const DofConsts kDofConsts = []() {
+                DofConsts c{};
+                for (size_t d = 2; d <= 6; ++d)
+                {
+                    c.cn[d - 2] = 1.0 / (std::pow(2.0, d / 2.0) * boost::math::tgamma(d / 2.0));
+                    c.twoNPlus1[d - 2] = std::pow(2.0, (d + 1) / 2.0);
+                }
+                return c;
+            }();
+            Cn = kDofConsts.cn[dofIndex_];
+            twoNPlus1 = kDofConsts.twoNPlus1[dofIndex_];
+        }
+        else
+        {
+            Cn = 1.0 / (std::pow(2.0, degreesOfFreedom / 2.0) * boost::math::tgamma(degreesOfFreedom / 2.0));
+            twoNPlus1 = std::pow(2.0, nPlus1Per2);
+        }
         squaredSigmaMax         = threshold * threshold;
         squaredSigmaMaxPerTwo   = squaredSigmaMax / 2.0;
         squaredSigmaMaxPerFour  = squaredSigmaMaxPerTwo / 2.0;
         twoTimesSquaredSigmaMax = 2.0 * squaredSigmaMax;
         invTwoTimesSquaredSigmaMax = 1.0 / twoTimesSquaredSigmaMax;  // Precomputed inverse
-        nPlus1Per2  = (degreesOfFreedom + 1) / 2.0;
-        nMinus1Per2 = (degreesOfFreedom - 1) / 2.0;
-        twoNPlus1   = std::pow(2.0, nPlus1Per2);
         premultiplier       = 1.0 / threshold * Cn * twoNPlus1;
         value0              = getSubtractTerm(degreesOfFreedom);
         squaredTruncatedThreshold = k * k * squaredSigmaMax;
@@ -252,6 +273,10 @@ public:
         const auto zeroGammaValues = getGammaValues(0.0);
         zeroResidualLoss = squaredSigmaMaxPerTwo * zeroGammaValues.first
                          + squaredSigmaMaxPerFour * (zeroGammaValues.second - value0);
+        const double* lastGamma = gammaTable_ + 2 * (lookupTableSize - 1);
+        const double minInlierLoss = premultiplier * (squaredSigmaMaxPerTwo * lastGamma[0]
+                                   + squaredSigmaMaxPerFour * (lastGamma[1] - value0));
+        minPointGain_ = std::min(lossOutlier, minInlierLoss);
 
         // Reset SPRT state to ensure clean state between runs
         resetSPRT();
@@ -288,6 +313,10 @@ public:
         const double eps = clampProb(sprt_.epsilon, 0.05, 1.0 - 1e-6);
         const double del = clampProb(sprt_.delta,   kMinDelta,   std::min(kMaxDeltaFrac, 0.5 * eps));
         const double A   = std::max(1.0, sprt_.A);
+        const double kInlierLR = del / eps;
+        const double kOutlierLR = (1.0 - del) / (1.0 - eps);
+        const double kMaxGainPerPoint = premultiplier * zeroResidualLoss;
+        const double kBestScoreValue = kBestScore_.getValue();
 
         double lambdaLR = 1.0;
         int inlierCount = 0;
@@ -295,12 +324,12 @@ public:
 
         auto accumulate_point = [&](int iPos, size_t trueIdx, const double sqr) -> bool {
             if (sqr < squaredThreshold) {
-                lambdaLR *= (del / eps);
+                lambdaLR *= kInlierLR;
                 if (kStoreInliers_) inliers_.push_back(trueIdx);
                 ++inlierCount;
                 scoreVal += magsacLoss(sqr);
             } else {
-                lambdaLR *= ((1.0 - del) / (1.0 - eps));
+                lambdaLR *= kOutlierLR;
                 scoreVal += lossOutlier;
             }
 
@@ -316,31 +345,131 @@ public:
             }
 
             const int remaining = N - iPos - 1;
-            if (premultiplier * zeroResidualLoss * remaining + scoreVal < kBestScore_.getValue())
+            if (kMaxGainPerPoint * remaining + scoreVal < kBestScoreValue)
                 return false;
 
             return true;
         };
 
         if (kPotentialInlierSets_ == nullptr) {
-            // Sequential iteration in blocks: residuals for each block are computed
-            // with a single (batched) virtual call, then consumed by the unchanged
-            // sequential SPRT logic. Identical decisions and arithmetic; on early
-            // exit at most the rest of the current block was computed in vain.
-            // Blocks grow geometrically so that models rejected by the SPRT after a
-            // few points only overshoot by a small block.
             constexpr int kMaxBlockSize = 256;
             double sqrBuffer[kMaxBlockSize];
-            int blockSize = 16;
+            const bool kHasBest = (kBestScoreValue > -1e300);
+            const bool kCollectOnFly = kStoreInliers_ && !kHasBest;
+            size_t* __restrict__ outInliers = nullptr;
+            if (kStoreInliers_) {
+                if (kCollectOnFly) {
+                    inliers_.resize(static_cast<size_t>(N));
+                    outInliers = inliers_.data();
+                } else {
+                    inliers_.clear();
+                }
+            }
+
+            const double sqTh = squaredThreshold;
+            const double inv2SigSq = invTwoTimesSquaredSigmaMax;
+            const double s2 = squaredSigmaMaxPerTwo;
+            const double s4 = squaredSigmaMaxPerFour;
+            const double val0 = value0;
+            const double premul = premultiplier;
+            const double outLoss = lossOutlier;
+            const double* __restrict__ gTab = gammaTable_;
+            constexpr double kTableSizeD = static_cast<double>(lookupTableSize);
+            constexpr int kTableMaxIdx = static_cast<int>(lookupTableSize) - 1;
+
+            bool sprtDead = false;
+            int blockSize = 8;
             for (int base = 0; base < N; ) {
                 const int kCount = std::min(blockSize, N - base);
                 kEstimator_->squaredResiduals(kData_, kModel_, base, kCount, sqrBuffer);
-                for (int j = 0; j < kCount; ++j) {
-                    if (!accumulate_point(base + j, base + j, sqrBuffer[j]))
-                        return kEmptyScore;
+
+                if (!sprtDead && lambdaLR < 1e-20) {
+                    const double logOutlierLR = (kOutlierLR > 1.0) ? std::log(kOutlierLR) : 0.0;
+                    if (lambdaLR == 0.0 ||
+                        std::log(lambdaLR) + static_cast<double>(N - base) * logOutlierLR < std::log(A) - 1e-6) {
+                        sprtDead = true;
+                    }
+                }
+
+                const bool canPruneByBest = kHasBest &&
+                    ((scoreVal + kCount * minPointGain_) + kMaxGainPerPoint * (N - base - kCount) <= kBestScoreValue + 1e-9);
+
+                if (sprtDead && !canPruneByBest && !kCollectOnFly) {
+                    for (int j = 0; j < kCount; ++j) {
+                        const double sqr = sqrBuffer[j];
+                        if (sqr < sqTh) {
+                            ++inlierCount;
+                            int idx = static_cast<int>((sqr * inv2SigSq) * kTableSizeD);
+                            if (idx > kTableMaxIdx) idx = kTableMaxIdx;
+                            if (idx < 0) idx = 0;
+                            const double* g = gTab + 2 * idx;
+                            scoreVal += premul * (s2 * g[0] + s4 * (g[1] - val0));
+                        } else {
+                            scoreVal += outLoss;
+                        }
+                    }
+                } else {
+                    for (int j = 0; j < kCount; ++j) {
+                        const int iPos = base + j;
+                        const double sqr = sqrBuffer[j];
+                        if (sqr < sqTh) {
+                            if (!sprtDead) lambdaLR *= kInlierLR;
+                            if (kCollectOnFly) outInliers[inlierCount] = static_cast<size_t>(iPos);
+                            ++inlierCount;
+                            int idx = static_cast<int>((sqr * inv2SigSq) * kTableSizeD);
+                            if (idx > kTableMaxIdx) idx = kTableMaxIdx;
+                            if (idx < 0) idx = 0;
+                            const double* g = gTab + 2 * idx;
+                            scoreVal += premul * (s2 * g[0] + s4 * (g[1] - val0));
+                        } else {
+                            if (!sprtDead) lambdaLR *= kOutlierLR;
+                            scoreVal += outLoss;
+                        }
+
+                        if (!sprtDead && lambdaLR > A) {
+                            if (iPos + 1 > kSampleSize) {
+                                const int nonSampleInliers = std::max(0, inlierCount - kSampleSize);
+                                const double obsFrac = static_cast<double>(nonSampleInliers) / static_cast<double>(iPos + 1 - kSampleSize);
+                                const_cast<MAGSACSPRTScoring*>(this)->rejectedInlierFracSum_ += obsFrac;
+                                const_cast<MAGSACSPRTScoring*>(this)->rejectedCount_ += 1;
+                            }
+                            if (kCollectOnFly) inliers_.clear();
+                            return kEmptyScore;
+                        }
+
+                        if (canPruneByBest) {
+                            const int remaining = N - iPos - 1;
+                            if (kMaxGainPerPoint * remaining + scoreVal < kBestScoreValue) {
+                                if (kCollectOnFly) inliers_.clear();
+                                return kEmptyScore;
+                            }
+                        }
+                    }
                 }
                 base += kCount;
                 blockSize = std::min(blockSize << 1, kMaxBlockSize);
+            }
+
+            if (kStoreInliers_) {
+                if (kCollectOnFly) {
+                    inliers_.resize(static_cast<size_t>(inlierCount));
+                } else if (scoreVal > kBestScoreValue) {
+                    inliers_.resize(static_cast<size_t>(inlierCount));
+                    size_t* __restrict__ winOut = inliers_.data();
+                    int written = 0;
+                    int bSz = 8;
+                    for (int base = 0; base < N; ) {
+                        const int kCount = std::min(bSz, N - base);
+                        kEstimator_->squaredResiduals(kData_, kModel_, base, kCount, sqrBuffer);
+                        for (int j = 0; j < kCount; ++j) {
+                            if (sqrBuffer[j] < sqTh)
+                                winOut[written++] = static_cast<size_t>(base + j);
+                        }
+                        base += kCount;
+                        bSz = std::min(bSz << 1, kMaxBlockSize);
+                    }
+                    inliers_.resize(static_cast<size_t>(written));
+                }
             }
         } else {
             int tested = 0;
@@ -377,10 +506,9 @@ public:
         } else {
             const int N = static_cast<int>(kIndices_->size());
             weights_.resize(N);
-            for (int i = 0; i < N; ++i) {
-                const double sqr = kEstimator_->squaredResidual(kData_.row(static_cast<int>((*kIndices_)[i])).data(), kModel_);
-                weights_[i] = magsacWeight(sqr);
-            }
+            kEstimator_->squaredResidualsIndexed(kData_, kModel_, kIndices_->data(), N, weights_.data());
+            for (int i = 0; i < N; ++i)
+                weights_[i] = magsacWeight(weights_[i]);
         }
     }
 

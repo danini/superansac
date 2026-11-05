@@ -107,61 +107,114 @@ namespace superansac
 
 				auto solveWeightedProcrustes = [&](const double *weights, Eigen::Matrix3d &R_out, Eigen::Vector3d &t_out) -> bool
 				{
+					const size_t kCols = static_cast<size_t>(kData_.cols());
+					const double * __restrict__ kBase = kData_.data();
 					double centroid0x = 0.0, centroid0y = 0.0, centroid0z = 0.0;
 					double centroid1x = 0.0, centroid1y = 0.0, centroid1z = 0.0;
-					double weightSum = 0.0;
-
-					for (size_t i = 0; i < kSampleNumber_; ++i)
-					{
-						const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
-						const double w = (weights == nullptr) ? 1.0 : weights[i];
-						if (w <= 0.0)
-							continue;
-
-						centroid0x += w * kData_(idx, 0);
-						centroid0y += w * kData_(idx, 1);
-						centroid0z += w * kData_(idx, 2);
-						centroid1x += w * kData_(idx, 3);
-						centroid1y += w * kData_(idx, 4);
-						centroid1z += w * kData_(idx, 5);
-						weightSum += w;
-					}
-
-					if (weightSum <= 1e-12)
-						return false;
-
-					const double invWeightSum = 1.0 / weightSum;
-					centroid0x *= invWeightSum;
-					centroid0y *= invWeightSum;
-					centroid0z *= invWeightSum;
-					centroid1x *= invWeightSum;
-					centroid1y *= invWeightSum;
-					centroid1z *= invWeightSum;
-
+					double invWeightSum = 0.0;
 					Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
-					for (size_t i = 0; i < kSampleNumber_; ++i)
+
+					if (weights == nullptr)
 					{
-						const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
-						const double w = (weights == nullptr) ? 1.0 : weights[i];
-						if (w <= 0.0)
-							continue;
+						if (kSample_ != nullptr)
+						{
+							for (size_t i = 0; i < kSampleNumber_; ++i)
+							{
+								const double * __restrict__ row = kBase + kSample_[i] * kCols;
+								centroid0x += row[0]; centroid0y += row[1]; centroid0z += row[2];
+								centroid1x += row[3]; centroid1y += row[4]; centroid1z += row[5];
+							}
+						}
+						else
+						{
+							const double * __restrict__ row = kBase;
+							for (size_t i = 0; i < kSampleNumber_; ++i, row += kCols)
+							{
+								centroid0x += row[0]; centroid0y += row[1]; centroid0z += row[2];
+								centroid1x += row[3]; centroid1y += row[4]; centroid1z += row[5];
+							}
+						}
 
-						const double dx0 = kData_(idx, 0) - centroid0x;
-						const double dy0 = kData_(idx, 1) - centroid0y;
-						const double dz0 = kData_(idx, 2) - centroid0z;
-						const double dx1 = kData_(idx, 3) - centroid1x;
-						const double dy1 = kData_(idx, 4) - centroid1y;
-						const double dz1 = kData_(idx, 5) - centroid1z;
+						invWeightSum = 1.0 / static_cast<double>(kSampleNumber_);
+						centroid0x *= invWeightSum; centroid0y *= invWeightSum; centroid0z *= invWeightSum;
+						centroid1x *= invWeightSum; centroid1y *= invWeightSum; centroid1z *= invWeightSum;
 
-						covariance(0, 0) += w * dx0 * dx1;
-						covariance(0, 1) += w * dx0 * dy1;
-						covariance(0, 2) += w * dx0 * dz1;
-						covariance(1, 0) += w * dy0 * dx1;
-						covariance(1, 1) += w * dy0 * dy1;
-						covariance(1, 2) += w * dy0 * dz1;
-						covariance(2, 0) += w * dz0 * dx1;
-						covariance(2, 1) += w * dz0 * dy1;
-						covariance(2, 2) += w * dz0 * dz1;
+						double c00 = 0.0, c01 = 0.0, c02 = 0.0;
+						double c10 = 0.0, c11 = 0.0, c12 = 0.0;
+						double c20 = 0.0, c21 = 0.0, c22 = 0.0;
+						if (kSample_ != nullptr)
+						{
+							for (size_t i = 0; i < kSampleNumber_; ++i)
+							{
+								const double * __restrict__ row = kBase + kSample_[i] * kCols;
+								const double dx0 = row[0] - centroid0x, dy0 = row[1] - centroid0y, dz0 = row[2] - centroid0z;
+								const double dx1 = row[3] - centroid1x, dy1 = row[4] - centroid1y, dz1 = row[5] - centroid1z;
+								c00 += dx0 * dx1; c01 += dx0 * dy1; c02 += dx0 * dz1;
+								c10 += dy0 * dx1; c11 += dy0 * dy1; c12 += dy0 * dz1;
+								c20 += dz0 * dx1; c21 += dz0 * dy1; c22 += dz0 * dz1;
+							}
+						}
+						else
+						{
+							const double * __restrict__ row = kBase;
+							for (size_t i = 0; i < kSampleNumber_; ++i, row += kCols)
+							{
+								const double dx0 = row[0] - centroid0x, dy0 = row[1] - centroid0y, dz0 = row[2] - centroid0z;
+								const double dx1 = row[3] - centroid1x, dy1 = row[4] - centroid1y, dz1 = row[5] - centroid1z;
+								c00 += dx0 * dx1; c01 += dx0 * dy1; c02 += dx0 * dz1;
+								c10 += dy0 * dx1; c11 += dy0 * dy1; c12 += dy0 * dz1;
+								c20 += dz0 * dx1; c21 += dz0 * dy1; c22 += dz0 * dz1;
+							}
+						}
+						covariance << c00, c01, c02,
+						              c10, c11, c12,
+						              c20, c21, c22;
+					}
+					else
+					{
+						double weightSum = 0.0;
+						for (size_t i = 0; i < kSampleNumber_; ++i)
+						{
+							const double w = weights[i];
+							if (w <= 0.0)
+								continue;
+							const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
+							const double * __restrict__ row = kBase + idx * kCols;
+							centroid0x += w * row[0]; centroid0y += w * row[1]; centroid0z += w * row[2];
+							centroid1x += w * row[3]; centroid1y += w * row[4]; centroid1z += w * row[5];
+							weightSum += w;
+						}
+
+						if (weightSum <= 1e-12)
+							return false;
+
+						invWeightSum = 1.0 / weightSum;
+						centroid0x *= invWeightSum; centroid0y *= invWeightSum; centroid0z *= invWeightSum;
+						centroid1x *= invWeightSum; centroid1y *= invWeightSum; centroid1z *= invWeightSum;
+
+						double c00 = 0.0, c01 = 0.0, c02 = 0.0;
+						double c10 = 0.0, c11 = 0.0, c12 = 0.0;
+						double c20 = 0.0, c21 = 0.0, c22 = 0.0;
+						for (size_t i = 0; i < kSampleNumber_; ++i)
+						{
+							const double w = weights[i];
+							if (w <= 0.0)
+								continue;
+							const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
+							const double * __restrict__ row = kBase + idx * kCols;
+							const double wdx0 = w * (row[0] - centroid0x);
+							const double wdy0 = w * (row[1] - centroid0y);
+							const double wdz0 = w * (row[2] - centroid0z);
+							const double dx1 = row[3] - centroid1x;
+							const double dy1 = row[4] - centroid1y;
+							const double dz1 = row[5] - centroid1z;
+							c00 += wdx0 * dx1; c01 += wdx0 * dy1; c02 += wdx0 * dz1;
+							c10 += wdy0 * dx1; c11 += wdy0 * dy1; c12 += wdy0 * dz1;
+							c20 += wdz0 * dx1; c21 += wdz0 * dy1; c22 += wdz0 * dz1;
+						}
+						covariance << c00, c01, c02,
+						              c10, c11, c12,
+						              c20, c21, c22;
 					}
 
 					covariance *= invWeightSum;

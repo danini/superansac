@@ -205,39 +205,85 @@ namespace superansac
 				std::vector<models::Model> &models_, // The estimated model parameters
 				const double *kWeights_) const // The weight for each point
 			{
-				// Thread-local scratch (this solver runs in the local-optimization
-				// inner loops); fully overwritten below.
-				static thread_local DataMatrix normalizedPoints;
-				normalizedPoints.resize(kSampleNumber_, kData_.cols()); // The normalized point coordinates
-				Eigen::Matrix3d normalizingTransformSource, // The normalizing transformations in the source image
-					normalizingTransformDestination; // The normalizing transformations in the destination image
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double * __restrict__ kBase = kData_.data();
 
-				// Normalize the point coordinates to achieve numerical stability when
-				// applying the least-squares model fitting.
-				if (!normalizePoints(kData_, // The data points
-					kSample_, // The points to which the model will be fit
-					kSampleNumber_, // The number of points
-					normalizedPoints, // The normalized point coordinates
-					normalizingTransformSource, // The normalizing transformation in the first image
-					normalizingTransformDestination)) // The normalizing transformation in the second image
-					return false;
-				
-				constexpr size_t kEquationNumber = 1;
-				static thread_local Eigen::MatrixXd coefficients;
-				coefficients.resize(kSampleNumber_ * kEquationNumber, 9);
-
-				// Build coefficient matrix - unroll weighted/unweighted to avoid branch in loop
-				if (kWeights_ == nullptr)
+				double massSrc0 = 0.0, massSrc1 = 0.0, massDst0 = 0.0, massDst1 = 0.0;
+				if (kSample_ != nullptr)
 				{
-					// Unweighted case - no multiplications by weight
 					for (size_t i = 0; i < kSampleNumber_; ++i)
 					{
-						const double
-							&x0 = normalizedPoints(i, 0),
-							&y0 = normalizedPoints(i, 1),
-							&x1 = normalizedPoints(i, 2),
-							&y1 = normalizedPoints(i, 3);
+						const double * __restrict__ row = kBase + kSample_[i] * kCols;
+						massSrc0 += row[0]; massSrc1 += row[1];
+						massDst0 += row[2]; massDst1 += row[3];
+					}
+				}
+				else
+				{
+					const double * __restrict__ row = kBase;
+					for (size_t i = 0; i < kSampleNumber_; ++i, row += kCols)
+					{
+						massSrc0 += row[0]; massSrc1 += row[1];
+						massDst0 += row[2]; massDst1 += row[3];
+					}
+				}
 
+				const double nPts = static_cast<double>(kSampleNumber_);
+				massSrc0 /= nPts; massSrc1 /= nPts;
+				massDst0 /= nPts; massDst1 /= nPts;
+
+				double sum_squared_dist_src = 0.0, sum_squared_dist_dst = 0.0;
+				if (kSample_ != nullptr)
+				{
+					for (size_t i = 0; i < kSampleNumber_; ++i)
+					{
+						const double * __restrict__ row = kBase + kSample_[i] * kCols;
+						const double dx1 = massSrc0 - row[0], dy1 = massSrc1 - row[1];
+						const double dx2 = massDst0 - row[2], dy2 = massDst1 - row[3];
+						sum_squared_dist_src += dx1 * dx1 + dy1 * dy1;
+						sum_squared_dist_dst += dx2 * dx2 + dy2 * dy2;
+					}
+				}
+				else
+				{
+					const double * __restrict__ row = kBase;
+					for (size_t i = 0; i < kSampleNumber_; ++i, row += kCols)
+					{
+						const double dx1 = massSrc0 - row[0], dy1 = massSrc1 - row[1];
+						const double dx2 = massDst0 - row[2], dy2 = massDst1 - row[3];
+						sum_squared_dist_src += dx1 * dx1 + dy1 * dy1;
+						sum_squared_dist_dst += dx2 * dx2 + dy2 * dy2;
+					}
+				}
+
+				const double average_distance_src = std::sqrt(sum_squared_dist_src / nPts);
+				const double average_distance_dst = std::sqrt(sum_squared_dist_dst / nPts);
+				if (average_distance_src < 1e-9 || average_distance_dst < 1e-9)
+					return false;
+
+				const double ratioSrc = M_SQRT2 / average_distance_src;
+				const double ratioDst = M_SQRT2 / average_distance_dst;
+
+				Eigen::Matrix3d normalizingTransformSource, normalizingTransformDestination;
+				normalizingTransformSource << ratioSrc, 0, -ratioSrc * massSrc0,
+					0, ratioSrc, -ratioSrc * massSrc1,
+					0, 0, 1;
+				normalizingTransformDestination << ratioDst, 0, -ratioDst * massDst0,
+					0, ratioDst, -ratioDst * massDst1,
+					0, 0, 1;
+
+				static thread_local Eigen::Matrix<double, Eigen::Dynamic, 9> coefficients;
+				coefficients.resize(static_cast<Eigen::Index>(kSampleNumber_), 9);
+				if (kWeights_ == nullptr)
+				{
+					for (size_t i = 0; i < kSampleNumber_; ++i)
+					{
+						const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
+						const double * __restrict__ row = kBase + idx * kCols;
+						const double x0 = (row[0] - massSrc0) * ratioSrc;
+						const double y0 = (row[1] - massSrc1) * ratioSrc;
+						const double x1 = (row[2] - massDst0) * ratioDst;
+						const double y1 = (row[3] - massDst1) * ratioDst;
 						coefficients(i, 0) = x1 * x0;
 						coefficients(i, 1) = x1 * y0;
 						coefficients(i, 2) = x1;
@@ -251,24 +297,17 @@ namespace superansac
 				}
 				else
 				{
-					// Weighted case
 					for (size_t i = 0; i < kSampleNumber_; ++i)
 					{
-						const double
-							&x0 = normalizedPoints(i, 0),
-							&y0 = normalizedPoints(i, 1),
-							&x1 = normalizedPoints(i, 2),
-							&y1 = normalizedPoints(i, 3);
-
+						const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
+						const double * __restrict__ row = kBase + idx * kCols;
+						const double x0 = (row[0] - massSrc0) * ratioSrc;
+						const double y0 = (row[1] - massSrc1) * ratioSrc;
+						const double x1 = (row[2] - massDst0) * ratioDst;
+						const double y1 = (row[3] - massDst1) * ratioDst;
 						const double weight = kWeights_[i];
-
-						// Precalculate to reduce multiplications
-						const double
-							wx0 = weight * x0,
-							wy0 = weight * y0,
-							wx1 = weight * x1,
-							wy1 = weight * y1;
-
+						const double wx0 = weight * x0, wy0 = weight * y0;
+						const double wx1 = weight * x1, wy1 = weight * y1;
 						coefficients(i, 0) = wx1 * x0;
 						coefficients(i, 1) = wx1 * y0;
 						coefficients(i, 2) = wx1;
@@ -281,17 +320,9 @@ namespace superansac
 					}
 				}
 
-				// A*(f11 f12 ... f33)' = 0 is singular (8 equations for 9 variables), so
-				// the solution is linear subspace of dimensionality 1.
-				// => use the last two singular std::vectors as a basis of the space
-				// (according to SVD properties)
-				// The 9x9 normal matrix is square, so the (fixed-size) Jacobi SVD runs
-				// the same algorithm as the dynamic one, with no heap allocation.
 				const Eigen::Matrix<double, 9, 9> kNormalMatrix =
-					// Theoretically, it would be faster to apply SVD only to matrix coefficients, but
-					// multiplication is faster than SVD in the Eigen library. Therefore, it is faster
-					// to apply SVD to a smaller matrix.
 					coefficients.transpose() * coefficients;
+
 				Eigen::JacobiSVD<Eigen::Matrix<double, 9, 9>> svd(
 					kNormalMatrix,
 					Eigen::ComputeFullV);

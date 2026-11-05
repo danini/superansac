@@ -239,13 +239,75 @@ namespace superansac
 				const models::Model& kModel_,
 				const size_t kStartRow_,
 				const size_t kCount_,
-				double* kOut_) const override
+				double* __restrict__ kOut_) const override
 			{
 				const ModelMatrix& kDescriptor = kModel_.getData();
-				const size_t kCols = kData_.cols();
-				const double* row = kData_.data() + kStartRow_ * kCols;
-				for (size_t i = 0; i < kCount_; ++i, row += kCols)
-					kOut_[i] = squaredSampsonDistance(row, kDescriptor);
+				const double e00 = kDescriptor(0, 0), e01 = kDescriptor(0, 1), e02 = kDescriptor(0, 2);
+				const double e10 = kDescriptor(1, 0), e11 = kDescriptor(1, 1), e12 = kDescriptor(1, 2);
+				const double e20 = kDescriptor(2, 0), e21 = kDescriptor(2, 1), e22 = kDescriptor(2, 2);
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double* __restrict__ row = kData_.data() + kStartRow_ * kCols;
+				if (kCols == 4)
+				{
+					for (size_t i = 0; i < kCount_; ++i, row += 4)
+					{
+						const double x1 = row[0], y1 = row[1], x2 = row[2], y2 = row[3];
+						const double ex1_0 = e00 * x1 + e01 * y1 + e02;
+						const double ex1_1 = e10 * x1 + e11 * y1 + e12;
+						const double ex1_2 = e20 * x1 + e21 * y1 + e22;
+						const double ex2_0 = e00 * x2 + e10 * y2 + e20;
+						const double ex2_1 = e01 * x2 + e11 * y2 + e21;
+						const double c = x2 * ex1_0 + y2 * ex1_1 + ex1_2;
+						const double cx = ex1_0 * ex1_0 + ex1_1 * ex1_1;
+						const double cy = ex2_0 * ex2_0 + ex2_1 * ex2_1;
+						kOut_[i] = (c * c) / (cx + cy);
+					}
+				}
+				else
+				{
+					for (size_t i = 0; i < kCount_; ++i, row += kCols)
+					{
+						const double x1 = row[0], y1 = row[1], x2 = row[2], y2 = row[3];
+						const double ex1_0 = e00 * x1 + e01 * y1 + e02;
+						const double ex1_1 = e10 * x1 + e11 * y1 + e12;
+						const double ex1_2 = e20 * x1 + e21 * y1 + e22;
+						const double ex2_0 = e00 * x2 + e10 * y2 + e20;
+						const double ex2_1 = e01 * x2 + e11 * y2 + e21;
+						const double c = x2 * ex1_0 + y2 * ex1_1 + ex1_2;
+						const double cx = ex1_0 * ex1_0 + ex1_1 * ex1_1;
+						const double cy = ex2_0 * ex2_0 + ex2_1 * ex2_1;
+						kOut_[i] = (c * c) / (cx + cy);
+					}
+				}
+			}
+
+			void squaredResidualsIndexed(
+				const DataMatrix& kData_,
+				const models::Model& kModel_,
+				const size_t* __restrict__ kIndices_,
+				const size_t kCount_,
+				double* __restrict__ kOut_) const override
+			{
+				const ModelMatrix& kDescriptor = kModel_.getData();
+				const double e00 = kDescriptor(0, 0), e01 = kDescriptor(0, 1), e02 = kDescriptor(0, 2);
+				const double e10 = kDescriptor(1, 0), e11 = kDescriptor(1, 1), e12 = kDescriptor(1, 2);
+				const double e20 = kDescriptor(2, 0), e21 = kDescriptor(2, 1), e22 = kDescriptor(2, 2);
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double* __restrict__ kBase = kData_.data();
+				for (size_t i = 0; i < kCount_; ++i)
+				{
+					const double* __restrict__ row = kBase + kIndices_[i] * kCols;
+					const double x1 = row[0], y1 = row[1], x2 = row[2], y2 = row[3];
+					const double ex1_0 = e00 * x1 + e01 * y1 + e02;
+					const double ex1_1 = e10 * x1 + e11 * y1 + e12;
+					const double ex1_2 = e20 * x1 + e21 * y1 + e22;
+					const double ex2_0 = e00 * x2 + e10 * y2 + e20;
+					const double ex2_1 = e01 * x2 + e11 * y2 + e21;
+					const double c = x2 * ex1_0 + y2 * ex1_1 + ex1_2;
+					const double cx = ex1_0 * ex1_0 + ex1_1 * ex1_1;
+					const double cy = ex2_0 * ex2_0 + ex2_1 * ex2_1;
+					kOut_[i] = (c * c) / (cx + cy);
+				}
 			}
 
 			// Validate the model by checking the number of inlier with symmetric epipolar distance

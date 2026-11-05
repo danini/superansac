@@ -96,15 +96,40 @@ namespace superansac
 				const size_t kNonMinimalSampleSize = sampleSizeMultiplier * kEstimator_->sampleSize();
 				size_t currentSampleSize;
 
-				// The currently estimated models - reserve to avoid reallocations
-				std::vector<models::Model> currentlyEstimatedModels;
-				currentlyEstimatedModels.reserve(10); // Reserve space for typical number of models
-				scoring::Score currentScore = kInvalidScore;
-				std::vector<size_t> currentInliers;
-				currentInliers.reserve(kData_.rows());
+				// Reuse thread-local scratch buffers across calls to avoid per-candidate heap churn
+				struct Scratch
+				{
+					std::vector<models::Model> currentlyEstimatedModels;
+					std::vector<size_t> currentInliers;
+					std::vector<size_t> currentSample;
+					std::vector<double> weights;
+					bool inUse = false;
+				};
+				static thread_local Scratch tlScratch;
+				Scratch fallbackScratch;
+				const bool useTl = !tlScratch.inUse;
+				if (useTl)
+					tlScratch.inUse = true;
+				struct ScratchGuard
+				{
+					Scratch &s;
+					bool active;
+					~ScratchGuard() { if (active) s.inUse = false; }
+				} guard{tlScratch, useTl};
+				Scratch &sc = useTl ? tlScratch : fallbackScratch;
 
-				// Use vector instead of raw pointer for automatic memory management
-				std::vector<size_t> currentSample(kNonMinimalSampleSize);
+				auto &currentlyEstimatedModels = sc.currentlyEstimatedModels;
+				currentlyEstimatedModels.clear();
+				if (currentlyEstimatedModels.capacity() < 10)
+					currentlyEstimatedModels.reserve(10);
+				scoring::Score currentScore = kInvalidScore;
+				auto &currentInliers = sc.currentInliers;
+				currentInliers.clear();
+				if (currentInliers.capacity() < static_cast<size_t>(kData_.rows()))
+					currentInliers.reserve(kData_.rows());
+
+				auto &currentSample = sc.currentSample;
+				currentSample.resize(kNonMinimalSampleSize);
 
 				// The sampler used for selecting minimal samples - initialize once outside loop
 				samplers::UniformRandomSampler sampler;
@@ -122,7 +147,8 @@ namespace superansac
 					return;
 
 				// First perform an all-inlier weighted fit to refine the initial model
-				std::vector<double> weights;
+				auto &weights = sc.weights;
+				weights.clear();
 				kScoring_->getWeights(kData_, estimatedModel_, kEstimator_, weights, &estimatedInliers_);
 				currentlyEstimatedModels.clear();
 				currentlyEstimatedModels.push_back(estimatedModel_);

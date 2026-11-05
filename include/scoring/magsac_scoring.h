@@ -67,6 +67,7 @@ class MAGSACScoring : public AbstractScoring
         double nMinus1Per2;
         double twoNPlus1;
         double lossOutlier;
+        double minPointGain_ = 0.0;
         double premultiplier;
         double value0;
         double squaredTruncatedThreshold;
@@ -92,16 +93,18 @@ class MAGSACScoring : public AbstractScoring
 
         FORCE_INLINE std::pair<double, double> getGammaValues(double residual_) const
         {
-            size_t index = static_cast<size_t>(residual_ * lookupTableSize);
-            index = (index < lookupTableSize) ? index : (lookupTableSize - 1);
+            int index = static_cast<int>(residual_ * static_cast<double>(lookupTableSize));
+            if (index >= static_cast<int>(lookupTableSize)) index = static_cast<int>(lookupTableSize) - 1;
+            if (index < 0) index = 0;
             const double* kEntry = gammaTable_ + 2 * index;
             return { kEntry[0], kEntry[1] };
         }
 
         FORCE_INLINE double getUpperGammaValue(double residual_) const
         {
-            size_t index = static_cast<size_t>(residual_ * lookupTableSize);
-            index = (index < lookupTableSize) ? index : (lookupTableSize - 1);
+            int index = static_cast<int>(residual_ * static_cast<double>(lookupTableSize));
+            if (index >= static_cast<int>(lookupTableSize)) index = static_cast<int>(lookupTableSize) - 1;
+            if (index < 0) index = 0;
             return gammaTable_[2 * index + 1];
         }
 
@@ -199,16 +202,33 @@ class MAGSACScoring : public AbstractScoring
             dofIndex_ = degreesOfFreedom - 2;  // Cache DOF index for lookup table optimization
             gammaTable_ = interleavedGammaLookupTable(dofIndex_); // Interleaved (lower, upper) row
             k = getK(degreesOfFreedom); //kEstimator_->getK(); // The 0.99 quantile of the distribution
-            //std::cout << degreesOfFreedom << std::endl;
-            Cn = 1.0 / (std::pow(2.0, degreesOfFreedom / 2.0) * boost::math::tgamma(degreesOfFreedom / 2.0)); // Normalization constant
+            nPlus1Per2 = (degreesOfFreedom + 1) / 2.0; // (n + 1) / 2
+            nMinus1Per2 = (degreesOfFreedom - 1) / 2.0; // (n - 1) / 2
+            if (degreesOfFreedom >= 2 && degreesOfFreedom <= 6)
+            {
+                struct DofConsts { double cn[5]; double twoNPlus1[5]; };
+                static const DofConsts kDofConsts = []() {
+                    DofConsts c{};
+                    for (size_t d = 2; d <= 6; ++d)
+                    {
+                        c.cn[d - 2] = 1.0 / (std::pow(2.0, d / 2.0) * boost::math::tgamma(d / 2.0));
+                        c.twoNPlus1[d - 2] = std::pow(2.0, (d + 1) / 2.0);
+                    }
+                    return c;
+                }();
+                Cn = kDofConsts.cn[dofIndex_];
+                twoNPlus1 = kDofConsts.twoNPlus1[dofIndex_];
+            }
+            else
+            {
+                Cn = 1.0 / (std::pow(2.0, degreesOfFreedom / 2.0) * boost::math::tgamma(degreesOfFreedom / 2.0));
+                twoNPlus1 = std::pow(2.0, nPlus1Per2);
+            }
             squaredSigmaMax = threshold * threshold; // The squared threshold
             squaredSigmaMaxPerTwo = squaredSigmaMax / 2.0; // The squared threshold divided by two
             squaredSigmaMaxPerFour = squaredSigmaMaxPerTwo / 2.0; // The squared threshold divided by four
             twoTimesSquaredSigmaMax = 2.0 * squaredSigmaMax; // Two times the squared threshold
             invTwoTimesSquaredSigmaMax = 1.0 / twoTimesSquaredSigmaMax; // Precomputed inverse for optimization
-            nPlus1Per2 = (degreesOfFreedom + 1) / 2.0; // (n + 1) / 2
-            nMinus1Per2 = (degreesOfFreedom - 1) / 2.0; // (n - 1) / 2
-            twoNPlus1 = std::pow(2.0, nPlus1Per2); // 2 ^ ((n + 1) / 2)
             premultiplier = 1.0 / threshold * Cn * twoNPlus1; // The premultiplier
             //value0 = upperIncompleteGamma(nMinus1Per2, k * k / 2.0); // The value of the upper incomplete gamma function at k * k / 2
             //std::cout << "value0: " << value0 << std::endl;
@@ -226,6 +246,9 @@ class MAGSACScoring : public AbstractScoring
             
             const auto &zeroGammaValues = getGammaValues(0.0); // Get the gamma values
             zeroResidualLoss = squaredSigmaMaxPerTwo * zeroGammaValues.first + squaredSigmaMaxPerFour * (zeroGammaValues.second - value0); 
+            const double* lastGamma = gammaTable_ + 2 * (lookupTableSize - 1);
+            const double minInlierLoss = premultiplier * (squaredSigmaMaxPerTwo * lastGamma[0] + squaredSigmaMaxPerFour * (lastGamma[1] - value0));
+            minPointGain_ = std::min(lossOutlier, minInlierLoss);
 
             // Initialize the lookup table
             if constexpr (kGenerateLookUpTable)
@@ -429,13 +452,33 @@ class MAGSACScoring : public AbstractScoring
                 // Pre-compute values for early exit optimization
                 const double kBestPossibleGain = premultiplier * zeroResidualLoss;
                 const double kBestScoreValue = kBestScore_.getValue();
+                const bool kHasBest = (kBestScoreValue > -1e300);
+                const bool kCollectOnFly = kStoreInliers_ && !kHasBest;
+                size_t* __restrict__ outInliers = nullptr;
+                if (kStoreInliers_)
+                {
+                    if (kCollectOnFly)
+                    {
+                        inliers_.resize(static_cast<size_t>(kPointNumber));
+                        outInliers = inliers_.data();
+                    }
+                    else
+                    {
+                        inliers_.clear();
+                    }
+                }
 
-                // Iterate through all points in blocks: residuals for each block are
-                // computed with a single (batched) virtual call, then consumed by the
-                // unchanged sequential logic. Identical decisions and arithmetic; on
-                // early exit at most the rest of the current block was computed in vain.
-                // Blocks grow geometrically so that models rejected early only
-                // overshoot by a small block.
+                const double sqTh = squaredThreshold;
+                const double inv2SigSq = invTwoTimesSquaredSigmaMax;
+                const double s2 = squaredSigmaMaxPerTwo;
+                const double s4 = squaredSigmaMaxPerFour;
+                const double val0 = value0;
+                const double premul = premultiplier;
+                const double outLoss = lossOutlier;
+                const double* __restrict__ gTab = gammaTable_;
+                constexpr double kTableSizeD = static_cast<double>(lookupTableSize);
+                constexpr int kTableMaxIdx = static_cast<int>(lookupTableSize) - 1;
+
                 constexpr int kMaxBlockSize = 256;
                 double sqrBuffer[kMaxBlockSize];
                 int blockSize = 16;
@@ -444,41 +487,96 @@ class MAGSACScoring : public AbstractScoring
                 {
                     const int kCount = std::min(blockSize, kPointNumber - base);
                     kEstimator_->squaredResiduals(kData_, kModel_, base, kCount, sqrBuffer);
-                for (int j = 0; j < kCount; ++j)
-                {
-                    const int pointIdx = base + j;
-                    squaredResidual = sqrBuffer[j];
 
-                    // If the residual is smaller than the threshold, store it as an inlier and
-                    // increase the score.
-                    if (squaredResidual < squaredThreshold)
+                    const bool canPruneByBest = kHasBest &&
+                        ((scoreValue + kCount * minPointGain_) + kBestPossibleGain * (kPointNumber - base - kCount) <= kBestScoreValue + 1e-9);
+
+                    if constexpr (kUseLookUpTable)
                     {
-                        if (kStoreInliers_) // Store the point as an inlier if needed.
-                            inliers_.emplace_back(pointIdx);
-
-                        // Increase the inlier number
-                        ++inlierNumber;
-
-                        // Increase the score (use precomputed inverse for optimization)
-                        residualPerTwoTimesSquaredSigmaMax = squaredResidual * invTwoTimesSquaredSigmaMax;
-                        // Calculate the loss by using a look-up table or by calculating the incomplete gamma function
-                        if constexpr (kUseLookUpTable)
+                        if (!canPruneByBest && !kCollectOnFly)
                         {
-                            gammaValues = getGammaValues(residualPerTwoTimesSquaredSigmaMax); // Get the gamma values
-                            loss = squaredSigmaMaxPerTwo * gammaValues.first + squaredSigmaMaxPerFour * (gammaValues.second - value0);
-                        } else // Calculate the loss directly by using the incomplete gamma function
-                            loss = (squaredSigmaMaxPerTwo * boost::math::tgamma_lower(nPlus1Per2, residualPerTwoTimesSquaredSigmaMax) +
-                                squaredSigmaMaxPerFour * (upperIncompleteGamma(nMinus1Per2, residualPerTwoTimesSquaredSigmaMax) - value0));
+                            for (int j = 0; j < kCount; ++j)
+                            {
+                                const double sqr = sqrBuffer[j];
+                                if (sqr < sqTh)
+                                {
+                                    ++inlierNumber;
+                                    int idx = static_cast<int>((sqr * inv2SigSq) * kTableSizeD);
+                                    if (idx > kTableMaxIdx) idx = kTableMaxIdx;
+                                    if (idx < 0) idx = 0;
+                                    const double* g = gTab + 2 * idx;
+                                    scoreValue += premul * (s2 * g[0] + s4 * (g[1] - val0));
+                                }
+                                else
+                                {
+                                    scoreValue += outLoss;
+                                }
+                            }
+                            continue;
+                        }
+                    }
 
-                        // Commenting "premultiplier" as it does not affect the final result. It is just a constant.
-                        scoreValue += premultiplier * loss; // Increase the loss value
-                    } else
-                        scoreValue += lossOutlier;
+                    for (int j = 0; j < kCount; ++j)
+                    {
+                        const int pointIdx = base + j;
+                        squaredResidual = sqrBuffer[j];
 
-                    // Early exit AFTER processing: if remaining perfect inliers can't beat best score
-                    if (kBestPossibleGain * (kPointNumber - pointIdx - 1) + scoreValue < kBestScoreValue)
-                        return kEmptyScore;
+                        if (squaredResidual < sqTh)
+                        {
+                            if (kCollectOnFly)
+                                outInliers[inlierNumber] = static_cast<size_t>(pointIdx);
+
+                            ++inlierNumber;
+
+                            residualPerTwoTimesSquaredSigmaMax = squaredResidual * inv2SigSq;
+                            if constexpr (kUseLookUpTable)
+                            {
+                                gammaValues = getGammaValues(residualPerTwoTimesSquaredSigmaMax);
+                                loss = s2 * gammaValues.first + s4 * (gammaValues.second - val0);
+                            } else
+                                loss = (s2 * boost::math::tgamma_lower(nPlus1Per2, residualPerTwoTimesSquaredSigmaMax) +
+                                    s4 * (upperIncompleteGamma(nMinus1Per2, residualPerTwoTimesSquaredSigmaMax) - val0));
+
+                            scoreValue += premul * loss;
+                        } else
+                            scoreValue += outLoss;
+
+                        if (canPruneByBest)
+                        {
+                            if (kBestPossibleGain * (kPointNumber - pointIdx - 1) + scoreValue < kBestScoreValue)
+                            {
+                                if (kCollectOnFly) inliers_.clear();
+                                return kEmptyScore;
+                            }
+                        }
+                    }
                 }
+
+                if (kStoreInliers_)
+                {
+                    if (kCollectOnFly)
+                    {
+                        inliers_.resize(static_cast<size_t>(inlierNumber));
+                    }
+                    else if (scoreValue > kBestScoreValue)
+                    {
+                        inliers_.resize(static_cast<size_t>(inlierNumber));
+                        size_t* __restrict__ winOut = inliers_.data();
+                        int written = 0;
+                        int bSz = 16;
+                        for (int base = 0; base < kPointNumber;
+                             base += bSz, bSz = std::min(bSz << 1, kMaxBlockSize))
+                        {
+                            const int kCount = std::min(bSz, kPointNumber - base);
+                            kEstimator_->squaredResiduals(kData_, kModel_, base, kCount, sqrBuffer);
+                            for (int j = 0; j < kCount; ++j)
+                            {
+                                if (sqrBuffer[j] < sqTh)
+                                    winOut[written++] = static_cast<size_t>(base + j);
+                            }
+                        }
+                        inliers_.resize(static_cast<size_t>(written));
+                    }
                 }
             }
 
@@ -528,34 +626,23 @@ class MAGSACScoring : public AbstractScoring
             }
             else
             {
-                // The number of points
-                const int kPointNumber = kIndices_->size();
-                // The squared residual
-                double squaredResidual;
-                // Allocate memory for the weights
+                const int kPointNumber = static_cast<int>(kIndices_->size());
                 weights_.resize(kPointNumber);
-
-                // Iterate through all points, calculate the squaredResiduals and store the points as inliers if needed.
+                kEstimator_->squaredResidualsIndexed(kData_, kModel_, kIndices_->data(), kPointNumber, weights_.data());
                 for (int pointIdx = 0; pointIdx < kPointNumber; ++pointIdx)
-                {
-                    // Calculate the point-to-model residual
-                    squaredResidual =
-                        kEstimator_->squaredResidual(kData_.row((*kIndices_)[pointIdx]).data(),
-                            kModel_);
-                            
-                    // If the residual is smaller than the threshold, store it as an inlier and
-                    // increase the score.
-                    if (squaredResidual < squaredThreshold)
-                    {
-                        residualPerTwoTimesSquaredSigmaMax = squaredResidual * invTwoTimesSquaredSigmaMax;
-                        upperIncompleteGamma = getUpperGammaValue(residualPerTwoTimesSquaredSigmaMax);
-                        weights_[pointIdx] = weightPremultiplier * (upperIncompleteGamma - value0);
-                        // Commenting "weightPremultiplier" as it does not affect the final result. It is just a constant.
-                        //weights_[pointIdx] = upperIncompleteGamma - value0;
-                    } else
-                        weights_[pointIdx] = 0.0;
-                }
+                    weights_[pointIdx] = weightFromSquaredResidual(weights_[pointIdx]);
             }
+        }
+
+        FORCE_INLINE double weightFromSquaredResidual(const double kSquaredResidual_) const
+        {
+            if (kSquaredResidual_ < squaredThreshold)
+            {
+                const double residualPerTwoTimesSquaredSigmaMax = kSquaredResidual_ * invTwoTimesSquaredSigmaMax;
+                const double upperIncompleteGamma = getUpperGammaValue(residualPerTwoTimesSquaredSigmaMax);
+                return weightPremultiplier * (upperIncompleteGamma - value0);
+            }
+            return 0.0;
         }
 };
 

@@ -80,7 +80,7 @@ def fig_accuracy_runtime(det, out_path):
             pts.append((m, o["PoseLib"]["time_ms"], ci["PoseLib"][0], o["SupeRANSAC"]["time_ms"], ci["SupeRANSAC"][0], ci["delta"]))
         xs = [p[1] for p in pts] + [p[3] for p in pts]; ys = [p[2] for p in pts] + [p[4] for p in pts]
         ax.set_xscale("log")
-        ax.set_xlim(min(xs) / 1.9, max(xs) * 1.35)
+        ax.set_xlim(min(xs) / max(1.9, (max(xs) / min(xs)) ** 0.32), max(xs) * 1.35)
         ax.set_ylim(min(ys) - 3, max(ys) + 3)
         placed = []  # label anchors in points, to avoid overlapping labels
         to_pt = 72.0 / fig.dpi
@@ -92,10 +92,11 @@ def fig_accuracy_runtime(det, out_path):
             sig = "*" if (dl > 0 or dh < 0) else ""
             left = ts <= tp  # put the label on the side away from the arrow
             x, y = (v * to_pt for v in ax.transData.transform((ts, a_s)))
+            cx = x + (-34.0 if left else 34.0)
             dy = 0.0
-            while any(abs(px - x) < 75 and abs(py - (y + dy)) < 10 for px, py in placed):
+            while any(abs(px - cx) < 62 and abs(py - (y + dy)) < 10 for px, py in placed):
                 dy -= 10
-            placed.append((x, y + dy))
+            placed.append((cx, y + dy))
             ax.annotate(f"{m} {d:+.1f}{sig}", xy=(ts, a_s), xytext=(-8 if left else 8, dy), textcoords="offset points",
                         fontsize=8.5, color=c, ha="right" if left else "left", va="center", zorder=5,
                         bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.75))
@@ -117,16 +118,22 @@ def fig_accuracy_runtime(det, out_path):
 def fig_speed_accuracy(rel, p6d, out_path):
     fig, axes = plt.subplots(1, 3, figsize=(16.5, 5.2), dpi=160)
     for ax, prob, title in ((axes[0], "fundamental", "Fundamental matrix"), (axes[1], "essential", "Essential matrix")):
+        all_t = []
         for m, curves in rel[prob]["curves"].items():
             c = MATCHER_COLORS[m]
             for meth, style, mk in (("SupeRANSAC", "-", "o"), ("PoseLib", "--", "s")):
                 pts = curves[meth]
+                all_t.extend(p["time_ms"] for p in pts)
                 ax.plot([p["time_ms"] for p in pts], [p["auc"][1] for p in pts], style, marker=mk, color=c, ms=4.5, lw=1.8,
                         mfc=c if meth == "SupeRANSAC" else "white")
                 star = [p for p in pts if p["min_iterations"] == TABLE_MIN_ITERS]
                 ax.plot([star[0]["time_ms"]], [star[0]["auc"][1]], "*", color=c, ms=15, mec="black", mew=0.8)
-            last = curves["SupeRANSAC"][-1]
-            ax.annotate(m, xy=(last["time_ms"], last["auc"][1]), xytext=(6, 0), textcoords="offset points", fontsize=9, color=c, va="center")
+            right = max(curves["SupeRANSAC"][-1], curves["PoseLib"][-1], key=lambda p: p["time_ms"])
+            ax.annotate(m, xy=(right["time_ms"], right["auc"][1]), xytext=(6, 0), textcoords="offset points",
+                        fontsize=9, color=c, va="center",
+                        bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.8))
+        ax.set_xscale("log")
+        ax.set_xlim(min(all_t) / 1.25, max(all_t) * 1.65)
         ax.set_title(f"{title}  (AUC@10°)", fontsize=12)
     ax = axes[2]
     for meth, style, mk in (("SupeRANSAC", "-", "o"), ("PoseLib", "--", "s"), ("OpenCV RANSAC", ":", "d")):

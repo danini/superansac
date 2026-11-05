@@ -121,16 +121,17 @@ namespace superansac
 				const size_t *kSample_, // The sample usd for the estimation
 				std::vector<models::Model>* models_) const override // The estimated model parameters
 			{
+				const size_t kSampleSz = sampleSize();
 				static thread_local DataMatrix normalizedPoints;
-				if (normalizedPoints.rows() != static_cast<Eigen::Index>(sampleSize()) ||
-					normalizedPoints.cols() != kData_.cols())
-					normalizedPoints.resize(sampleSize(), kData_.cols());
+				if (normalizedPoints.rows() != static_cast<Eigen::Index>(kSampleSz) ||
+					normalizedPoints.cols() != 4)
+					normalizedPoints.resize(kSampleSz, 4);
 				Eigen::Matrix3d normalizingTransformSource,
 					normalizingTransformDestination;
 
 				if (!normalizePoints(kData_,
 					kSample_,
-					sampleSize(),
+					kSampleSz,
 					normalizedPoints,
 					normalizingTransformSource,
 					normalizingTransformDestination))
@@ -138,7 +139,7 @@ namespace superansac
 
 				if (!minimalSolver->estimateModel(normalizedPoints,
 					nullptr,
-					sampleSize(),
+					kSampleSz,
 					*models_))
 					return false;
 
@@ -165,20 +166,18 @@ namespace superansac
 				{
 					models_->clear();
 					// Thread-local scratch (used in the local-optimization inner loops);
-					// fully overwritten by normalizePoints below.
+					// only 4 columns (x1, y1, x2, y2) are consumed by nonMinimalSolver.
 					static thread_local DataMatrix normalizedPoints;
-					normalizedPoints.resize(kSampleNumber_, kData_.cols()); // The normalized point coordinates
-					Eigen::Matrix3d normalizingTransformSource, // The normalizing transformations in the source image
-						normalizingTransformDestination; // The normalizing transformations in the destination image
+					normalizedPoints.resize(kSampleNumber_, 4);
+					Eigen::Matrix3d normalizingTransformSource,
+						normalizingTransformDestination;
 
-					// Normalize the point coordinates to achieve numerical stability when
-					// applying the least-squares model fitting.
-					if (!normalizePoints(kData_, // The data points
-						kSample_, // The points to which the model will be fit
-						kSampleNumber_, // The number of points
-						normalizedPoints, // The normalized point coordinates
-						normalizingTransformSource, // The normalizing transformation in the first image
-						normalizingTransformDestination)) // The normalizing transformation in the second image
+					if (!normalizePoints(kData_,
+						kSample_,
+						kSampleNumber_,
+						normalizedPoints,
+						normalizingTransformSource,
+						normalizingTransformDestination))
 						return false;
 
 					if (!nonMinimalSolver->estimateModel(normalizedPoints,
@@ -343,13 +342,63 @@ namespace superansac
 				const models::Model& kModel_,
 				const size_t kStartRow_,
 				const size_t kCount_,
-				double* kOut_) const override
+				double* __restrict__ kOut_) const override
 			{
 				const ModelMatrix& kDescriptor = kModel_.getData();
-				const size_t kCols = kData_.cols();
-				const double* row = kData_.data() + kStartRow_ * kCols;
-				for (size_t i = 0; i < kCount_; ++i, row += kCols)
-					kOut_[i] = squaredResidual(row, kDescriptor);
+				const double h00 = kDescriptor(0, 0), h01 = kDescriptor(0, 1), h02 = kDescriptor(0, 2);
+				const double h10 = kDescriptor(1, 0), h11 = kDescriptor(1, 1), h12 = kDescriptor(1, 2);
+				const double h20 = kDescriptor(2, 0), h21 = kDescriptor(2, 1), h22 = kDescriptor(2, 2);
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double* __restrict__ row = kData_.data() + kStartRow_ * kCols;
+				if (kCols == 4)
+				{
+					for (size_t i = 0; i < kCount_; ++i, row += 4)
+					{
+						const double x1 = row[0], y1 = row[1], x2 = row[2], y2 = row[3];
+						const double t3 = h20 * x1 + h21 * y1 + h22;
+						const double invT3 = 1.0 / t3;
+						const double d1 = x2 - (h00 * x1 + h01 * y1 + h02) * invT3;
+						const double d2 = y2 - (h10 * x1 + h11 * y1 + h12) * invT3;
+						kOut_[i] = (std::abs(t3) < 1e-12) ? 1e18 : (d1 * d1 + d2 * d2);
+					}
+				}
+				else
+				{
+					for (size_t i = 0; i < kCount_; ++i, row += kCols)
+					{
+						const double x1 = row[0], y1 = row[1], x2 = row[2], y2 = row[3];
+						const double t3 = h20 * x1 + h21 * y1 + h22;
+						const double invT3 = 1.0 / t3;
+						const double d1 = x2 - (h00 * x1 + h01 * y1 + h02) * invT3;
+						const double d2 = y2 - (h10 * x1 + h11 * y1 + h12) * invT3;
+						kOut_[i] = (std::abs(t3) < 1e-12) ? 1e18 : (d1 * d1 + d2 * d2);
+					}
+				}
+			}
+
+			void squaredResidualsIndexed(
+				const DataMatrix& kData_,
+				const models::Model& kModel_,
+				const size_t* __restrict__ kIndices_,
+				const size_t kCount_,
+				double* __restrict__ kOut_) const override
+			{
+				const ModelMatrix& kDescriptor = kModel_.getData();
+				const double h00 = kDescriptor(0, 0), h01 = kDescriptor(0, 1), h02 = kDescriptor(0, 2);
+				const double h10 = kDescriptor(1, 0), h11 = kDescriptor(1, 1), h12 = kDescriptor(1, 2);
+				const double h20 = kDescriptor(2, 0), h21 = kDescriptor(2, 1), h22 = kDescriptor(2, 2);
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double* __restrict__ kBase = kData_.data();
+				for (size_t i = 0; i < kCount_; ++i)
+				{
+					const double* __restrict__ row = kBase + kIndices_[i] * kCols;
+					const double x1 = row[0], y1 = row[1], x2 = row[2], y2 = row[3];
+					const double t3 = h20 * x1 + h21 * y1 + h22;
+					const double invT3 = 1.0 / t3;
+					const double d1 = x2 - (h00 * x1 + h01 * y1 + h02) * invT3;
+					const double d2 = y2 - (h10 * x1 + h11 * y1 + h12) * invT3;
+					kOut_[i] = (std::abs(t3) < 1e-12) ? 1e18 : (d1 * d1 + d2 * d2);
+				}
 			}
 
 			FORCE_INLINE bool normalizePoints(
@@ -360,95 +409,115 @@ namespace superansac
 				Eigen::Matrix3d &kNormalizingTransformSource_, // The normalizing transformation in the first image
 				Eigen::Matrix3d &kNormalizingTransformDestination_) const // The normalizing transformation in the second image
 			{
-				const int &cols = kData_.cols();
+				const size_t kInCols = static_cast<size_t>(kData_.cols());
+				const size_t kOutCols = static_cast<size_t>(kNormalizedPoints_.cols());
+				const double * __restrict__ kBase = kData_.data();
+				double * __restrict__ outBase = kNormalizedPoints_.data();
 
-				double massPointSrc[2], // Mass point in the first image
-					massPointDst[2]; // Mass point in the second image
-
-				// Initializing the mass point coordinates
-				massPointSrc[0] =
-					massPointSrc[1] =
-					massPointDst[0] =
-					massPointDst[1] =
-					0.0;
-
-				// Calculating the mass points in both images
-				for (size_t i = 0; i < kSampleNumber_; ++i)
+				double massSrc0 = 0.0, massSrc1 = 0.0, massDst0 = 0.0, massDst1 = 0.0;
+				if (kSample_ != nullptr)
 				{
-					// Get index of the current point
-					const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
-
-					// Add the coordinates to that of the mass points
-					massPointSrc[0] += kData_(idx, 0);
-					massPointSrc[1] += kData_(idx, 1);
-					massPointDst[0] += kData_(idx, 2);
-					massPointDst[1] += kData_(idx, 3);
+					for (size_t i = 0; i < kSampleNumber_; ++i)
+					{
+						const double * __restrict__ row = kBase + kSample_[i] * kInCols;
+						massSrc0 += row[0]; massSrc1 += row[1];
+						massDst0 += row[2]; massDst1 += row[3];
+					}
+				}
+				else
+				{
+					const double * __restrict__ row = kBase;
+					for (size_t i = 0; i < kSampleNumber_; ++i, row += kInCols)
+					{
+						massSrc0 += row[0]; massSrc1 += row[1];
+						massDst0 += row[2]; massDst1 += row[3];
+					}
 				}
 
-				// Get the average
-				massPointSrc[0] /= kSampleNumber_;
-				massPointSrc[1] /= kSampleNumber_;
-				massPointDst[0] /= kSampleNumber_;
-				massPointDst[1] /= kSampleNumber_;
+				const double invN = 1.0 / static_cast<double>(kSampleNumber_);
+				massSrc0 *= invN; massSrc1 *= invN;
+				massDst0 *= invN; massDst1 *= invN;
 
-				// Get the mean distance from the mass points
-				double average_distance_src = 0.0,
-					average_distance_dst = 0.0;
-				for (size_t i = 0; i < kSampleNumber_; ++i)
+				double average_distance_src = 0.0, average_distance_dst = 0.0;
+				if (kSample_ != nullptr)
 				{
-					// Get index of the current point
-					const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
-
-					const double &x1 = kData_(idx, 0);
-					const double &y1 = kData_(idx, 1);
-					const double &x2 = kData_(idx, 2);
-					const double &y2 = kData_(idx, 3);
-
-					const double dx1 = massPointSrc[0] - x1;
-					const double dy1 = massPointSrc[1] - y1;
-					const double dx2 = massPointDst[0] - x2;
-					const double dy2 = massPointDst[1] - y2;
-
-					average_distance_src += sqrt(dx1 * dx1 + dy1 * dy1);
-					average_distance_dst += sqrt(dx2 * dx2 + dy2 * dy2);
+					for (size_t i = 0; i < kSampleNumber_; ++i)
+					{
+						const double * __restrict__ row = kBase + kSample_[i] * kInCols;
+						const double dx1 = massSrc0 - row[0], dy1 = massSrc1 - row[1];
+						const double dx2 = massDst0 - row[2], dy2 = massDst1 - row[3];
+						average_distance_src += std::sqrt(dx1 * dx1 + dy1 * dy1);
+						average_distance_dst += std::sqrt(dx2 * dx2 + dy2 * dy2);
+					}
+				}
+				else
+				{
+					const double * __restrict__ row = kBase;
+					for (size_t i = 0; i < kSampleNumber_; ++i, row += kInCols)
+					{
+						const double dx1 = massSrc0 - row[0], dy1 = massSrc1 - row[1];
+						const double dx2 = massDst0 - row[2], dy2 = massDst1 - row[3];
+						average_distance_src += std::sqrt(dx1 * dx1 + dy1 * dy1);
+						average_distance_dst += std::sqrt(dx2 * dx2 + dy2 * dy2);
+					}
 				}
 
-				average_distance_src /= kSampleNumber_;
-				average_distance_dst /= kSampleNumber_;
+				average_distance_src *= invN;
+				average_distance_dst *= invN;
 				if (average_distance_src < 1e-9 || average_distance_dst < 1e-9)
 					return false;
 
-				// Calculate the sqrt(2) / MeanDistance ratios
 				const double ratioSrc = M_SQRT2 / average_distance_src;
 				const double ratioDst = M_SQRT2 / average_distance_dst;
 
-				// Compute the normalized coordinates
-				for (size_t i = 0; i < kSampleNumber_; ++i)
+				if (kOutCols == 4)
 				{
-					// Get index of the current point
-					const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
-
-					const double &x1 = kData_(idx, 0);
-					const double &y1 = kData_(idx, 1);
-					const double &x2 = kData_(idx, 2);
-					const double &y2 = kData_(idx, 3);
-
-                    kNormalizedPoints_(i, 0) = (x1 - massPointSrc[0]) * ratioSrc;
-                    kNormalizedPoints_(i, 1) = (y1 - massPointSrc[1]) * ratioSrc;
-                    kNormalizedPoints_(i, 2) = (x2 - massPointDst[0]) * ratioDst;
-                    kNormalizedPoints_(i, 3) = (y2 - massPointDst[1]) * ratioDst;
-
-					for (size_t c = 4; c < static_cast<size_t>(cols); ++c)
-						kNormalizedPoints_(i, c) = kData_(idx, c);
+					double * __restrict__ outRow = outBase;
+					if (kSample_ != nullptr)
+					{
+						for (size_t i = 0; i < kSampleNumber_; ++i, outRow += 4)
+						{
+							const double * __restrict__ row = kBase + kSample_[i] * kInCols;
+							outRow[0] = (row[0] - massSrc0) * ratioSrc;
+							outRow[1] = (row[1] - massSrc1) * ratioSrc;
+							outRow[2] = (row[2] - massDst0) * ratioDst;
+							outRow[3] = (row[3] - massDst1) * ratioDst;
+						}
+					}
+					else
+					{
+						const double * __restrict__ row = kBase;
+						for (size_t i = 0; i < kSampleNumber_; ++i, row += kInCols, outRow += 4)
+						{
+							outRow[0] = (row[0] - massSrc0) * ratioSrc;
+							outRow[1] = (row[1] - massSrc1) * ratioSrc;
+							outRow[2] = (row[2] - massDst0) * ratioDst;
+							outRow[3] = (row[3] - massDst1) * ratioDst;
+						}
+					}
+				}
+				else
+				{
+					for (size_t i = 0; i < kSampleNumber_; ++i)
+					{
+						const size_t idx = (kSample_ == nullptr) ? i : kSample_[i];
+						const double * __restrict__ row = kBase + idx * kInCols;
+						double * __restrict__ outRow = outBase + i * kOutCols;
+						outRow[0] = (row[0] - massSrc0) * ratioSrc;
+						outRow[1] = (row[1] - massSrc1) * ratioSrc;
+						outRow[2] = (row[2] - massDst0) * ratioDst;
+						outRow[3] = (row[3] - massDst1) * ratioDst;
+						for (size_t c = 4; c < kOutCols; ++c)
+							outRow[c] = row[c];
+					}
 				}
 
-				// Creating the normalizing transformations
-				kNormalizingTransformSource_ << ratioSrc, 0, -ratioSrc * massPointSrc[0],
-					0, ratioSrc, -ratioSrc * massPointSrc[1],
+				kNormalizingTransformSource_ << ratioSrc, 0, -ratioSrc * massSrc0,
+					0, ratioSrc, -ratioSrc * massSrc1,
 					0, 0, 1;
 
-				kNormalizingTransformDestination_ << ratioDst, 0, -ratioDst * massPointDst[0],
-					0, ratioDst, -ratioDst * massPointDst[1],
+				kNormalizingTransformDestination_ << ratioDst, 0, -ratioDst * massDst0,
+					0, ratioDst, -ratioDst * massDst1,
 					0, 0, 1;
 				return true;
 			}
@@ -482,12 +551,12 @@ namespace superansac
 				if (!H.allFinite())
 					return false;
 
-				const double fNorm = H.norm();
-				if (fNorm < 1e-12)
+				const double fNormSq = H.squaredNorm();
+				if (fNormSq < 1e-24)
 					return false;
 
-				const double kDeterminant = std::abs(H.determinant()) / (fNorm * fNorm * fNorm);
-				if (kDeterminant < 1e-13)
+				const double det = H.determinant();
+				if (det * det < 1e-26 * (fNormSq * fNormSq * fNormSq))
 					return false;
 
 				return true;

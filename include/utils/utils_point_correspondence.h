@@ -59,38 +59,51 @@ void normalizePointsByIntrinsics(
     const Eigen::Matrix3d kIntrinsicsSourceInv = kIntrinsicsSource_.inverse();
     const Eigen::Matrix3d kIntrinsicsDestinationInv = kIntrinsicsDestination_.inverse();
 
-    // Create a point to store the current point
-    Eigen::Vector3d point(0, 0, 1);
+    const double s00 = kIntrinsicsSourceInv(0, 0), s01 = kIntrinsicsSourceInv(0, 1), s02 = kIntrinsicsSourceInv(0, 2);
+    const double s10 = kIntrinsicsSourceInv(1, 0), s11 = kIntrinsicsSourceInv(1, 1), s12 = kIntrinsicsSourceInv(1, 2);
+    const double s20 = kIntrinsicsSourceInv(2, 0), s21 = kIntrinsicsSourceInv(2, 1), s22 = kIntrinsicsSourceInv(2, 2);
 
-    // Normalize each point
+    const double d00 = kIntrinsicsDestinationInv(0, 0), d01 = kIntrinsicsDestinationInv(0, 1), d02 = kIntrinsicsDestinationInv(0, 2);
+    const double d10 = kIntrinsicsDestinationInv(1, 0), d11 = kIntrinsicsDestinationInv(1, 1), d12 = kIntrinsicsDestinationInv(1, 2);
+    const double d20 = kIntrinsicsDestinationInv(2, 0), d21 = kIntrinsicsDestinationInv(2, 1), d22 = kIntrinsicsDestinationInv(2, 2);
+
+    const bool kAffineFastPath =
+        (kSample_ == nullptr) && (cols == 4) &&
+        (s20 == 0.0 && s21 == 0.0 && s22 == 1.0) &&
+        (d20 == 0.0 && d21 == 0.0 && d22 == 1.0);
+
+    if (kAffineFastPath)
+    {
+        const double * __restrict__ src = kCorrespondences_.data();
+        double * __restrict__ dst = normalizedCorrespondences_.data();
+        for (size_t pointIdx = 0; pointIdx < static_cast<size_t>(rows); ++pointIdx, src += 4, dst += 4)
+        {
+            const double x1 = src[0], y1 = src[1], x2 = src[2], y2 = src[3];
+            dst[0] = s00 * x1 + s01 * y1 + s02;
+            dst[1] = s10 * x1 + s11 * y1 + s12;
+            dst[2] = d00 * x2 + d01 * y2 + d02;
+            dst[3] = d10 * x2 + d11 * y2 + d12;
+        }
+        return;
+    }
+
+    // General path
+    Eigen::Vector3d point(0, 0, 1);
     for (size_t pointIdx = 0; pointIdx < rows; ++pointIdx)
     {
-        // Get index of the current point
         const size_t &idx = kSample_ == nullptr ? pointIdx : kSample_[pointIdx];
-
-        // Get the (x, y) point from source point
         point(0) = kCorrespondences_(idx, 0);
         point(1) = kCorrespondences_(idx, 1);
-
-        // Apply the inverse intrinsic matrix to get the normalized point
         Eigen::Vector3d normalizedPoint = kIntrinsicsSourceInv * point;
-
-        // Store the normalized coordinates in the output matrix
         normalizedCorrespondences_(idx, 0) = normalizedPoint(0) / normalizedPoint(2);
         normalizedCorrespondences_(idx, 1) = normalizedPoint(1) / normalizedPoint(2);
         
-        // Get the (x, y) point from the destination point
         point(0) = kCorrespondences_(idx, 2);
         point(1) = kCorrespondences_(idx, 3);
-
-        // Apply the inverse intrinsic matrix to get the normalized point
         normalizedPoint = kIntrinsicsDestinationInv * point;
-
-        // Store the normalized coordinates in the output matrix
         normalizedCorrespondences_(idx, 2) = normalizedPoint(0) / normalizedPoint(2);
         normalizedCorrespondences_(idx, 3) = normalizedPoint(1) / normalizedPoint(2);
 
-        // Copy the rest of the columns
         for (size_t i = 4; i < cols; ++i)
             normalizedCorrespondences_(idx, i) = kCorrespondences_(idx, i);
     }
@@ -114,6 +127,25 @@ void normalizePointsByIntrinsics(
 
     // Inverse of the intrinsic matrix
     const Eigen::Matrix3d kIntrinsicsInv = kIntrinsics_.inverse();
+    const double s00 = kIntrinsicsInv(0, 0), s01 = kIntrinsicsInv(0, 1), s02 = kIntrinsicsInv(0, 2);
+    const double s10 = kIntrinsicsInv(1, 0), s11 = kIntrinsicsInv(1, 1), s12 = kIntrinsicsInv(1, 2);
+    const double s20 = kIntrinsicsInv(2, 0), s21 = kIntrinsicsInv(2, 1), s22 = kIntrinsicsInv(2, 2);
+
+    if (s20 == 0.0 && s21 == 0.0 && s22 == 1.0 && cols == 5)
+    {
+        const double * __restrict__ src = kPoints_.data();
+        double * __restrict__ dst = normalizedCorrespondences_.data();
+        for (size_t pointIdx = 0; pointIdx < static_cast<size_t>(rows); ++pointIdx, src += 5, dst += 5)
+        {
+            const double x = src[0], y = src[1];
+            dst[0] = s00 * x + s01 * y + s02;
+            dst[1] = s10 * x + s11 * y + s12;
+            dst[2] = src[2];
+            dst[3] = src[3];
+            dst[4] = src[4];
+        }
+        return;
+    }
 
     // Create a point to store the current point
     Eigen::Vector3d point(0, 0, 1);

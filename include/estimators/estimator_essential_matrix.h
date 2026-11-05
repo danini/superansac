@@ -143,19 +143,21 @@ namespace superansac
 				if (rawModels.empty())
 					return false;
 
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double * __restrict__ kBase = kData_.data();
 				if (cheiralityMargin <= 0.0)
 				{
 					b1.resize(kSampleSize);
 					b2.resize(kSampleSize);
 					for (size_t i = 0; i < kSampleSize; ++i)
 					{
-						const size_t idx = kSample_[i];
-						b1[i] = Eigen::Vector3d(kData_(idx, 0), kData_(idx, 1), 1.0).normalized();
-						b2[i] = Eigen::Vector3d(kData_(idx, 2), kData_(idx, 3), 1.0).normalized();
+						const double * __restrict__ row = kBase + kSample_[i] * kCols;
+						b1[i] = Eigen::Vector3d(row[0], row[1], 1.0).normalized();
+						b2[i] = Eigen::Vector3d(row[2], row[3], 1.0).normalized();
 					}
 				}
 
-				poselib::CameraPoseVector poses;
+				static thread_local poselib::CameraPoseVector poses;
 				for (const auto &raw : rawModels)
 				{
 					const Eigen::Matrix3d E = raw.getData().block<3, 3>(0, 0);
@@ -176,13 +178,25 @@ namespace superansac
 					else
 					{
 						poselib::motion_from_essential(E, kEmptyBearings, kEmptyBearings, &poses);
-						for (const auto &pose : poses)
+						Eigen::Matrix<double, 3, 4, Eigen::RowMajor> rt;
+						for (size_t pIdx = 0; pIdx < poses.size(); ++pIdx)
 						{
-							const Eigen::Matrix<double, 3, 4, Eigen::RowMajor> rt = pose.Rt();
+							const auto &pose = poses[pIdx];
+							if ((pIdx & 1u) == 1u && poses[pIdx].q == poses[pIdx - 1].q)
+							{
+								// motion_from_essential emits pairs (R1, +t), (R1, -t), (R2, +t), (R2, -t);
+								// reuse R across paired translations to halve quat_to_rotmat calls.
+								rt.col(3) = pose.t;
+							}
+							else
+							{
+								rt.block<3, 3>(0, 0) = pose.R();
+								rt.col(3) = pose.t;
+							}
 							bool allCheiral = true;
 							for (size_t i = 0; i < kSampleSize; ++i)
 							{
-								if (!isPointCheiral(kData_.row(kSample_[i]).data(), rt))
+								if (!isPointCheiral(kBase + kSample_[i] * kCols, rt))
 								{
 									allCheiral = false;
 									break;
@@ -354,24 +368,98 @@ namespace superansac
 				const models::Model& kModel_,
 				const size_t kStartRow_,
 				const size_t kCount_,
-				double* kOut_) const override
+				double* __restrict__ kOut_) const override
 			{
 				const ModelMatrix& kDescriptor = kModel_.getData();
-				const size_t kCols = kData_.cols();
-				const double* row = kData_.data() + kStartRow_ * kCols;
-				if (enforce3DCheirality && kModel_.hasPose())
+				const double e00 = kDescriptor(0, 0), e01 = kDescriptor(0, 1), e02 = kDescriptor(0, 2);
+				const double e10 = kDescriptor(1, 0), e11 = kDescriptor(1, 1), e12 = kDescriptor(1, 2);
+				const double e20 = kDescriptor(2, 0), e21 = kDescriptor(2, 1), e22 = kDescriptor(2, 2);
+				const double ifx1 = invFx1Sq, ify1 = invFy1Sq, ifx2 = invFx2Sq, ify2 = invFy2Sq;
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double* __restrict__ kStartPtr = kData_.data() + kStartRow_ * kCols;
+				const double* __restrict__ row = kStartPtr;
+				if (kCols == 4)
 				{
-					const auto& kRt = kModel_.getPose();
-					for (size_t i = 0; i < kCount_; ++i, row += kCols)
+					for (size_t i = 0; i < kCount_; ++i, row += 4)
 					{
-						const double r2 = squaredSampsonDistance(row, kDescriptor);
-						kOut_[i] = (r2 < cheiralityResidualCutoffSq && !isPointCheiral(row, kRt)) ? 1e18 : r2;
+						const double x1 = row[0], y1 = row[1], x2 = row[2], y2 = row[3];
+						const double ex1_0 = e00 * x1 + e01 * y1 + e02;
+						const double ex1_1 = e10 * x1 + e11 * y1 + e12;
+						const double ex1_2 = e20 * x1 + e21 * y1 + e22;
+						const double ex2_0 = e00 * x2 + e10 * y2 + e20;
+						const double ex2_1 = e01 * x2 + e11 * y2 + e21;
+						const double c = x2 * ex1_0 + y2 * ex1_1 + ex1_2;
+						const double cx = ifx2 * ex1_0 * ex1_0 + ify2 * ex1_1 * ex1_1;
+						const double cy = ifx1 * ex2_0 * ex2_0 + ify1 * ex2_1 * ex2_1;
+						kOut_[i] = (c * c) / (cx + cy);
 					}
 				}
 				else
 				{
 					for (size_t i = 0; i < kCount_; ++i, row += kCols)
-						kOut_[i] = squaredSampsonDistance(row, kDescriptor);
+					{
+						const double x1 = row[0], y1 = row[1], x2 = row[2], y2 = row[3];
+						const double ex1_0 = e00 * x1 + e01 * y1 + e02;
+						const double ex1_1 = e10 * x1 + e11 * y1 + e12;
+						const double ex1_2 = e20 * x1 + e21 * y1 + e22;
+						const double ex2_0 = e00 * x2 + e10 * y2 + e20;
+						const double ex2_1 = e01 * x2 + e11 * y2 + e21;
+						const double c = x2 * ex1_0 + y2 * ex1_1 + ex1_2;
+						const double cx = ifx2 * ex1_0 * ex1_0 + ify2 * ex1_1 * ex1_1;
+						const double cy = ifx1 * ex2_0 * ex2_0 + ify1 * ex2_1 * ex2_1;
+						kOut_[i] = (c * c) / (cx + cy);
+					}
+				}
+
+				if (enforce3DCheirality && kModel_.hasPose())
+				{
+					const auto& kRt = kModel_.getPose();
+					const double cutoffSq = cheiralityResidualCutoffSq;
+					for (size_t i = 0; i < kCount_; ++i)
+					{
+						if (kOut_[i] < cutoffSq && !isPointCheiral(kStartPtr + i * kCols, kRt))
+							kOut_[i] = 1e18;
+					}
+				}
+			}
+
+			void squaredResidualsIndexed(
+				const DataMatrix& kData_,
+				const models::Model& kModel_,
+				const size_t* __restrict__ kIndices_,
+				const size_t kCount_,
+				double* __restrict__ kOut_) const override
+			{
+				const ModelMatrix& kDescriptor = kModel_.getData();
+				const double e00 = kDescriptor(0, 0), e01 = kDescriptor(0, 1), e02 = kDescriptor(0, 2);
+				const double e10 = kDescriptor(1, 0), e11 = kDescriptor(1, 1), e12 = kDescriptor(1, 2);
+				const double e20 = kDescriptor(2, 0), e21 = kDescriptor(2, 1), e22 = kDescriptor(2, 2);
+				const double ifx1 = invFx1Sq, ify1 = invFy1Sq, ifx2 = invFx2Sq, ify2 = invFy2Sq;
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double* __restrict__ kBase = kData_.data();
+				for (size_t i = 0; i < kCount_; ++i)
+				{
+					const double* __restrict__ row = kBase + kIndices_[i] * kCols;
+					const double x1 = row[0], y1 = row[1], x2 = row[2], y2 = row[3];
+					const double ex1_0 = e00 * x1 + e01 * y1 + e02;
+					const double ex1_1 = e10 * x1 + e11 * y1 + e12;
+					const double ex1_2 = e20 * x1 + e21 * y1 + e22;
+					const double ex2_0 = e00 * x2 + e10 * y2 + e20;
+					const double ex2_1 = e01 * x2 + e11 * y2 + e21;
+					const double c = x2 * ex1_0 + y2 * ex1_1 + ex1_2;
+					const double cx = ifx2 * ex1_0 * ex1_0 + ify2 * ex1_1 * ex1_1;
+					const double cy = ifx1 * ex2_0 * ex2_0 + ify1 * ex2_1 * ex2_1;
+					kOut_[i] = (c * c) / (cx + cy);
+				}
+				if (enforce3DCheirality && kModel_.hasPose())
+				{
+					const auto& kRt = kModel_.getPose();
+					const double cutoffSq = cheiralityResidualCutoffSq;
+					for (size_t i = 0; i < kCount_; ++i)
+					{
+						if (kOut_[i] < cutoffSq && !isPointCheiral(kBase + kIndices_[i] * kCols, kRt))
+							kOut_[i] = 1e18;
+					}
 				}
 			}
 

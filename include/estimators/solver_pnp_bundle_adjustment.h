@@ -135,7 +135,6 @@ namespace superansac
 				static thread_local std::vector<Eigen::Vector2d> points2d;
 				static thread_local std::vector<Eigen::Vector3d> points3d;
 				static thread_local std::vector<double> weights;
-				std::vector<Eigen::Vector2d> unnormalizedPoint2d;
 				points2d.resize(kSampleNumber_);
 				points3d.resize(kSampleNumber_);
 				weights.clear();
@@ -144,14 +143,16 @@ namespace superansac
 				if (useArgWeights || useMemberWeights)
 					weights.resize(kSampleNumber_);
 
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double * __restrict__ kBase = kData_.data();
 				// Filling the point correspondences if the sample is not provided
 				if (kSample_ == nullptr)
 				{
-					// Filling the point correspondences
-					for (size_t pointIdx = 0; pointIdx < kSampleNumber_; pointIdx++)
+					const double * __restrict__ row = kBase;
+					for (size_t pointIdx = 0; pointIdx < kSampleNumber_; ++pointIdx, row += kCols)
 					{
-						points2d[pointIdx] = Eigen::Vector2d(kData_(pointIdx, 0), kData_(pointIdx, 1));
-						points3d[pointIdx] = Eigen::Vector3d(kData_(pointIdx, 2), kData_(pointIdx, 3), kData_(pointIdx, 4));
+						points2d[pointIdx] = Eigen::Vector2d(row[0], row[1]);
+						points3d[pointIdx] = Eigen::Vector3d(row[2], row[3], row[4]);
 						if (useArgWeights)
 							weights[pointIdx] = kWeights_[pointIdx];
 						else if (useMemberWeights)
@@ -159,11 +160,12 @@ namespace superansac
 					}
 				} else // Filling the point correspondences if the sample is provided
 				{
-					for (size_t pointIdx = 0; pointIdx < kSampleNumber_; pointIdx++)
+					for (size_t pointIdx = 0; pointIdx < kSampleNumber_; ++pointIdx)
 					{
-						const size_t& idx = kSample_[pointIdx];
-						points2d[pointIdx] = Eigen::Vector2d(kData_(idx, 0), kData_(idx, 1));
-						points3d[pointIdx] = Eigen::Vector3d(kData_(idx, 2), kData_(idx, 3), kData_(idx, 4));
+						const size_t idx = kSample_[pointIdx];
+						const double * __restrict__ row = kBase + idx * kCols;
+						points2d[pointIdx] = Eigen::Vector2d(row[0], row[1]);
+						points3d[pointIdx] = Eigen::Vector3d(row[2], row[3], row[4]);
 						if (useArgWeights)
 							weights[pointIdx] = kWeights_[pointIdx];
 						else if (useMemberWeights)
@@ -179,7 +181,8 @@ namespace superansac
 					epnpSolver.estimateModel(kData_, kSample_, kSampleNumber_, models_);
 
 					P3PLambdaTwistSolver p3pSolver;
-					std::vector<models::Model> p3pCands;
+					static thread_local std::vector<models::Model> p3pCands;
+					p3pCands.clear();
 					const size_t kStep = std::max<size_t>(1, kSampleNumber_ / 3);
 					const size_t kMaxTrials = std::min<size_t>(kIsInnerSubsample ? 6 : 12, kSampleNumber_);
 					for (size_t t = 0; t < kMaxTrials; ++t)
@@ -206,19 +209,21 @@ namespace superansac
 							const auto &m = p3pCands[cIdx].getData();
 							if (!m.allFinite())
 								continue;
-							const Eigen::Matrix3d Rc = m.block<3, 3>(0, 0);
-							const Eigen::Vector3d tc = m.block<3, 1>(0, 3);
+							const double r00 = m(0, 0), r01 = m(0, 1), r02 = m(0, 2), t0 = m(0, 3);
+							const double r10 = m(1, 0), r11 = m(1, 1), r12 = m(1, 2), t1 = m(1, 3);
+							const double r20 = m(2, 0), r21 = m(2, 1), r22 = m(2, 2), t2 = m(2, 3);
 							double cost = 0.0;
 							for (size_t pIdx = 0; pIdx < kSampleNumber_; ++pIdx)
 							{
-								const Eigen::Vector3d Xc = Rc * points3d[pIdx] + tc;
-								if (Xc(2) <= 1e-6)
+								const double X0 = points3d[pIdx](0), X1 = points3d[pIdx](1), X2 = points3d[pIdx](2);
+								const double Z2 = r20 * X0 + r21 * X1 + r22 * X2 + t2;
+								if (Z2 <= 1e-6)
 								{
 									cost += kSqTh;
 									continue;
 								}
-								const double du = Xc(0) / Xc(2) - points2d[pIdx](0);
-								const double dv = Xc(1) / Xc(2) - points2d[pIdx](1);
+								const double du = (r00 * X0 + r01 * X1 + r02 * X2 + t0) / Z2 - points2d[pIdx](0);
+								const double dv = (r10 * X0 + r11 * X1 + r12 * X2 + t1) / Z2 - points2d[pIdx](1);
 								const double sq = du * du + dv * dv;
 								cost += std::min(sq, kSqTh);
 							}
@@ -270,19 +275,24 @@ namespace superansac
 					frontCount = 0;
 					if (tc.squaredNorm() > kMaxTransNormSq)
 						return std::numeric_limits<double>::max();
+					const double r00 = Rc(0, 0), r01 = Rc(0, 1), r02 = Rc(0, 2), t0 = tc(0);
+					const double r10 = Rc(1, 0), r11 = Rc(1, 1), r12 = Rc(1, 2), t1 = tc(1);
+					const double r20 = Rc(2, 0), r21 = Rc(2, 1), r22 = Rc(2, 2), t2 = tc(2);
+					const bool hasW = (useArgWeights || useMemberWeights);
 					double c = 0.0;
 					for (size_t pIdx = 0; pIdx < kSampleNumber_; ++pIdx)
 					{
-						const double w = (useArgWeights || useMemberWeights) ? weights[pIdx] : 1.0;
-						const Eigen::Vector3d Xc = Rc * points3d[pIdx] + tc;
-						if (Xc(2) <= 1e-6)
+						const double w = hasW ? weights[pIdx] : 1.0;
+						const double X0 = points3d[pIdx](0), X1 = points3d[pIdx](1), X2 = points3d[pIdx](2);
+						const double Z2 = r20 * X0 + r21 * X1 + r22 * X2 + t2;
+						if (Z2 <= 1e-6)
 						{
 							c += w * kEvalSqTh;
 							continue;
 						}
 						++frontCount;
-						const double du = Xc(0) / Xc(2) - points2d[pIdx](0);
-						const double dv = Xc(1) / Xc(2) - points2d[pIdx](1);
+						const double du = (r00 * X0 + r01 * X1 + r02 * X2 + t0) / Z2 - points2d[pIdx](0);
+						const double dv = (r10 * X0 + r11 * X1 + r12 * X2 + t1) / Z2 - points2d[pIdx](1);
 						const double sq = du * du + dv * dv;
 						c += w * std::min(sq, kEvalSqTh);
 					}

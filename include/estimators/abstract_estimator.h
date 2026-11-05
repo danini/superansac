@@ -61,6 +61,10 @@ namespace superansac
 			// The non-minimal solver used for estimating the model parameters
 			std::unique_ptr<solver::AbstractSolver> nonMinimalSolver;
 
+			// Cached sample sizes to avoid virtual dispatch inside inner scoring loops
+			size_t cachedSampleSize_ = 0;
+			size_t cachedNonMinimalSampleSize_ = 0;
+
 		public:
 			Estimator() {}
 			virtual ~Estimator() {}
@@ -93,24 +97,26 @@ namespace superansac
 			void setMinimalSolver(solver::AbstractSolver *minimalSolver_)
 			{
 				minimalSolver.reset(minimalSolver_);
+				cachedSampleSize_ = minimalSolver ? minimalSolver->sampleSize() : 0;
 			}
 
 			// Set the non-minimal solver
 			void setNonMinimalSolver(solver::AbstractSolver *nonMinimalSolver_)
 			{
 				nonMinimalSolver.reset(nonMinimalSolver_);
+				cachedNonMinimalSampleSize_ = nonMinimalSolver ? nonMinimalSolver->sampleSize() : 0;
 			}
 
 			// The size of a non-minimal sample required for the estimation
-			size_t nonMinimalSampleSize() const
+			FORCE_INLINE size_t nonMinimalSampleSize() const
 			{
-				return nonMinimalSolver->sampleSize();
+				return cachedNonMinimalSampleSize_;
 			}
 
 			// The size of a minimal sample required for the estimation
-			size_t sampleSize() const
+			FORCE_INLINE size_t sampleSize() const
 			{
-				return minimalSolver->sampleSize();
+				return cachedSampleSize_;
 			}
 
 			// A flag deciding if the points can be weighted when the non-minimal fitting is applied 
@@ -174,6 +180,20 @@ namespace superansac
 				const double* row = kData_.data() + kStartRow_ * kCols;
 				for (size_t i = 0; i < kCount_; ++i, row += kCols)
 					kOut_[i] = squaredResidual(row, kModel_);
+			}
+
+			// Batched squared residuals for an indexed subset of rows (one virtual call).
+			virtual void squaredResidualsIndexed(
+				const DataMatrix& kData_,
+				const models::Model& kModel_,
+				const size_t* kIndices_,
+				const size_t kCount_,
+				double* kOut_) const
+			{
+				const size_t kCols = kData_.cols();
+				const double* kBase = kData_.data();
+				for (size_t i = 0; i < kCount_; ++i)
+					kOut_[i] = squaredResidual(kBase + kIndices_[i] * kCols, kModel_);
 			}
 			
 			// A function to decide if the selected sample is degenerate or not

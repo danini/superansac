@@ -59,18 +59,35 @@ class CameraJacobianAccumulator {
         : x(points2D), X(points3D), camera(cam), loss_fn(loss), weights(w) {}
 
     double residual(const CameraPose &pose) const {
+        const double q1 = pose.q(0), q2 = pose.q(1), q3 = pose.q(2), q4 = pose.q(3);
+        const double q11 = q1 * q1, q22 = q2 * q2, q33 = q3 * q3, q44 = q4 * q4;
+        const double R00 = q11 + q22 - q33 - q44;
+        const double R01 = 2.0 * (q2 * q3 - q1 * q4);
+        const double R02 = 2.0 * (q2 * q4 + q1 * q3);
+        const double R10 = 2.0 * (q2 * q3 + q1 * q4);
+        const double R11 = q11 - q22 + q33 - q44;
+        const double R12 = 2.0 * (q3 * q4 - q1 * q2);
+        const double R20 = 2.0 * (q2 * q4 - q1 * q3);
+        const double R21 = 2.0 * (q3 * q4 + q1 * q2);
+        const double R22 = q11 - q22 - q33 + q44;
+        const double t0 = pose.t(0), t1 = pose.t(1), t2 = pose.t(2);
         double cost = 0;
         for (size_t i = 0; i < x.size(); ++i) {
-            const Eigen::Vector3d Z = pose.apply(X[i]);
+            const double X0 = X[i](0), X1 = X[i](1), X2 = X[i](2);
+            const double Z2 = R20 * X0 + R21 * X1 + R22 * X2 + t2;
             // Note this assumes points that are behind the camera will stay behind the camera
             // during the optimization
-            if (Z(2) <= 1e-6) {
+            if (Z2 <= 1e-6) {
                 cost += weights[i] * loss_fn.loss(1e6);
                 continue;
             }
-            const double inv_z = 1.0 / Z(2);
-            Eigen::Vector2d p(Z(0) * inv_z, Z(1) * inv_z);
-            CameraModel::project(camera.params, p, &p);
+            const double Z0 = R00 * X0 + R01 * X1 + R02 * X2 + t0;
+            const double Z1 = R10 * X0 + R11 * X1 + R12 * X2 + t1;
+            const double inv_z = 1.0 / Z2;
+            Eigen::Vector2d p(Z0 * inv_z, Z1 * inv_z);
+            if constexpr (!std::is_same_v<CameraModel, NullCameraModel>) {
+                CameraModel::project(camera.params, p, &p);
+            }
             const double r0 = p(0) - x[i](0);
             const double r1 = p(1) - x[i](1);
             const double r_squared = r0 * r0 + r1 * r1;
@@ -86,12 +103,17 @@ class CameraJacobianAccumulator {
         const Eigen::Matrix3d R = pose.R();
         const Eigen::Vector3d &t = pose.t;
         Eigen::Matrix2d Jcam;
-        Jcam.setIdentity(); // we initialize to identity here (this is for the calibrated case)
+        if constexpr (!std::is_same_v<CameraModel, NullCameraModel>) {
+            Jcam.setIdentity();
+        }
         size_t num_residuals = 0;
 
         for (size_t i = 0; i < x.size(); ++i) {
             const Eigen::Vector3d &Xi = X[i];
             const Eigen::Vector3d Z = R * Xi + t;
+            const double X0 = Xi(0);
+            const double X1 = Xi(1);
+            const double X2 = Xi(2);
 
             // Note this assumes points that are behind the camera will stay behind the camera
             // during the optimization
@@ -104,11 +126,14 @@ class CameraJacobianAccumulator {
 
             // Project with intrinsics
             Eigen::Vector2d zp = z;
-            CameraModel::project_with_jac(camera.params, z, &zp, &Jcam);
+            if constexpr (!std::is_same_v<CameraModel, NullCameraModel>) {
+                CameraModel::project_with_jac(camera.params, z, &zp, &Jcam);
+            }
 
             // Setup residual
-            const Eigen::Vector2d r = zp - x[i];
-            const double r_squared = r.squaredNorm();
+            const double r0 = zp(0) - x[i](0);
+            const double r1 = zp(1) - x[i](1);
+            const double r_squared = r0 * r0 + r1 * r1;
             const double weight = weights[i] * loss_fn.weight(r_squared);
 
             if (weight == 0.0) {
@@ -117,15 +142,16 @@ class CameraJacobianAccumulator {
             num_residuals++;
 
             Eigen::Matrix<double, 2, 3> dZ;
-            dZ.block<2, 2>(0, 0) = Jcam;
-            dZ.col(2) = -Jcam * z;
-            dZ *= inv_Z2;  // Use pre-computed reciprocal
-            dZ *= R;
-
-            const double X0 = X[i](0);
-            const double X1 = X[i](1);
-            const double X2 = X[i](2);
-
+            if constexpr (std::is_same_v<CameraModel, NullCameraModel>) {
+                dZ << inv_Z2, 0.0, (-z(0)) * inv_Z2,
+                      0.0, inv_Z2, (-z(1)) * inv_Z2;
+                dZ *= R;
+            } else {
+                dZ.block<2, 2>(0, 0) = Jcam;
+                dZ.col(2) = -Jcam * z;
+                dZ *= inv_Z2;
+                dZ *= R;
+            }
             const double dZ00 = dZ(0, 0);
             const double dZ01 = dZ(0, 1);
             const double dZ02 = dZ(0, 2);
@@ -185,8 +211,8 @@ class CameraJacobianAccumulator {
             JtJ(5, 4) += dZtdZ_2_1;
             JtJ(5, 5) += dZtdZ_2_2;
 
-            const double wr0 = weight * r(0);
-            const double wr1 = weight * r(1);
+            const double wr0 = weight * r0;
+            const double wr1 = weight * r1;
 
             const double X1_dZ02_minus_X2_dZ01 = X1 * dZ02 - X2 * dZ01;
             const double X1_dZ12_minus_X2_dZ11 = X1 * dZ12 - X2 * dZ11;
@@ -475,14 +501,23 @@ class RelativePoseJacobianAccumulator {
     double residual(const CameraPose &pose) const {
         Eigen::Matrix3d E;
         essential_from_motion(pose, &E);
+        const double E00 = E(0, 0), E01 = E(0, 1), E02 = E(0, 2);
+        const double E10 = E(1, 0), E11 = E(1, 1), E12 = E(1, 2);
+        const double E20 = E(2, 0), E21 = E(2, 1), E22 = E(2, 2);
 
         double cost = 0.0;
         for (size_t k = 0; k < x1.size(); ++k) {
-            double C = x2[k].homogeneous().dot(E * x1[k].homogeneous());
-            double nJc_sq = (E.block<2, 3>(0, 0) * x1[k].homogeneous()).squaredNorm() +
-                            (E.block<3, 2>(0, 0).transpose() * x2[k].homogeneous()).squaredNorm();
+            const double u1x = x1[k](0), u1y = x1[k](1);
+            const double u2x = x2[k](0), u2y = x2[k](1);
+            const double Ex1_0 = E00 * u1x + E01 * u1y + E02;
+            const double Ex1_1 = E10 * u1x + E11 * u1y + E12;
+            const double Ex1_2 = E20 * u1x + E21 * u1y + E22;
+            const double Etx2_0 = E00 * u2x + E10 * u2y + E20;
+            const double Etx2_1 = E01 * u2x + E11 * u2y + E21;
+            const double C = u2x * Ex1_0 + u2y * Ex1_1 + Ex1_2;
+            const double nJc_sq = (Ex1_0 * Ex1_0 + Ex1_1 * Ex1_1) + (Etx2_0 * Etx2_0 + Etx2_1 * Etx2_1);
 
-            double r2 = (C * C) / nJc_sq;
+            const double r2 = (C * C) / nJc_sq;
             cost += weights[k] * loss_fn.loss(r2);
         }
 
@@ -513,23 +548,12 @@ class RelativePoseJacobianAccumulator {
         Eigen::Matrix3d E, R;
         R = pose.R();
         essential_from_motion(pose, &E);
+        const double E00 = E(0, 0), E01 = E(0, 1), E02 = E(0, 2);
+        const double E10 = E(1, 0), E11 = E(1, 1), E12 = E(1, 2);
+        const double E20 = E(2, 0), E21 = E(2, 1), E22 = E(2, 2);
 
-        // Matrices contain the jacobians of E w.r.t. the rotation and translation parameters
-        Eigen::Matrix<double, 9, 3> dR;
+        // Matrix contains the jacobians of E w.r.t. the translation tangent parameters
         Eigen::Matrix<double, 9, 2> dt;
-
-        // Each column is vec(E*skew(e_k)) where e_k is k:th basis vector
-        dR.block<3, 1>(0, 0).setZero();
-        dR.block<3, 1>(0, 1) = -E.col(2);
-        dR.block<3, 1>(0, 2) = E.col(1);
-        dR.block<3, 1>(3, 0) = E.col(2);
-        dR.block<3, 1>(3, 1).setZero();
-        dR.block<3, 1>(3, 2) = -E.col(0);
-        dR.block<3, 1>(6, 0) = -E.col(1);
-        dR.block<3, 1>(6, 1) = E.col(0);
-        dR.block<3, 1>(6, 2).setZero();
-
-        // Each column is vec(skew(tangent_basis[k])*R)
         dt.block<3, 1>(0, 0) = tangent_basis.col(0).cross(R.col(0));
         dt.block<3, 1>(0, 1) = tangent_basis.col(1).cross(R.col(0));
         dt.block<3, 1>(3, 0) = tangent_basis.col(0).cross(R.col(1));
@@ -539,12 +563,16 @@ class RelativePoseJacobianAccumulator {
 
         size_t num_residuals = 0;
         for (size_t k = 0; k < x1.size(); ++k) {
-            double C = x2[k].homogeneous().dot(E * x1[k].homogeneous());
+            const double u1x = x1[k](0), u1y = x1[k](1);
+            const double u2x = x2[k](0), u2y = x2[k](1);
+            const double g2x = E00 * u1x + E01 * u1y + E02;
+            const double g2y = E10 * u1x + E11 * u1y + E12;
+            const double g2z = E20 * u1x + E21 * u1y + E22;
+            const double g1x = E00 * u2x + E10 * u2y + E20;
+            const double g1y = E01 * u2x + E11 * u2y + E21;
+            const double C = u2x * g2x + u2y * g2y + g2z;
 
-            // J_C is the Jacobian of the epipolar constraint w.r.t. the image points
-            Eigen::Vector4d J_C;
-            J_C << E.block<3, 2>(0, 0).transpose() * x2[k].homogeneous(), E.block<2, 3>(0, 0) * x1[k].homogeneous();
-            const double nJ_C = J_C.norm();
+            const double nJ_C = std::sqrt((g1x * g1x + g1y * g1y) + (g2x * g2x + g2y * g2y));
             const double inv_nJ_C = 1.0 / nJ_C;
             const double r = C * inv_nJ_C;
 
@@ -556,42 +584,50 @@ class RelativePoseJacobianAccumulator {
             num_residuals++;
 
             // Compute Jacobian of Sampson error w.r.t the fundamental/essential matrix (3x3)
-            Eigen::Matrix<double, 1, 9> dF;
-            dF << x1[k](0) * x2[k](0), x1[k](0) * x2[k](1), x1[k](0), x1[k](1) * x2[k](0), x1[k](1) * x2[k](1),
-                x1[k](1), x2[k](0), x2[k](1), 1.0;
             const double s = C * inv_nJ_C * inv_nJ_C;
-            dF(0) -= s * (J_C(2) * x1[k](0) + J_C(0) * x2[k](0));
-            dF(1) -= s * (J_C(3) * x1[k](0) + J_C(0) * x2[k](1));
-            dF(2) -= s * (J_C(0));
-            dF(3) -= s * (J_C(2) * x1[k](1) + J_C(1) * x2[k](0));
-            dF(4) -= s * (J_C(3) * x1[k](1) + J_C(1) * x2[k](1));
-            dF(5) -= s * (J_C(1));
-            dF(6) -= s * (J_C(2));
-            dF(7) -= s * (J_C(3));
-            dF *= inv_nJ_C;
+            const double dF0 = (u1x * u2x - s * (g2x * u1x + g1x * u2x)) * inv_nJ_C;
+            const double dF1 = (u1x * u2y - s * (g2y * u1x + g1x * u2y)) * inv_nJ_C;
+            const double dF2 = (u1x - s * g1x) * inv_nJ_C;
+            const double dF3 = (u1y * u2x - s * (g2x * u1y + g1y * u2x)) * inv_nJ_C;
+            const double dF4 = (u1y * u2y - s * (g2y * u1y + g1y * u2y)) * inv_nJ_C;
+            const double dF5 = (u1y - s * g1y) * inv_nJ_C;
+            const double dF6 = (u2x - s * g2x) * inv_nJ_C;
+            const double dF7 = (u2y - s * g2y) * inv_nJ_C;
+            const double dF8 = inv_nJ_C;
 
             // and then w.r.t. the pose parameters (rotation + tangent basis for translation)
-            Eigen::Matrix<double, 1, 5> J;
-            J.block<1, 3>(0, 0) = dF * dR;
-            J.block<1, 2>(0, 3) = dF * dt;
+            const double J0 = (dF3 * E02 + dF4 * E12 + dF5 * E22) - (dF6 * E01 + dF7 * E11 + dF8 * E21);
+            const double J1 = -(dF0 * E02 + dF1 * E12 + dF2 * E22) + (dF6 * E00 + dF7 * E10 + dF8 * E20);
+            const double J2 = (dF0 * E01 + dF1 * E11 + dF2 * E21) - (dF3 * E00 + dF4 * E10 + dF5 * E20);
+            const double J3 = dF0 * dt(0, 0) + dF1 * dt(1, 0) + dF2 * dt(2, 0) +
+                              dF3 * dt(3, 0) + dF4 * dt(4, 0) + dF5 * dt(5, 0) +
+                              dF6 * dt(6, 0) + dF7 * dt(7, 0) + dF8 * dt(8, 0);
+            const double J4 = dF0 * dt(0, 1) + dF1 * dt(1, 1) + dF2 * dt(2, 1) +
+                              dF3 * dt(3, 1) + dF4 * dt(4, 1) + dF5 * dt(5, 1) +
+                              dF6 * dt(6, 1) + dF7 * dt(7, 1) + dF8 * dt(8, 1);
 
             // Accumulate into JtJ and Jtr
-            Jtr += weight * C * inv_nJ_C * J.transpose();
-            JtJ(0, 0) += weight * (J(0) * J(0));
-            JtJ(1, 0) += weight * (J(1) * J(0));
-            JtJ(1, 1) += weight * (J(1) * J(1));
-            JtJ(2, 0) += weight * (J(2) * J(0));
-            JtJ(2, 1) += weight * (J(2) * J(1));
-            JtJ(2, 2) += weight * (J(2) * J(2));
-            JtJ(3, 0) += weight * (J(3) * J(0));
-            JtJ(3, 1) += weight * (J(3) * J(1));
-            JtJ(3, 2) += weight * (J(3) * J(2));
-            JtJ(3, 3) += weight * (J(3) * J(3));
-            JtJ(4, 0) += weight * (J(4) * J(0));
-            JtJ(4, 1) += weight * (J(4) * J(1));
-            JtJ(4, 2) += weight * (J(4) * J(2));
-            JtJ(4, 3) += weight * (J(4) * J(3));
-            JtJ(4, 4) += weight * (J(4) * J(4));
+            const double wr = weight * C * inv_nJ_C;
+            Jtr(0) += wr * J0;
+            Jtr(1) += wr * J1;
+            Jtr(2) += wr * J2;
+            Jtr(3) += wr * J3;
+            Jtr(4) += wr * J4;
+            JtJ(0, 0) += weight * (J0 * J0);
+            JtJ(1, 0) += weight * (J1 * J0);
+            JtJ(1, 1) += weight * (J1 * J1);
+            JtJ(2, 0) += weight * (J2 * J0);
+            JtJ(2, 1) += weight * (J2 * J1);
+            JtJ(2, 2) += weight * (J2 * J2);
+            JtJ(3, 0) += weight * (J3 * J0);
+            JtJ(3, 1) += weight * (J3 * J1);
+            JtJ(3, 2) += weight * (J3 * J2);
+            JtJ(3, 3) += weight * (J3 * J3);
+            JtJ(4, 0) += weight * (J4 * J0);
+            JtJ(4, 1) += weight * (J4 * J1);
+            JtJ(4, 2) += weight * (J4 * J2);
+            JtJ(4, 3) += weight * (J4 * J3);
+            JtJ(4, 4) += weight * (J4 * J4);
         }
         return num_residuals;
     }
@@ -630,17 +666,22 @@ class CalibratedRelativePoseJacobianAccumulator {
     double residual(const CameraPose &pose) const {
         Eigen::Matrix3d E;
         essential_from_motion(pose, &E);
+        const double E00 = E(0, 0), E01 = E(0, 1), E02 = E(0, 2);
+        const double E10 = E(1, 0), E11 = E(1, 1), E12 = E(1, 2);
+        const double E20 = E(2, 0), E21 = E(2, 1), E22 = E(2, 2);
 
         double cost = 0.0;
         for (size_t k = 0; k < x1.size(); ++k) {
-            const Eigen::Vector3d u1(x1[k](0), x1[k](1), 1.0);
-            const Eigen::Vector3d u2(x2[k](0), x2[k](1), 1.0);
-            const Eigen::Vector3d Eu1 = E * u1;
-            const double g1x = E(0, 0) * u2(0) + E(1, 0) * u2(1) + E(2, 0);
-            const double g1y = E(0, 1) * u2(0) + E(1, 1) * u2(1) + E(2, 1);
-            const double C = u2.dot(Eu1);
+            const double u1x = x1[k](0), u1y = x1[k](1);
+            const double u2x = x2[k](0), u2y = x2[k](1);
+            const double Eu1_0 = E00 * u1x + E01 * u1y + E02;
+            const double Eu1_1 = E10 * u1x + E11 * u1y + E12;
+            const double Eu1_2 = E20 * u1x + E21 * u1y + E22;
+            const double g1x = E00 * u2x + E10 * u2y + E20;
+            const double g1y = E01 * u2x + E11 * u2y + E21;
+            const double C = u2x * Eu1_0 + u2y * Eu1_1 + Eu1_2;
             const double nJc_sq = ax1_sq * g1x * g1x + ay1_sq * g1y * g1y +
-                                  ax2_sq * Eu1(0) * Eu1(0) + ay2_sq * Eu1(1) * Eu1(1);
+                                  ax2_sq * Eu1_0 * Eu1_0 + ay2_sq * Eu1_1 * Eu1_1;
             const double r2 = (C * C) / std::max(1e-24, nJc_sq);
             cost += weights[k] * loss_fn.loss(r2);
         }
@@ -666,19 +707,11 @@ class CalibratedRelativePoseJacobianAccumulator {
         Eigen::Matrix3d E, R;
         R = pose.R();
         essential_from_motion(pose, &E);
+        const double E00 = E(0, 0), E01 = E(0, 1), E02 = E(0, 2);
+        const double E10 = E(1, 0), E11 = E(1, 1), E12 = E(1, 2);
+        const double E20 = E(2, 0), E21 = E(2, 1), E22 = E(2, 2);
 
-        Eigen::Matrix<double, 9, 3> dR;
         Eigen::Matrix<double, 9, 2> dt;
-        dR.block<3, 1>(0, 0).setZero();
-        dR.block<3, 1>(0, 1) = -E.col(2);
-        dR.block<3, 1>(0, 2) = E.col(1);
-        dR.block<3, 1>(3, 0) = E.col(2);
-        dR.block<3, 1>(3, 1).setZero();
-        dR.block<3, 1>(3, 2) = -E.col(0);
-        dR.block<3, 1>(6, 0) = -E.col(1);
-        dR.block<3, 1>(6, 1) = E.col(0);
-        dR.block<3, 1>(6, 2).setZero();
-
         dt.block<3, 1>(0, 0) = tangent_basis.col(0).cross(R.col(0));
         dt.block<3, 1>(0, 1) = tangent_basis.col(1).cross(R.col(0));
         dt.block<3, 1>(3, 0) = tangent_basis.col(0).cross(R.col(1));
@@ -690,11 +723,11 @@ class CalibratedRelativePoseJacobianAccumulator {
         for (size_t k = 0; k < x1.size(); ++k) {
             const double u1x = x1[k](0), u1y = x1[k](1);
             const double u2x = x2[k](0), u2y = x2[k](1);
-            const double g2x = E(0, 0) * u1x + E(0, 1) * u1y + E(0, 2);
-            const double g2y = E(1, 0) * u1x + E(1, 1) * u1y + E(1, 2);
-            const double g2z = E(2, 0) * u1x + E(2, 1) * u1y + E(2, 2);
-            const double g1x = E(0, 0) * u2x + E(1, 0) * u2y + E(2, 0);
-            const double g1y = E(0, 1) * u2x + E(1, 1) * u2y + E(2, 1);
+            const double g2x = E00 * u1x + E01 * u1y + E02;
+            const double g2y = E10 * u1x + E11 * u1y + E12;
+            const double g2z = E20 * u1x + E21 * u1y + E22;
+            const double g1x = E00 * u2x + E10 * u2y + E20;
+            const double g1y = E01 * u2x + E11 * u2y + E21;
             const double C = u2x * g2x + u2y * g2y + g2z;
 
             const double j0 = ax1_sq * g1x;
@@ -714,39 +747,48 @@ class CalibratedRelativePoseJacobianAccumulator {
             }
             num_residuals++;
 
-            Eigen::Matrix<double, 1, 9> dF;
-            dF << u1x * u2x, u1x * u2y, u1x, u1y * u2x, u1y * u2y, u1y, u2x, u2y, 1.0;
             const double s = C * inv_nJ_C * inv_nJ_C;
-            dF(0) -= s * (j2 * u1x + j0 * u2x);
-            dF(1) -= s * (j3 * u1x + j0 * u2y);
-            dF(2) -= s * j0;
-            dF(3) -= s * (j2 * u1y + j1 * u2x);
-            dF(4) -= s * (j3 * u1y + j1 * u2y);
-            dF(5) -= s * j1;
-            dF(6) -= s * j2;
-            dF(7) -= s * j3;
-            dF *= inv_nJ_C;
+            const double dF0 = (u1x * u2x - s * (j2 * u1x + j0 * u2x)) * inv_nJ_C;
+            const double dF1 = (u1x * u2y - s * (j3 * u1x + j0 * u2y)) * inv_nJ_C;
+            const double dF2 = (u1x - s * j0) * inv_nJ_C;
+            const double dF3 = (u1y * u2x - s * (j2 * u1y + j1 * u2x)) * inv_nJ_C;
+            const double dF4 = (u1y * u2y - s * (j3 * u1y + j1 * u2y)) * inv_nJ_C;
+            const double dF5 = (u1y - s * j1) * inv_nJ_C;
+            const double dF6 = (u2x - s * j2) * inv_nJ_C;
+            const double dF7 = (u2y - s * j3) * inv_nJ_C;
+            const double dF8 = inv_nJ_C;
 
-            Eigen::Matrix<double, 1, 5> J;
-            J.block<1, 3>(0, 0) = dF * dR;
-            J.block<1, 2>(0, 3) = dF * dt;
+            const double J0 = (dF3 * E02 + dF4 * E12 + dF5 * E22) - (dF6 * E01 + dF7 * E11 + dF8 * E21);
+            const double J1 = -(dF0 * E02 + dF1 * E12 + dF2 * E22) + (dF6 * E00 + dF7 * E10 + dF8 * E20);
+            const double J2 = (dF0 * E01 + dF1 * E11 + dF2 * E21) - (dF3 * E00 + dF4 * E10 + dF5 * E20);
+            const double J3 = dF0 * dt(0, 0) + dF1 * dt(1, 0) + dF2 * dt(2, 0) +
+                              dF3 * dt(3, 0) + dF4 * dt(4, 0) + dF5 * dt(5, 0) +
+                              dF6 * dt(6, 0) + dF7 * dt(7, 0) + dF8 * dt(8, 0);
+            const double J4 = dF0 * dt(0, 1) + dF1 * dt(1, 1) + dF2 * dt(2, 1) +
+                              dF3 * dt(3, 1) + dF4 * dt(4, 1) + dF5 * dt(5, 1) +
+                              dF6 * dt(6, 1) + dF7 * dt(7, 1) + dF8 * dt(8, 1);
 
-            Jtr += weight * r * J.transpose();
-            JtJ(0, 0) += weight * (J(0) * J(0));
-            JtJ(1, 0) += weight * (J(1) * J(0));
-            JtJ(1, 1) += weight * (J(1) * J(1));
-            JtJ(2, 0) += weight * (J(2) * J(0));
-            JtJ(2, 1) += weight * (J(2) * J(1));
-            JtJ(2, 2) += weight * (J(2) * J(2));
-            JtJ(3, 0) += weight * (J(3) * J(0));
-            JtJ(3, 1) += weight * (J(3) * J(1));
-            JtJ(3, 2) += weight * (J(3) * J(2));
-            JtJ(3, 3) += weight * (J(3) * J(3));
-            JtJ(4, 0) += weight * (J(4) * J(0));
-            JtJ(4, 1) += weight * (J(4) * J(1));
-            JtJ(4, 2) += weight * (J(4) * J(2));
-            JtJ(4, 3) += weight * (J(4) * J(3));
-            JtJ(4, 4) += weight * (J(4) * J(4));
+            const double wr = weight * r;
+            Jtr(0) += wr * J0;
+            Jtr(1) += wr * J1;
+            Jtr(2) += wr * J2;
+            Jtr(3) += wr * J3;
+            Jtr(4) += wr * J4;
+            JtJ(0, 0) += weight * (J0 * J0);
+            JtJ(1, 0) += weight * (J1 * J0);
+            JtJ(1, 1) += weight * (J1 * J1);
+            JtJ(2, 0) += weight * (J2 * J0);
+            JtJ(2, 1) += weight * (J2 * J1);
+            JtJ(2, 2) += weight * (J2 * J2);
+            JtJ(3, 0) += weight * (J3 * J0);
+            JtJ(3, 1) += weight * (J3 * J1);
+            JtJ(3, 2) += weight * (J3 * J2);
+            JtJ(3, 3) += weight * (J3 * J3);
+            JtJ(4, 0) += weight * (J4 * J0);
+            JtJ(4, 1) += weight * (J4 * J1);
+            JtJ(4, 2) += weight * (J4 * J2);
+            JtJ(4, 3) += weight * (J4 * J3);
+            JtJ(4, 4) += weight * (J4 * J4);
         }
         return num_residuals;
     }
@@ -1308,15 +1350,24 @@ class FundamentalJacobianAccumulator {
         : x1(points2D_1), x2(points2D_2), loss_fn(l), weights(w) {}
 
     double residual(const FactorizedFundamentalMatrix &FF) const {
-        Eigen::Matrix3d F = FF.F();
+        const Eigen::Matrix3d F = FF.F();
+        const double F00 = F(0, 0), F01 = F(0, 1), F02 = F(0, 2);
+        const double F10 = F(1, 0), F11 = F(1, 1), F12 = F(1, 2);
+        const double F20 = F(2, 0), F21 = F(2, 1), F22 = F(2, 2);
 
         double cost = 0.0;
         for (size_t k = 0; k < x1.size(); ++k) {
-            double C = x2[k].homogeneous().dot(F * x1[k].homogeneous());
-            double nJc_sq = (F.block<2, 3>(0, 0) * x1[k].homogeneous()).squaredNorm() +
-                            (F.block<3, 2>(0, 0).transpose() * x2[k].homogeneous()).squaredNorm();
+            const double u1x = x1[k](0), u1y = x1[k](1);
+            const double u2x = x2[k](0), u2y = x2[k](1);
+            const double Fx1_0 = F00 * u1x + F01 * u1y + F02;
+            const double Fx1_1 = F10 * u1x + F11 * u1y + F12;
+            const double Fx1_2 = F20 * u1x + F21 * u1y + F22;
+            const double Ftx2_0 = F00 * u2x + F10 * u2y + F20;
+            const double Ftx2_1 = F01 * u2x + F11 * u2y + F21;
+            const double C = u2x * Fx1_0 + u2y * Fx1_1 + Fx1_2;
+            const double nJc_sq = (Fx1_0 * Fx1_0 + Fx1_1 * Fx1_1) + (Ftx2_0 * Ftx2_0 + Ftx2_1 * Ftx2_1);
 
-            double r2 = (C * C) / nJc_sq;
+            const double r2 = (C * C) / nJc_sq;
             cost += weights[k] * loss_fn.loss(r2);
         }
 
@@ -1327,28 +1378,31 @@ class FundamentalJacobianAccumulator {
                       Eigen::Matrix<double, 7, 1> &Jtr) const {
 
         const Eigen::Matrix3d F = FF.F();
+        const double F00 = F(0, 0), F01 = F(0, 1), F02 = F(0, 2);
+        const double F10 = F(1, 0), F11 = F(1, 1), F12 = F(1, 2);
+        const double F20 = F(2, 0), F21 = F(2, 1), F22 = F(2, 2);
 
         // Matrices contain the jacobians of F w.r.t. the factorized fundamental matrix (U,V,sigma)
         const Eigen::Matrix3d U = quat_to_rotmat(FF.qU);
         const Eigen::Matrix3d V = quat_to_rotmat(FF.qV);
 
         const Eigen::Matrix3d d_sigma = U.col(1) * V.col(1).transpose();
-        Eigen::Matrix<double, 9, 7> dF_dparams;
-        dF_dparams << 0, F(2, 0), -F(1, 0), 0, F(0, 2), -F(0, 1), d_sigma(0, 0), -F(2, 0), 0, F(0, 0), 0, F(1, 2),
-            -F(1, 1), d_sigma(1, 0), F(1, 0), -F(0, 0), 0, 0, F(2, 2), -F(2, 1), d_sigma(2, 0), 0, F(2, 1), -F(1, 1),
-            -F(0, 2), 0, F(0, 0), d_sigma(0, 1), -F(2, 1), 0, F(0, 1), -F(1, 2), 0, F(1, 0), d_sigma(1, 1), F(1, 1),
-            -F(0, 1), 0, -F(2, 2), 0, F(2, 0), d_sigma(2, 1), 0, F(2, 2), -F(1, 2), F(0, 1), -F(0, 0), 0, d_sigma(0, 2),
-            -F(2, 2), 0, F(0, 2), F(1, 1), -F(1, 0), 0, d_sigma(1, 2), F(1, 2), -F(0, 2), 0, F(2, 1), -F(2, 0), 0,
-            d_sigma(2, 2);
+        const double ds0 = d_sigma(0, 0), ds1 = d_sigma(1, 0), ds2 = d_sigma(2, 0);
+        const double ds3 = d_sigma(0, 1), ds4 = d_sigma(1, 1), ds5 = d_sigma(2, 1);
+        const double ds6 = d_sigma(0, 2), ds7 = d_sigma(1, 2), ds8 = d_sigma(2, 2);
 
         size_t num_residuals = 0;
         for (size_t k = 0; k < x1.size(); ++k) {
-            const double C = x2[k].homogeneous().dot(F * x1[k].homogeneous());
+            const double u1x = x1[k](0), u1y = x1[k](1);
+            const double u2x = x2[k](0), u2y = x2[k](1);
+            const double g2x = F00 * u1x + F01 * u1y + F02;
+            const double g2y = F10 * u1x + F11 * u1y + F12;
+            const double g2z = F20 * u1x + F21 * u1y + F22;
+            const double g1x = F00 * u2x + F10 * u2y + F20;
+            const double g1y = F01 * u2x + F11 * u2y + F21;
+            const double C = u2x * g2x + u2y * g2y + g2z;
 
-            // J_C is the Jacobian of the epipolar constraint w.r.t. the image points
-            Eigen::Vector4d J_C;
-            J_C << F.block<3, 2>(0, 0).transpose() * x2[k].homogeneous(), F.block<2, 3>(0, 0) * x1[k].homogeneous();
-            const double nJ_C = J_C.norm();
+            const double nJ_C = std::sqrt((g1x * g1x + g1y * g1y) + (g2x * g2x + g2y * g2y));
             const double inv_nJ_C = 1.0 / nJ_C;
             const double r = C * inv_nJ_C;
 
@@ -1359,31 +1413,67 @@ class FundamentalJacobianAccumulator {
             }
             num_residuals++;
 
-            // Compute Jacobian of Sampson error w.r.t the fundamental/essential matrix (3x3)
-            Eigen::Matrix<double, 1, 9> dF;
-            dF << x1[k](0) * x2[k](0), x1[k](0) * x2[k](1), x1[k](0), x1[k](1) * x2[k](0), x1[k](1) * x2[k](1),
-                x1[k](1), x2[k](0), x2[k](1), 1.0;
+            // Compute Jacobian of Sampson error w.r.t the fundamental matrix (3x3)
             const double s = C * inv_nJ_C * inv_nJ_C;
-            dF(0) -= s * (J_C(2) * x1[k](0) + J_C(0) * x2[k](0));
-            dF(1) -= s * (J_C(3) * x1[k](0) + J_C(0) * x2[k](1));
-            dF(2) -= s * (J_C(0));
-            dF(3) -= s * (J_C(2) * x1[k](1) + J_C(1) * x2[k](0));
-            dF(4) -= s * (J_C(3) * x1[k](1) + J_C(1) * x2[k](1));
-            dF(5) -= s * (J_C(1));
-            dF(6) -= s * (J_C(2));
-            dF(7) -= s * (J_C(3));
-            dF *= inv_nJ_C;
+            const double dF0 = (u1x * u2x - s * (g2x * u1x + g1x * u2x)) * inv_nJ_C;
+            const double dF1 = (u1x * u2y - s * (g2y * u1x + g1x * u2y)) * inv_nJ_C;
+            const double dF2 = (u1x - s * g1x) * inv_nJ_C;
+            const double dF3 = (u1y * u2x - s * (g2x * u1y + g1y * u2x)) * inv_nJ_C;
+            const double dF4 = (u1y * u2y - s * (g2y * u1y + g1y * u2y)) * inv_nJ_C;
+            const double dF5 = (u1y - s * g1y) * inv_nJ_C;
+            const double dF6 = (u2x - s * g2x) * inv_nJ_C;
+            const double dF7 = (u2y - s * g2y) * inv_nJ_C;
+            const double dF8 = inv_nJ_C;
 
-            // and then w.r.t. the pose parameters (rotation + tangent basis for translation)
-            Eigen::Matrix<double, 1, 7> J = dF * dF_dparams;
+            // Exploit the 18 structural zeros in the 9x7 dF_dparams matrix
+            const double J0 = (-F20 * dF1 + F10 * dF2) + (-F21 * dF4 + F11 * dF5) + (-F22 * dF7 + F12 * dF8);
+            const double J1 = (F20 * dF0 - F00 * dF2) + (F21 * dF3 - F01 * dF5) + (F22 * dF6 - F02 * dF8);
+            const double J2 = (-F10 * dF0 + F00 * dF1) + (-F11 * dF3 + F01 * dF4) + (-F12 * dF6 + F02 * dF7);
+            const double J3 = -(F02 * dF3 + F12 * dF4 + F22 * dF5) + (F01 * dF6 + F11 * dF7 + F21 * dF8);
+            const double J4 = (F02 * dF0 + F12 * dF1 + F22 * dF2) - (F00 * dF6 + F10 * dF7 + F20 * dF8);
+            const double J5 = -(F01 * dF0 + F11 * dF1 + F21 * dF2) + (F00 * dF3 + F10 * dF4 + F20 * dF5);
+            const double J6 = ds0 * dF0 + ds1 * dF1 + ds2 * dF2 +
+                              ds3 * dF3 + ds4 * dF4 + ds5 * dF5 +
+                              ds6 * dF6 + ds7 * dF7 + ds8 * dF8;
 
             // Accumulate into JtJ and Jtr
-            Jtr += weight * C * inv_nJ_C * J.transpose();
-            for (size_t i = 0; i < 7; ++i) {
-                for (size_t j = 0; j <= i; ++j) {
-                    JtJ(i, j) += weight * (J(i) * J(j));
-                }
-            }
+            const double wr = weight * C * inv_nJ_C;
+            Jtr(0) += wr * J0;
+            Jtr(1) += wr * J1;
+            Jtr(2) += wr * J2;
+            Jtr(3) += wr * J3;
+            Jtr(4) += wr * J4;
+            Jtr(5) += wr * J5;
+            Jtr(6) += wr * J6;
+
+            JtJ(0, 0) += weight * (J0 * J0);
+            JtJ(1, 0) += weight * (J1 * J0);
+            JtJ(1, 1) += weight * (J1 * J1);
+            JtJ(2, 0) += weight * (J2 * J0);
+            JtJ(2, 1) += weight * (J2 * J1);
+            JtJ(2, 2) += weight * (J2 * J2);
+            JtJ(3, 0) += weight * (J3 * J0);
+            JtJ(3, 1) += weight * (J3 * J1);
+            JtJ(3, 2) += weight * (J3 * J2);
+            JtJ(3, 3) += weight * (J3 * J3);
+            JtJ(4, 0) += weight * (J4 * J0);
+            JtJ(4, 1) += weight * (J4 * J1);
+            JtJ(4, 2) += weight * (J4 * J2);
+            JtJ(4, 3) += weight * (J4 * J3);
+            JtJ(4, 4) += weight * (J4 * J4);
+            JtJ(5, 0) += weight * (J5 * J0);
+            JtJ(5, 1) += weight * (J5 * J1);
+            JtJ(5, 2) += weight * (J5 * J2);
+            JtJ(5, 3) += weight * (J5 * J3);
+            JtJ(5, 4) += weight * (J5 * J4);
+            JtJ(5, 5) += weight * (J5 * J5);
+            JtJ(6, 0) += weight * (J6 * J0);
+            JtJ(6, 1) += weight * (J6 * J1);
+            JtJ(6, 2) += weight * (J6 * J2);
+            JtJ(6, 3) += weight * (J6 * J3);
+            JtJ(6, 4) += weight * (J6 * J4);
+            JtJ(6, 5) += weight * (J6 * J5);
+            JtJ(6, 6) += weight * (J6 * J6);
         }
         return num_residuals;
     }
@@ -1446,7 +1536,6 @@ class HomographyJacobianAccumulator {
     }
 
     size_t accumulate(const Eigen::Matrix3d &H, Eigen::Matrix<double, 8, 8> &JtJ, Eigen::Matrix<double, 8, 1> &Jtr) {
-        Eigen::Matrix<double, 2, 8> dH;
         const double H0_0 = H(0, 0), H0_1 = H(0, 1), H0_2 = H(0, 2);
         const double H1_0 = H(1, 0), H1_1 = H(1, 1), H1_2 = H(1, 2);
         const double H2_0 = H(2, 0), H2_1 = H(2, 1), H2_2 = H(2, 2);
@@ -1461,10 +1550,10 @@ class HomographyJacobianAccumulator {
             const double denom = H2_0 * x1_0 + H2_1 * x1_1 + H2_2;
             if (std::abs(denom) < 1e-12)
                 continue;
-            const double inv_Hx1_2 = 1.0 / denom;
+            const double s = 1.0 / denom;
 
-            const double z0 = Hx1_0 * inv_Hx1_2;
-            const double z1 = Hx1_1 * inv_Hx1_2;
+            const double z0 = Hx1_0 * s;
+            const double z1 = Hx1_1 * s;
 
             const double r0 = z0 - x2_0;
             const double r1 = z1 - x2_1;
@@ -1476,17 +1565,61 @@ class HomographyJacobianAccumulator {
                 continue;
             num_residuals++;
 
-            dH << x1_0, 0.0, -x1_0 * z0, x1_1, 0.0, -x1_1 * z0, 1.0, 0.0, // -z0,
-                0.0, x1_0, -x1_0 * z1, 0.0, x1_1, -x1_1 * z1, 0.0, 1.0;   // -z1,
-            dH = dH * inv_Hx1_2;
+            // Closed-form accumulation exploiting the 6 structural zeros of the 2x8 Jacobian dH:
+            //   row 0 = [ a0,  0, c2_0, a3,  0, c5_0, s, 0 ]
+            //   row 1 = [  0, a0, c2_1,  0, a3, c5_1, 0, s ]
+            const double a0 = x1_0 * s;
+            const double a3 = x1_1 * s;
+            const double c2_0 = (-x1_0 * z0) * s;
+            const double c2_1 = (-x1_0 * z1) * s;
+            const double c5_0 = (-x1_1 * z0) * s;
+            const double c5_1 = (-x1_1 * z1) * s;
 
-            // accumulate into JtJ and Jtr
-            Jtr += dH.transpose() * (weight * Eigen::Vector2d(r0, r1));
-            for (size_t i = 0; i < 8; ++i) {
-                for (size_t j = 0; j <= i; ++j) {
-                    JtJ(i, j) += weight * dH.col(i).dot(dH.col(j));
-                }
-            }
+            const double wr0 = weight * r0;
+            const double wr1 = weight * r1;
+            Jtr(0) += a0 * wr0;
+            Jtr(1) += a0 * wr1;
+            Jtr(2) += c2_0 * wr0 + c2_1 * wr1;
+            Jtr(3) += a3 * wr0;
+            Jtr(4) += a3 * wr1;
+            Jtr(5) += c5_0 * wr0 + c5_1 * wr1;
+            Jtr(6) += s * wr0;
+            Jtr(7) += s * wr1;
+
+            const double w00 = weight * (a0 * a0);
+            const double w30 = weight * (a3 * a0);
+            const double w33 = weight * (a3 * a3);
+            const double w60 = weight * (s * a0);
+            const double w63 = weight * (s * a3);
+            const double w66 = weight * (s * s);
+
+            JtJ(0, 0) += w00;
+            JtJ(1, 1) += w00;
+            JtJ(2, 0) += weight * (c2_0 * a0);
+            JtJ(2, 1) += weight * (c2_1 * a0);
+            JtJ(2, 2) += weight * (c2_0 * c2_0 + c2_1 * c2_1);
+            JtJ(3, 0) += w30;
+            JtJ(3, 2) += weight * (a3 * c2_0);
+            JtJ(3, 3) += w33;
+            JtJ(4, 1) += w30;
+            JtJ(4, 2) += weight * (a3 * c2_1);
+            JtJ(4, 4) += w33;
+            JtJ(5, 0) += weight * (c5_0 * a0);
+            JtJ(5, 1) += weight * (c5_1 * a0);
+            JtJ(5, 2) += weight * (c5_0 * c2_0 + c5_1 * c2_1);
+            JtJ(5, 3) += weight * (c5_0 * a3);
+            JtJ(5, 4) += weight * (c5_1 * a3);
+            JtJ(5, 5) += weight * (c5_0 * c5_0 + c5_1 * c5_1);
+            JtJ(6, 0) += w60;
+            JtJ(6, 2) += weight * (s * c2_0);
+            JtJ(6, 3) += w63;
+            JtJ(6, 5) += weight * (s * c5_0);
+            JtJ(6, 6) += w66;
+            JtJ(7, 1) += w60;
+            JtJ(7, 2) += weight * (s * c2_1);
+            JtJ(7, 4) += w63;
+            JtJ(7, 5) += weight * (s * c5_1);
+            JtJ(7, 7) += w66;
         }
         return num_residuals;
     }

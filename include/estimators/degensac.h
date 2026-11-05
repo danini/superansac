@@ -227,7 +227,8 @@ namespace superansac
 
 			// Collect the homography's inliers across all points (or candidateInliers_)
 			const size_t kPointNumber = kData_.rows();
-			std::vector<size_t> homographyInliers;
+			static thread_local std::vector<size_t> homographyInliers;
+			homographyInliers.clear();
 			homographyInliers.reserve(candidateInliers_.size());
 			for (const size_t &kInlierIdx : candidateInliers_)
 				if (squaredHomographyReprojectionError(
@@ -240,7 +241,8 @@ namespace superansac
 				return true;
 
 			// Fit the homography to all of its inliers
-			std::vector<models::Model> homographies;
+			static thread_local std::vector<models::Model> homographies;
+			homographies.clear();
 			if (!kHomographySolver.estimateModel(kData_,
 					homographyInliers.data(),
 					homographyInliers.size(),
@@ -262,7 +264,8 @@ namespace superansac
 			if (kPointNumber < 2)
 				return true;
 
-			std::vector<size_t> offPlanePool;
+			static thread_local std::vector<size_t> offPlanePool;
+			offPlanePool.clear();
 			offPlanePool.reserve(kPointNumber);
 			for (size_t idx = 0; idx < kPointNumber; ++idx)
 			{
@@ -278,9 +281,12 @@ namespace superansac
 
 			bool updated = false;
 			size_t sample[2];
-			std::vector<models::Model> candidateModels;
-			std::vector<size_t> candidateInliers,
+			static thread_local std::vector<models::Model> candidateModels;
+			static thread_local std::vector<size_t> candidateInliers,
 				bestCandidateInliers;
+			candidateModels.clear();
+			candidateInliers.clear();
+			bestCandidateInliers.clear();
 			candidateInliers.reserve(kPointNumber);
 			bestCandidateInliers.reserve(kPointNumber);
 			models::Model bestCandidateModel;

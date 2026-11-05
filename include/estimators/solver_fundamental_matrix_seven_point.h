@@ -148,75 +148,104 @@ namespace superansac
                 std::vector<models::Model> &models_, // The estimated model parameters
                 const double *kWeights_) const // The weight for each point
 			{
-				constexpr size_t kEquationNumber = 1;
-				Eigen::Matrix<double, 7, 9> coefficients;
+				Eigen::Matrix<double, 7, 9> A;
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double * __restrict__ kBase = kData_.data();
 
-				size_t rowIdx = 0;
-				double weight = 1.0;
-                
-				for (size_t i = 0; i < kSampleNumber_; ++i)
+				if (kWeights_ == nullptr)
 				{
-					const size_t idx =
-						kSample_ == nullptr ? i : kSample_[i];
-
-					const double
-						&x0 = kData_(idx, 0),
-						&y0 = kData_(idx, 1),
-						&x1 = kData_(idx, 2),
-						&y1 = kData_(idx, 3);
-
-					// If not weighted least-squares is applied
-					if (kWeights_ == nullptr)
+					for (Eigen::Index i = 0; i < 7; ++i)
 					{
-						coefficients(rowIdx, 0) = x1 * x0;
-						coefficients(rowIdx, 1) = x1 * y0;
-						coefficients(rowIdx, 2) = x1;
-						coefficients(rowIdx, 3) = y1 * x0;
-						coefficients(rowIdx, 4) = y1 * y0;
-						coefficients(rowIdx, 5) = y1;
-						coefficients(rowIdx, 6) = x0;
-						coefficients(rowIdx, 7) = y0;
-						coefficients(rowIdx, 8) = 1;
+						const size_t idx = (kSample_ == nullptr) ? static_cast<size_t>(i) : kSample_[i];
+						const double * __restrict__ row = kBase + idx * kCols;
+						const double x0 = row[0], y0 = row[1], x1 = row[2], y1 = row[3];
+						A(i, 0) = x1 * x0;
+						A(i, 1) = x1 * y0;
+						A(i, 2) = x1;
+						A(i, 3) = y1 * x0;
+						A(i, 4) = y1 * y0;
+						A(i, 5) = y1;
+						A(i, 6) = x0;
+						A(i, 7) = y0;
+						A(i, 8) = 1.0;
 					}
-					else
+				}
+				else
+				{
+					for (Eigen::Index i = 0; i < 7; ++i)
 					{
-						// If weighted least-squares is applied
-						weight = kWeights_[i];
-
-						// Precalculate these values to avoid calculating them multiple times
-						const double
-							kWeightTimesX0 = weight * x0,
-							kWeightTimesY0 = weight * y0,
-							kWeightTimesX1 = weight * x1,
-							kWeightTimesY1 = weight * y1;
-
-						coefficients(rowIdx, 0) = kWeightTimesX1 * x0;
-						coefficients(rowIdx, 1) = kWeightTimesX1 * y0;
-						coefficients(rowIdx, 2) = kWeightTimesX1;
-						coefficients(rowIdx, 3) = kWeightTimesY1 * x0;
-						coefficients(rowIdx, 4) = kWeightTimesY1 * y0;
-						coefficients(rowIdx, 5) = kWeightTimesY1;
-						coefficients(rowIdx, 6) = kWeightTimesX0;
-						coefficients(rowIdx, 7) = kWeightTimesY0;
-						coefficients(rowIdx, 8) = weight;
+						const size_t idx = (kSample_ == nullptr) ? static_cast<size_t>(i) : kSample_[i];
+						const double * __restrict__ row = kBase + idx * kCols;
+						const double x0 = row[0], y0 = row[1], x1 = row[2], y1 = row[3];
+						const double weight = kWeights_[i];
+						const double wx0 = weight * x0, wy0 = weight * y0;
+						const double wx1 = weight * x1, wy1 = weight * y1;
+						A(i, 0) = wx1 * x0;
+						A(i, 1) = wx1 * y0;
+						A(i, 2) = wx1;
+						A(i, 3) = wy1 * x0;
+						A(i, 4) = wy1 * y0;
+						A(i, 5) = wy1;
+						A(i, 6) = wx0;
+						A(i, 7) = wy0;
+						A(i, 8) = weight;
 					}
-					++rowIdx;
 				}
 
-				// The null-space of the matrix is the solution of the problem
-				Eigen::Matrix<double, 9, 1> f1, f2;
+				// Exact stack-allocated 7x9 full-pivoting LU + 7x2 upper-triangular back-substitution
+				// matching Eigen::FullPivLU<Matrix<double, 7, 9>>::kernel() ColMajor SIMD arithmetic,
+				// pivot selection, rank check, and column permutation without dynamic BLAS overhead.
+				int colPerm[9] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+				double maxPivot = 0.0;
+				int nonzeroPivots = 7;
+				for (Eigen::Index k = 0; k < 7; ++k)
+				{
+					Eigen::Index rowOfBiggest = 0, colOfBiggest = 0;
+					const double biggest = A.bottomRightCorner(7 - k, 9 - k).cwiseAbs().maxCoeff(&rowOfBiggest, &colOfBiggest);
+					rowOfBiggest += k;
+					colOfBiggest += k;
+					if (biggest == 0.0)
+					{
+						nonzeroPivots = static_cast<int>(k);
+						break;
+					}
+					if (biggest > maxPivot)
+						maxPivot = biggest;
 
-				// For the minimal problem, the matrix is small and, thus, fullPivLu decomposition is significantly
-				// faster than both JacobiSVD and BDCSVD methods.
-				// https://eigen.tuxfamily.org/dox/group__DenseDecompositionBenchmark.html
-				// The fixed-size decomposition runs the same pivoting/arithmetic as the
-				// dynamic one but without heap allocations.
-				const Eigen::FullPivLU<Eigen::Matrix<double, 7, 9>> lu(coefficients);
-				if (lu.dimensionOfKernel() != 2) 
+					if (k != rowOfBiggest)
+						A.row(k).swap(A.row(rowOfBiggest));
+					if (k != colOfBiggest)
+					{
+						A.col(k).swap(A.col(colOfBiggest));
+						std::swap(colPerm[k], colPerm[colOfBiggest]);
+					}
+					if (k < 6)
+					{
+						A.col(k).tail(6 - k) /= A.coeff(k, k);
+						A.bottomRightCorner(6 - k, 8 - k).noalias() -= A.col(k).tail(6 - k) * A.row(k).tail(8 - k);
+					}
+				}
+
+				if (nonzeroPivots != 7)
 					return false;
+				const double rankThreshold = maxPivot * (7.0 * std::numeric_limits<double>::epsilon());
+				for (Eigen::Index i = 0; i < 7; ++i)
+				{
+					if (!(std::abs(A.coeff(i, i)) > rankThreshold))
+						return false;
+				}
 
-				const Eigen::Matrix<double, 9, 2> N = 
-					lu.kernel();
+				Eigen::Matrix<double, 7, 2> B = A.topRightCorner<7, 2>();
+				A.topLeftCorner<7, 7>().triangularView<Eigen::Upper>().solveInPlace(B);
+
+				Eigen::Matrix<double, 9, 2> N;
+				for (int i = 0; i < 7; ++i)
+				{
+					N(colPerm[i], 0) = -B(i, 0);
+					N(colPerm[i], 1) = -B(i, 1);
+				}
+				N(colPerm[7], 0) = 1.0; N(colPerm[7], 1) = 0.0;
+				N(colPerm[8], 0) = 0.0; N(colPerm[8], 1) = 1.0;
 
 				// coefficients for det(F(x)) = 0
 				const double c3 = N(0, 0) * N(4, 0) * N(8, 0) - N(0, 0) * N(5, 0) * N(7, 0) - N(1, 0) * N(3, 0) * N(8, 0) +

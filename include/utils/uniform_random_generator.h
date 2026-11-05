@@ -108,7 +108,8 @@ public:
                                               const _Type maxv,
                                               const _Type toSkip) {
         // draw k+1 then drop toSkip if present
-        std::vector<_Type> tmp((size_t)k + 1);
+        static thread_local std::vector<_Type> tmp;
+        tmp.resize((size_t)k + 1);
         choose_without_replacement(tmp.data(), (uint64_t)k + 1, (uint64_t)maxv + 1);
         size_t w = 0;
         for (auto v : tmp) if (v != toSkip && w < (size_t)k) sample[w++] = v;
@@ -121,38 +122,127 @@ public:
     }
 
 private:
+    // Zero-allocation flat hash table matching std::unordered_set<uint64_t>
+    // (after reserve(k * 3)) bucket structure and iteration order bit-for-bit,
+    // avoiding per-iteration node new/delete and unordered_map lookups.
+    struct FlatHashSetSlot {
+        size_t bucketCount = 0;
+        uint32_t gen = 1;
+        std::vector<uint32_t> bucketGen;
+        std::vector<int> bucketPrev;
+        std::vector<int> next;
+        std::vector<uint64_t> val;
+        std::vector<size_t> bkt;
+        int size = 0;
+
+        void init(uint64_t k) {
+            std::unordered_set<uint64_t> tmp;
+            tmp.reserve((size_t)k * 3);
+            bucketCount = tmp.bucket_count();
+            bucketGen.assign(bucketCount, 0);
+            bucketPrev.resize(bucketCount);
+            next.resize((size_t)k + 2);
+            val.resize((size_t)k + 2);
+            bkt.resize((size_t)k + 2);
+            gen = 1;
+            next[0] = -1;
+            size = 0;
+        }
+
+        FORCE_INLINE void clear() {
+            ++gen;
+            if (gen == 0) {
+                std::fill(bucketGen.begin(), bucketGen.end(), 0);
+                gen = 1;
+            }
+            next[0] = -1;
+            size = 0;
+        }
+
+        FORCE_INLINE bool insert(uint64_t v) {
+            const size_t b = std::hash<uint64_t>{}(v) % bucketCount;
+            if (bucketGen[b] == gen) {
+                const int prev = bucketPrev[b];
+                for (int p = next[prev]; p != -1 && bkt[p] == b; p = next[p]) {
+                    if (val[p] == v) return false;
+                }
+                const int u = ++size;
+                val[u] = v;
+                bkt[u] = b;
+                next[u] = next[prev];
+                next[prev] = u;
+                return true;
+            } else {
+                const int u = ++size;
+                val[u] = v;
+                bkt[u] = b;
+                const int oldHead = next[0];
+                if (oldHead != -1) {
+                    bucketPrev[bkt[oldHead]] = u;
+                }
+                next[u] = oldHead;
+                next[0] = u;
+                bucketGen[b] = gen;
+                bucketPrev[b] = 0;
+                return true;
+            }
+        }
+    };
+
     // Choose k values from [0, N) without replacement into sample (unordered)
     FORCE_INLINE void choose_without_replacement(_Type* sample, uint64_t k, uint64_t N) {
+        if (k == 0) return;
         if (k * 8ull <= N) { // Floyd for sparse case
-            // One reusable set per k, so this per-iteration call does not allocate.
-            // The output order is the unordered_set's iteration order, which for a
-            // given insertion sequence depends only on the bucket count; clear()
-            // preserves the buckets, and caching per k keeps the bucket count equal
-            // to that of a fresh set with reserve(k * 3) -- so the produced samples
-            // are identical to the previous fresh-set version.
-            static thread_local std::unordered_map<uint64_t, std::unordered_set<uint64_t>> setsByK;
-            auto [it, isNew] = setsByK.try_emplace(k);
-            std::unordered_set<uint64_t>& S = it->second;
-            if (isNew)
-                // Reserve more space to avoid rehashing: k * 3 ensures load factor stays below 0.66
-                S.reserve((size_t)k * 3);
-            else
-                S.clear();
+            static constexpr size_t kDirectMax = 128;
+            static thread_local FlatHashSetSlot directSlots[kDirectMax];
+            FlatHashSetSlot* slot = nullptr;
+            if (k < kDirectMax) {
+                slot = &directSlots[k];
+                if (slot->bucketCount == 0)
+                    slot->init(k);
+                else
+                    slot->clear();
+            } else {
+                static thread_local std::unordered_map<uint64_t, FlatHashSetSlot> extraSlots;
+                auto [it, isNew] = extraSlots.try_emplace(k);
+                slot = &it->second;
+                if (isNew)
+                    slot->init(k);
+                else
+                    slot->clear();
+            }
             for (uint64_t j = N - k; j < N; ++j) {
                 uint64_t t = uniform_u64_closed(engine_, 0, j);
-                if (!S.insert(t).second) S.insert(j);
+                if (!slot->insert(t)) slot->insert(j);
             }
-            size_t i = 0; for (auto v : S) sample[i++] = (_Type)v;
+            size_t i = 0;
+            for (int p = slot->next[0]; p != -1; p = slot->next[p])
+                sample[i++] = (_Type)slot->val[p];
         } else { // partial Fisher–Yates for dense case
-            // Reusable scratch; fully rewritten below.
+            // Persistent identity array: only swap k positions and restore in reverse,
+            // avoiding O(N) re-initialization and vector resizing every call.
             static thread_local std::vector<uint64_t> a;
-            a.resize(N);
-            for (uint64_t i = 0; i < N; ++i) a[i] = i;
+            if (a.size() < N) {
+                const size_t oldSize = a.size();
+                a.resize(N);
+                for (size_t i = oldSize; i < N; ++i) a[i] = i;
+            }
+            uint64_t stackSwaps[128];
+            static thread_local std::vector<uint64_t> heapSwaps;
+            uint64_t* swaps = stackSwaps;
+            if (k > 128) {
+                heapSwaps.resize(k);
+                swaps = heapSwaps.data();
+            }
             for (uint64_t i = 0; i < k; ++i) {
                 uint64_t j = i + uniform_u64_closed(engine_, 0, N - 1 - i);
+                swaps[i] = j;
                 std::swap(a[i], a[j]);
+                sample[i] = (_Type)a[i];
             }
-            for (uint64_t i = 0; i < k; ++i) sample[i] = (_Type)a[i];
+            for (uint64_t idx = k; idx-- > 0; ) {
+                std::swap(a[idx], a[swaps[idx]]);
+            }
         }
     }
 

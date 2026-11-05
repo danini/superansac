@@ -333,17 +333,33 @@ namespace
         const poselib::BundleOptions kBaseOpt = finalBundleOptions(kSettings_);
         const double kSqTh = kSettings_.inlierThreshold * kSettings_.inlierThreshold;
         const double kStart = std::max(1.0, kSettings_.finalBundleScheduleStart);
-        std::vector<size_t> current, fitSet, next;
-        std::vector<double> weights, extra;
-        collectInliers(kData_, kEstimator_, model_, kSqTh, current);
+        const size_t kRows = static_cast<size_t>(kData_.rows());
+        static thread_local std::vector<double> modelSqResiduals, candSqResiduals, weights, extra;
+        static thread_local std::vector<size_t> current, fitSet, next;
+
+        modelSqResiduals.resize(kRows);
+        kEstimator_->squaredResiduals(kData_, model_, 0, kRows, modelSqResiduals.data());
+        current.clear();
+        if (current.capacity() < kRows)
+            current.reserve(kRows);
+        for (size_t i = 0; i < kRows; ++i)
+            if (modelSqResiduals[i] < kSqTh)
+                current.push_back(i);
         if (current.size() < kMinInliers_)
             return;
         const size_t kInitialInliers = current.size();
+        superansac::scoring::MAGSACScoring magsac;
         for (size_t round = 0; round < kRounds; ++round)
         {
             const double kMult = (kRounds <= 1) ? 1.0
                 : kStart * std::pow(1.0 / kStart, static_cast<double>(round) / static_cast<double>(kRounds - 1));
-            collectInliers(kData_, kEstimator_, model_, kSqTh * kMult * kMult, fitSet);
+            const double kRoundSqTh = kSqTh * kMult * kMult;
+            fitSet.clear();
+            if (fitSet.capacity() < kRows)
+                fitSet.reserve(kRows);
+            for (size_t i = 0; i < kRows; ++i)
+                if (modelSqResiduals[i] < kRoundSqTh)
+                    fitSet.push_back(i);
             if (fitSet.size() < kMinInliers_)
                 break;
             weights.clear();
@@ -352,10 +368,12 @@ namespace
             if (kStaticSigmaWeights)
             {
                 // sigma-consensus (MAGSAC++) weights of the fit set at this round's scale
-                superansac::scoring::MAGSACScoring magsac;
                 magsac.setThreshold(kSettings_.inlierThreshold * kMult);
                 magsac.initialize(kEstimator_);
-                magsac.getWeights(kData_, model_, kEstimator_, weights, &fitSet);
+                const size_t kFitN = fitSet.size();
+                weights.resize(kFitN);
+                for (size_t i = 0; i < kFitN; ++i)
+                    weights[i] = magsac.weightFromSquaredResidual(modelSqResiduals[fitSet[i]]);
             }
             extraFinalWeights(kData_, kSettings_, kConfidences_, fitSet, extra);
             if (!extra.empty())
@@ -370,13 +388,21 @@ namespace
             superansac::models::Model candidate = model_;
             if (!refineFn_(fitSet, candidate, weights, roundOpt) || !candidate.getData().allFinite())
                 break;
-            collectInliers(kData_, kEstimator_, candidate, kSqTh, next);
+            candSqResiduals.resize(kRows);
+            kEstimator_->squaredResiduals(kData_, candidate, 0, kRows, candSqResiduals.data());
+            next.clear();
+            if (next.capacity() < kRows)
+                next.reserve(kRows);
+            for (size_t i = 0; i < kRows; ++i)
+                if (candSqResiduals[i] < kSqTh)
+                    next.push_back(i);
             if (next.size() * 5 < kInitialInliers * 4 || next.size() < kMinInliers_)
                 break; // diverged: keep the previous model
             model_ = candidate;
             current.swap(next);
+            modelSqResiduals.swap(candSqResiduals);
         }
-        inliers_ = current;
+        inliers_.assign(current.begin(), current.end());
     }
 }
 
@@ -685,8 +711,10 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
             kPointProbabilities_.empty() ? nullptr : &kPointProbabilities_,
             [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const poselib::BundleOptions &roundOpt) -> bool
             {
-                std::vector<Eigen::Vector2d> x(inl.size());
-                std::vector<Eigen::Vector3d> X(inl.size());
+                static thread_local std::vector<Eigen::Vector2d> x;
+                static thread_local std::vector<Eigen::Vector3d> X;
+                x.resize(inl.size());
+                X.resize(inl.size());
                 for (size_t i = 0; i < inl.size(); ++i)
                 {
                     const size_t idx = inl[i];
@@ -1051,7 +1079,7 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
             (settings_.finalBundleLossScale * settings_.inlierThreshold));
         const int kCols = kCorrespondences_.cols();
         const double *kBasePtr = kCorrespondences_.data();
-        std::vector<double> irlsWeights;
+        static thread_local std::vector<double> irlsWeights;
 
         runFinalBundle(
             kCorrespondences_,
@@ -1067,9 +1095,10 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
                 const poselib::BundleOptions &roundOpt) -> bool
             {
                 const size_t kN = fitSet.size();
+                static thread_local std::vector<superansac::models::Model> polished;
                 if (roundOpt.loss_type == poselib::BundleOptions::LossType::TRIVIAL)
                 {
-                    std::vector<superansac::models::Model> polished;
+                    polished.clear();
                     const double *wPtr = (weights.size() == kN) ? weights.data() : nullptr;
                     if (!estimator->estimateModelNonminimal(kCorrespondences_, fitSet.data(), kN, &polished, wPtr) ||
                         polished.empty())
@@ -1079,19 +1108,24 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
                 }
                 // Robust Cauchy IRLS closed-form weighted Procrustes (4 fast 3x3 SVD steps)
                 const double kRoundScaleSq = std::max(1e-12, roundOpt.loss_scale * roundOpt.loss_scale);
+                const double kInvRoundScaleSq = 1.0 / kRoundScaleSq;
                 irlsWeights.resize(kN);
                 superansac::models::Model cur = modelInOut;
                 bool ok = false;
                 for (int it = 0; it < 4; ++it)
                 {
-                    const auto &desc = cur.getData();
-                    for (size_t i = 0; i < kN; ++i)
+                    estimator->squaredResidualsIndexed(kCorrespondences_, cur, fitSet.data(), kN, irlsWeights.data());
+                    if (weights.size() == kN)
                     {
-                        const double r2 = estimator->squaredResidual(kBasePtr + fitSet[i] * kCols, desc);
-                        const double wCauchy = 1.0 / (1.0 + r2 / kRoundScaleSq);
-                        irlsWeights[i] = (weights.size() == kN) ? (weights[i] * wCauchy) : wCauchy;
+                        for (size_t i = 0; i < kN; ++i)
+                            irlsWeights[i] = weights[i] / (1.0 + irlsWeights[i] * kInvRoundScaleSq);
                     }
-                    std::vector<superansac::models::Model> polished;
+                    else
+                    {
+                        for (size_t i = 0; i < kN; ++i)
+                            irlsWeights[i] = 1.0 / (1.0 + irlsWeights[i] * kInvRoundScaleSq);
+                    }
+                    polished.clear();
                     if (!estimator->estimateModelNonminimal(
                             kCorrespondences_, fitSet.data(), kN, &polished, irlsWeights.data()) ||
                         polished.empty())
@@ -1478,7 +1512,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
             kPointProbabilities_.empty() ? nullptr : &kPointProbabilities_,
             [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const poselib::BundleOptions &roundOpt) -> bool
             {
-                std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
+                static thread_local std::vector<Eigen::Vector2d> x1, x2;
+                x1.resize(inl.size());
+                x2.resize(inl.size());
                 for (size_t i = 0; i < inl.size(); ++i)
                 {
                     const size_t idx = inl[i];
@@ -2287,7 +2323,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
             [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const poselib::BundleOptions &roundOpt) -> bool
             {
                 const Eigen::Matrix3d E = model.getData().block<3, 3>(0, 0);
-                std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
+                static thread_local std::vector<Eigen::Vector2d> x1, x2;
+                x1.resize(inl.size());
+                x2.resize(inl.size());
                 for (size_t i = 0; i < inl.size(); ++i)
                 {
                     const size_t idx = inl[i];
@@ -2653,7 +2691,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
             kPointProbabilities_.empty() ? nullptr : &kPointProbabilities_,
             [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const poselib::BundleOptions &roundOpt) -> bool
             {
-                std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
+                static thread_local std::vector<Eigen::Vector2d> x1, x2;
+                x1.resize(inl.size());
+                x2.resize(inl.size());
                 for (size_t i = 0; i < inl.size(); ++i)
                 {
                     const size_t idx = inl[i];

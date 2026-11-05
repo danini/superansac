@@ -79,10 +79,8 @@ namespace superansac
 
                 // Solves for the camera pose using EPnP
                 bool solveForPose(
-                    const Eigen::MatrixXd& M,
+                    const Eigen::Matrix<double, 12, 12>& MtM,
                     const Eigen::Matrix<double, 4, 3>& controlPoints,
-                    const Eigen::MatrixXd& alphas,
-                    const Eigen::MatrixXd& worldPoints,
                     models::Model& model) const;
 
                 // Computes the L matrix and rho vector for solving betas
@@ -119,29 +117,24 @@ namespace superansac
                 if (kSampleNumber_ < sampleSize())
                     return false;
 
-                // Points in kData_ are already normalized image coordinates (u, v, X, Y, Z)
-                const double fu = 1.0;
-                const double fv = 1.0;
-                const double uc = 0.0;
-                const double vc = 0.0;
+                // Reuse thread-local buffers across LO fits (eliminates 5 heap allocs/frees per call)
+                static thread_local Eigen::MatrixXd worldPoints;
+                static thread_local Eigen::MatrixXd imagePoints;
+                static thread_local Eigen::MatrixXd alphas;
+                worldPoints.resize(kSampleNumber_, 3);
+                imagePoints.resize(kSampleNumber_, 2);
 
-                // Collect world and image points from the data
-                Eigen::MatrixXd worldPoints(kSampleNumber_, 3);
-                Eigen::MatrixXd imagePoints(kSampleNumber_, 2);
-
+                const size_t kCols = static_cast<size_t>(kData_.cols());
+                const double * __restrict__ kBase = kData_.data();
                 for (size_t i = 0; i < kSampleNumber_; ++i)
                 {
                     const size_t idx = kSample_ == nullptr ? i : kSample_[i];
-
-                    const double
-                        u = kData_(idx, 0),
-                        v = kData_(idx, 1),
-                        X = kData_(idx, 2),
-                        Y = kData_(idx, 3),
-                        Z = kData_(idx, 4);
-
-                    worldPoints.row(i) << X, Y, Z;
-                    imagePoints.row(i) << u, v;
+                    const double * __restrict__ row = kBase + idx * kCols;
+                    imagePoints(i, 0) = row[0];
+                    imagePoints(i, 1) = row[1];
+                    worldPoints(i, 0) = row[2];
+                    worldPoints(i, 1) = row[3];
+                    worldPoints(i, 2) = row[4];
                 }
 
                 // Choose control points
@@ -151,19 +144,61 @@ namespace superansac
                     return false;
 
                 // Compute barycentric coordinates
-                Eigen::MatrixXd alphas(kSampleNumber_, 4);
+                alphas.resize(kSampleNumber_, 4);
                 if (!computeBarycentricCoordinates(worldPoints, controlPoints, alphas))
                     return false;
 
-                // Construct M matrix
-                Eigen::MatrixXd M(2 * kSampleNumber_, 12);
-                fillM(alphas, imagePoints, fu, fv, uc, vc, M);
-                if (!M.allFinite())
+                // Accumulate the 12x12 symmetric normal matrix M^T * M directly from its 4x4 block-sparse
+                // Kronecker structure (each 3x3 block (p, q) is sum_i alpha_{ip}*alpha_{iq} * [1,0,-u; 0,1,-v; -u,-v,u^2+v^2]),
+                // avoiding materializing the 2N x 12 matrix M and reducing work from 288*N to 40*N muls.
+                double s1[10] = {}, su[10] = {}, sv[10] = {}, sr2[10] = {};
+                for (size_t i = 0; i < kSampleNumber_; ++i)
+                {
+                    const double a0 = alphas(i, 0), a1 = alphas(i, 1), a2 = alphas(i, 2), a3 = alphas(i, 3);
+                    const double u = imagePoints(i, 0), v = imagePoints(i, 1);
+                    const double r2 = u * u + v * v;
+                    const double a[4] = {a0, a1, a2, a3};
+                    int k = 0;
+                    for (int p = 0; p < 4; ++p)
+                    {
+                        const double ap = a[p];
+                        for (int q = 0; q <= p; ++q, ++k)
+                        {
+                            const double w = ap * a[q];
+                            s1[k]  += w;
+                            su[k]  -= w * u;
+                            sv[k]  -= w * v;
+                            sr2[k] += w * r2;
+                        }
+                    }
+                }
+
+                Eigen::Matrix<double, 12, 12> MtM = Eigen::Matrix<double, 12, 12>::Zero();
+                int k = 0;
+                for (int p = 0; p < 4; ++p)
+                {
+                    for (int q = 0; q <= p; ++q, ++k)
+                    {
+                        const int rp = 3 * p, cq = 3 * q;
+                        MtM(rp,     cq)     = s1[k];
+                        MtM(rp + 1, cq + 1) = s1[k];
+                        MtM(rp,     cq + 2) = su[k];
+                        MtM(rp + 2, cq)     = su[k];
+                        MtM(rp + 1, cq + 2) = sv[k];
+                        MtM(rp + 2, cq + 1) = sv[k];
+                        MtM(rp + 2, cq + 2) = sr2[k];
+                        if (p != q)
+                        {
+                            MtM.block<3, 3>(cq, rp) = MtM.block<3, 3>(rp, cq);
+                        }
+                    }
+                }
+                if (!MtM.allFinite())
                     return false;
 
                 // Solve for pose
                 models::Model model;
-                if (!solveForPose(M, controlPoints, alphas, worldPoints, model))
+                if (!solveForPose(MtM, controlPoints, model))
                     return false;
                 if (!model.getData().allFinite())
                     return false;
@@ -182,15 +217,18 @@ namespace superansac
                 controlPoints.row(0) = centroid.transpose();
 
                 // Compute principal components (PCA)
-                Eigen::MatrixXd PW0 = worldPoints.rowwise() - centroid.transpose();
+                static thread_local Eigen::MatrixXd PW0;
+                PW0.resize(worldPoints.rows(), 3);
+                PW0 = worldPoints.rowwise() - centroid.transpose();
 
                 Eigen::JacobiSVD<Eigen::MatrixXd> svd(PW0, Eigen::ComputeThinV);
                 Eigen::Matrix3d V = svd.matrixV();
-                Eigen::VectorXd S = svd.singularValues();
+                Eigen::Vector3d S = svd.singularValues();
 
                 // Scale principal components based on singular values
+                const double invRows = 1.0 / static_cast<double>(worldPoints.rows());
                 for (int i = 0; i < 3; ++i)
-                    controlPoints.row(i + 1) = centroid.transpose() + V.col(i).transpose() * S(i) / worldPoints.rows();
+                    controlPoints.row(i + 1) = centroid.transpose() + V.col(i).transpose() * (S(i) * invRows);
             }
 
             bool EPnPSolver::computeBarycentricCoordinates(
@@ -305,9 +343,9 @@ namespace superansac
                 const Eigen::Matrix<double, 6, 1>& rho,
                 Eigen::Vector4d& betas) const
             {
-                // Solve L * betas = rho using SVD
-                Eigen::JacobiSVD<Eigen::MatrixXd> svd(L6x10, Eigen::ComputeThinU | Eigen::ComputeThinV);
-                Eigen::VectorXd betas_10 = svd.solve(rho);
+                // Solve L * betas = rho using fixed-size SVD (zero heap allocations)
+                Eigen::JacobiSVD<Eigen::Matrix<double, 6, 10>> svd(L6x10, Eigen::ComputeFullU | Eigen::ComputeFullV);
+                Eigen::Matrix<double, 10, 1> betas_10 = svd.solve(rho);
 
                 // Extract betas from betas_10
                 betas(0) = sqrt(fabs(betas_10(0)));
@@ -322,16 +360,10 @@ namespace superansac
             }
 
             bool EPnPSolver::solveForPose(
-                const Eigen::MatrixXd& M,
+                const Eigen::Matrix<double, 12, 12>& MtM,
                 const Eigen::Matrix<double, 4, 3>& controlPoints,
-                const Eigen::MatrixXd& alphas,
-                const Eigen::MatrixXd& worldPoints,
                 models::Model& model) const
             {
-                // Perform SVD on M^T * M for 12x12 right singular vectors
-                Eigen::Matrix<double, 12, 12> MtM = M.transpose() * M;
-                if (!MtM.allFinite())
-                    return false;
                 Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 12, 12>> es(MtM);
                 if (es.info() != Eigen::Success || !es.eigenvectors().allFinite())
                     return false;
@@ -360,7 +392,7 @@ namespace superansac
                 Eigen::Matrix<double, 4, 3> cameraControlPoints = Eigen::Matrix<double, 4, 3>::Zero();
                 for (int i = 0; i < 4; ++i)
                 {
-                    Eigen::VectorXd v = V.col(11 - i);
+                    const Eigen::Matrix<double, 12, 1> v = V.col(11 - i);
                     for (int j = 0; j < 4; ++j)
                     {
                         cameraControlPoints.row(j) += betas(i) * v.segment<3>(3 * j).transpose();

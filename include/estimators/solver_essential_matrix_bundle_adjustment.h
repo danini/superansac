@@ -197,7 +197,8 @@ namespace superansac
 					if (kSampleNumber_ >= 8)
 					{
 						FundamentalMatrixEightPointSolver eightPointSolver;
-						std::vector<models::Model> eightPtModels;
+						static thread_local std::vector<models::Model> eightPtModels;
+						eightPtModels.clear();
 						if (eightPointSolver.estimateModel(kData_, kSample_, kSampleNumber_, eightPtModels, kWeights_) && !eightPtModels.empty())
 						{
 							Eigen::Matrix3d E8 = eightPtModels[0].getData().block<3, 3>(0, 0);
@@ -217,7 +218,8 @@ namespace superansac
 					if (!kIsInnerSubsample || models_.empty())
 					{
 						EssentialMatrixFivePointNisterSolver fivePointSolver;
-						std::vector<models::Model> fivePtModels;
+						static thread_local std::vector<models::Model> fivePtModels;
+						fivePtModels.clear();
 						if (fivePointSolver.estimateModel(kData_, kSample_, kSampleNumber_, fivePtModels, kWeights_))
 						{
 							for (auto &m : fivePtModels)
@@ -275,11 +277,13 @@ namespace superansac
 
 				struct CandidatePose
 				{
+					EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 					poselib::CameraPose pose;
 					double weightedVotes;
 					double initialCost;
 				};
-				std::vector<CandidatePose> candidates;
+				static thread_local std::vector<CandidatePose, Eigen::aligned_allocator<CandidatePose>> candidates;
+				candidates.clear();
 				candidates.reserve(models_.size() * 2);
 
 				const double scaleSq = std::max(1e-12, tmpOptions.loss_scale * tmpOptions.loss_scale);
@@ -287,6 +291,7 @@ namespace superansac
 				auto collectCandidates = [&]()
 				{
 					const bool kNeedTiebreakCost = models_.size() > 1;
+					static thread_local poselib::CameraPoseVector poses;
 					// First pass: evaluate all candidate models and their 4 pose decompositions cheaply
 					// using weighted cheirality + Sampson residual cost, so we only run expensive LM
 					// bundle adjustment on the top candidate poses across all models.
@@ -299,26 +304,33 @@ namespace superansac
 						double sampsonCost = 0.0;
 						if (kNeedTiebreakCost)
 						{
+							const double E00 = E(0, 0), E01 = E(0, 1), E02 = E(0, 2);
+							const double E10 = E(1, 0), E11 = E(1, 1), E12 = E(1, 2);
+							const double E20 = E(2, 0), E21 = E(2, 1), E22 = E(2, 2);
 							const double ax1Sq = useCalibratedSampson ? (invFx1 * invFx1) : 1.0;
 							const double ay1Sq = useCalibratedSampson ? (invFy1 * invFy1) : 1.0;
 							const double ax2Sq = useCalibratedSampson ? (invFx2 * invFx2) : 1.0;
 							const double ay2Sq = useCalibratedSampson ? (invFy2 * invFy2) : 1.0;
+							const double invScaleSq = 1.0 / scaleSq;
 							for (size_t i = 0; i < kPointNumberForCheck; ++i)
 							{
-								const Eigen::Vector3d p1(x1[i](0), x1[i](1), 1.0);
-								const Eigen::Vector3d p2(x2[i](0), x2[i](1), 1.0);
-								const Eigen::Vector3d Ep1 = E * p1;
-								const Eigen::Vector3d Etp2 = E.transpose() * p2;
-								const double r = p2.dot(Ep1);
-								const double denom = ax2Sq * Ep1(0) * Ep1(0) + ay2Sq * Ep1(1) * Ep1(1) +
-								                     ax1Sq * Etp2(0) * Etp2(0) + ay1Sq * Etp2(1) * Etp2(1) + 1e-24;
+								const double u1x = x1[i](0), u1y = x1[i](1);
+								const double u2x = x2[i](0), u2y = x2[i](1);
+								const double ep1_0 = E00 * u1x + E01 * u1y + E02;
+								const double ep1_1 = E10 * u1x + E11 * u1y + E12;
+								const double ep1_2 = E20 * u1x + E21 * u1y + E22;
+								const double etp2_0 = E00 * u2x + E10 * u2y + E20;
+								const double etp2_1 = E01 * u2x + E11 * u2y + E21;
+								const double r = u2x * ep1_0 + u2y * ep1_1 + ep1_2;
+								const double denom = ax2Sq * ep1_0 * ep1_0 + ay2Sq * ep1_1 * ep1_1 +
+								                     ax1Sq * etp2_0 * etp2_0 + ay1Sq * etp2_1 * etp2_1 + 1e-24;
 								const double sqErr = (r * r) / denom;
 								const double w = weights.empty() ? 1.0 : weights[i];
-								sampsonCost += w * std::log(1.0 + sqErr / scaleSq);
+								sampsonCost += w * std::log(1.0 + sqErr * invScaleSq);
 							}
 						}
 
-						poselib::CameraPoseVector poses;
+						poses.clear();
 						poselib::motion_from_essential(
 							E,
 							kEmptyCheck, kEmptyCheck,

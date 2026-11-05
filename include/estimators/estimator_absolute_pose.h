@@ -181,13 +181,68 @@ namespace superansac
 				const models::Model& kModel_,
 				const size_t kStartRow_,
 				const size_t kCount_,
-				double* kOut_) const override
+				double* __restrict__ kOut_) const override
 			{
 				const ModelMatrix& kDescriptor = kModel_.getData();
-				const size_t kCols = kData_.cols();
-				const double* row = kData_.data() + kStartRow_ * kCols;
-				for (size_t i = 0; i < kCount_; ++i, row += kCols)
-					kOut_[i] = squaredResidual(row, kDescriptor);
+				const double r11 = kDescriptor(0, 0), r12 = kDescriptor(0, 1), r13 = kDescriptor(0, 2), tx = kDescriptor(0, 3);
+				const double r21 = kDescriptor(1, 0), r22 = kDescriptor(1, 1), r23 = kDescriptor(1, 2), ty = kDescriptor(1, 3);
+				const double r31 = kDescriptor(2, 0), r32 = kDescriptor(2, 1), r33 = kDescriptor(2, 2), tz = kDescriptor(2, 3);
+				constexpr double kMaxVal = std::numeric_limits<double>::max();
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double* __restrict__ row = kData_.data() + kStartRow_ * kCols;
+				if (kCols == 5)
+				{
+					for (size_t i = 0; i < kCount_; ++i, row += 5)
+					{
+						const double u = row[0], v = row[1], x = row[2], y = row[3], z = row[4];
+						const double px = r11 * x + r12 * y + r13 * z + tx;
+						const double py = r21 * x + r22 * y + r23 * z + ty;
+						const double pz = r31 * x + r32 * y + r33 * z + tz;
+						const double du = px / pz - u;
+						const double dv = py / pz - v;
+						kOut_[i] = (pz <= 1e-6) ? kMaxVal : (du * du + dv * dv);
+					}
+				}
+				else
+				{
+					for (size_t i = 0; i < kCount_; ++i, row += kCols)
+					{
+						const double u = row[0], v = row[1], x = row[2], y = row[3], z = row[4];
+						const double px = r11 * x + r12 * y + r13 * z + tx;
+						const double py = r21 * x + r22 * y + r23 * z + ty;
+						const double pz = r31 * x + r32 * y + r33 * z + tz;
+						const double du = px / pz - u;
+						const double dv = py / pz - v;
+						kOut_[i] = (pz <= 1e-6) ? kMaxVal : (du * du + dv * dv);
+					}
+				}
+			}
+
+			void squaredResidualsIndexed(
+				const DataMatrix& kData_,
+				const models::Model& kModel_,
+				const size_t* __restrict__ kIndices_,
+				const size_t kCount_,
+				double* __restrict__ kOut_) const override
+			{
+				const ModelMatrix& kDescriptor = kModel_.getData();
+				const double r11 = kDescriptor(0, 0), r12 = kDescriptor(0, 1), r13 = kDescriptor(0, 2), tx = kDescriptor(0, 3);
+				const double r21 = kDescriptor(1, 0), r22 = kDescriptor(1, 1), r23 = kDescriptor(1, 2), ty = kDescriptor(1, 3);
+				const double r31 = kDescriptor(2, 0), r32 = kDescriptor(2, 1), r33 = kDescriptor(2, 2), tz = kDescriptor(2, 3);
+				constexpr double kMaxVal = std::numeric_limits<double>::max();
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double* __restrict__ kBase = kData_.data();
+				for (size_t i = 0; i < kCount_; ++i)
+				{
+					const double* __restrict__ row = kBase + kIndices_[i] * kCols;
+					const double u = row[0], v = row[1], x = row[2], y = row[3], z = row[4];
+					const double px = r11 * x + r12 * y + r13 * z + tx;
+					const double py = r21 * x + r22 * y + r23 * z + ty;
+					const double pz = r31 * x + r32 * y + r33 * z + tz;
+					const double du = px / pz - u;
+					const double dv = py / pz - v;
+					kOut_[i] = (pz <= 1e-6) ? kMaxVal : (du * du + dv * dv);
+				}
 			}
 
 			// Enable a quick check to see if the model is valid. This can be a geometric

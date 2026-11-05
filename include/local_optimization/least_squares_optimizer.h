@@ -112,9 +112,34 @@ namespace superansac
 			{
 				static const scoring::Score kInvalidScore = scoring::Score();
 
-				// Pre-reserve estimated models to avoid reallocations
-				std::vector<models::Model> estimatedModels;
-				estimatedModels.reserve(10);
+				struct Scratch
+				{
+					std::vector<models::Model> estimatedModels;
+					std::vector<models::Model> refinedModels;
+					std::vector<double> initWeights;
+					std::vector<size_t> tmpInliers;
+					std::vector<size_t> scheduleInliers;
+					std::vector<double> scheduleResiduals;
+					std::vector<double> fitWeights;
+					bool inUse = false;
+				};
+				static thread_local Scratch tlScratch;
+				Scratch fallbackScratch;
+				const bool useTl = !tlScratch.inUse;
+				if (useTl)
+					tlScratch.inUse = true;
+				struct ScratchGuard
+				{
+					Scratch &s;
+					bool active;
+					~ScratchGuard() { if (active) s.inUse = false; }
+				} guard{tlScratch, useTl};
+				Scratch &sc = useTl ? tlScratch : fallbackScratch;
+
+				auto &estimatedModels = sc.estimatedModels;
+				estimatedModels.clear();
+				if (estimatedModels.capacity() < 10)
+					estimatedModels.reserve(10);
 				estimatedModels.emplace_back(kModel_);
 
 				estimatedModel_ = kModel_;
@@ -122,7 +147,8 @@ namespace superansac
 				estimatedInliers_ = kInliers_;
 
 				scoring::Score currentScore;
-				std::vector<double> initWeights;
+				auto &initWeights = sc.initWeights;
+				initWeights.clear();
 
 				if (useInliers)
 				{
@@ -174,8 +200,10 @@ namespace superansac
 				}
 
 				// Temp inliers for selecting the best model - reserve outside loop
-				std::vector<size_t> tmpInliers;
-				tmpInliers.reserve(kData_.rows());
+				auto &tmpInliers = sc.tmpInliers;
+				tmpInliers.clear();
+				if (tmpInliers.capacity() < static_cast<size_t>(kData_.rows()))
+					tmpInliers.reserve(kData_.rows());
 
 				// Calculate the scoring of the estimated model
 				for (const auto &model : estimatedModels)
@@ -197,9 +225,9 @@ namespace superansac
 				// Optional score-gated polish: re-collect the inliers from the
 				// refined model and refit; keep a round only if it improves the
 				// score. Runs once per estimation, so the cost is negligible.
-				std::vector<size_t> scheduleInliers;
-				std::vector<double> scheduleResiduals;
-				std::vector<double> fitWeights;
+				auto &scheduleInliers = sc.scheduleInliers;
+				auto &scheduleResiduals = sc.scheduleResiduals;
+				auto &fitWeights = sc.fitWeights;
 				for (size_t round = 0; round < extraRefinementRounds; ++round)
 				{
 					// The set the refit uses: the scoring inliers, or -- with the
@@ -244,7 +272,8 @@ namespace superansac
 						weightsPtr = fitWeights.data();
 					}
 
-					std::vector<models::Model> refinedModels;
+					auto &refinedModels = sc.refinedModels;
+					refinedModels.clear();
 					refinedModels.emplace_back(estimatedModel_);
 					if (!kEstimator_->estimateModelNonminimal(
 						kData_,

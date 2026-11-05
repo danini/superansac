@@ -16,49 +16,49 @@ per problem, single-threaded calls, measured with up to 8 concurrent benchmark p
 
 | Matcher | Dataset | Pairs | PoseLib | SupeRANSAC | Δ | ms PoseLib / SupeRANSAC |
 |---|---|---:|---:|---:|---:|---:|
-| LoMa | PhotoTourism | 100 | 70.0 | **70.7** | +0.7 | 14 / 11 |
-| LoMa | ETH3D | 100 | 90.5 | **91.6** | +1.1 | 20 / 12 |
-| LoMa | 7Scenes | 100 | **55.0** | 54.6 | -0.4 | 19 / 12 |
-| LoMa | **Overall** | 300 | 71.5 | **72.0** | +0.5 | 17 / 12 |
-| RoMa | PhotoTourism | 100 | 57.7 | **58.3** | +0.5 | 69 / 26 |
-| RoMa | ETH3D | 100 | **81.3** | 81.2 | -0.1 | 61 / 21 |
-| RoMa | 7Scenes | 100 | **61.9** | 61.4 | -0.5 | 58 / 22 |
-| RoMa | **Overall** | 300 | **66.7** | 66.6 | -0.1 | 63 / 23 |
-| DISK+LG | PhotoTourism | 100 | 50.1 | **50.6** | +0.5 | 12 / 10 |
-| DISK+LG | ETH3D | 99 | **57.9** | 57.3 | -0.6 | 20 / 14 |
-| DISK+LG | 7Scenes | 100 | 42.9 | **43.6** | +0.7 | 17 / 11 |
-| DISK+LG | **Overall** | 299 | 49.9 | **50.2** | +0.2 | 16 / 12 |
+| LoMa | PhotoTourism | 100 | 70.0 | **70.7** | +0.7 | 15 / 8 |
+| LoMa | ETH3D | 100 | 90.5 | **91.6** | +1.1 | 20 / 8 |
+| LoMa | 7Scenes | 100 | **55.0** | 54.6 | -0.4 | 19 / 8 |
+| LoMa | **Overall** | 300 | 71.5 | **72.0** | +0.5 | 18 / 8 |
+| RoMa | PhotoTourism | 100 | 57.7 | **58.3** | +0.5 | 69 / 18 |
+| RoMa | ETH3D | 100 | **81.3** | 81.2 | -0.1 | 61 / 14 |
+| RoMa | 7Scenes | 100 | **61.9** | 61.4 | -0.5 | 58 / 14 |
+| RoMa | **Overall** | 300 | **66.7** | 66.6 | -0.1 | 63 / 15 |
+| DISK+LG | PhotoTourism | 100 | 50.1 | **50.6** | +0.5 | 13 / 7 |
+| DISK+LG | ETH3D | 99 | **57.9** | 57.3 | -0.6 | 19 / 10 |
+| DISK+LG | 7Scenes | 100 | 42.9 | **43.6** | +0.7 | 17 / 8 |
+| DISK+LG | **Overall** | 299 | 49.9 | **50.2** | +0.2 | 16 / 8 |
 
 ### Essential matrix (AUC@10°, 1.5 px)
 
 | Matcher | Dataset | Pairs | PoseLib | SupeRANSAC | Δ | ms PoseLib / SupeRANSAC |
 |---|---|---:|---:|---:|---:|---:|
-| LoMa | PhotoTourism | 100 | 81.6 | **82.5** | +0.9 | 27 / 18 |
-| LoMa | ETH3D | 100 | **95.7** | 95.6 | -0.1 | 33 / 18 |
-| LoMa | 7Scenes | 100 | 58.4 | **58.7** | +0.4 | 32 / 19 |
-| LoMa | **Overall** | 300 | 78.3 | **78.7** | +0.4 | 31 / 19 |
-| RoMa | PhotoTourism | 100 | **71.6** | 70.9 | -0.7 | 116 / 39 |
-| RoMa | ETH3D | 100 | **90.8** | 90.6 | -0.2 | 94 / 29 |
-| RoMa | 7Scenes | 100 | 61.8 | **62.0** | +0.2 | 97 / 31 |
-| RoMa | **Overall** | 300 | **74.5** | 74.3 | -0.2 | 102 / 33 |
-| DISK+LG | PhotoTourism | 100 | 62.9 | **63.1** | +0.3 | 26 / 17 |
-| DISK+LG | ETH3D | 99 | **77.2** | 76.8 | -0.4 | 32 / 20 |
-| DISK+LG | 7Scenes | 100 | **52.4** | 51.2 | -1.1 | 30 / 18 |
-| DISK+LG | **Overall** | 299 | **63.8** | 63.4 | -0.4 | 29 / 18 |
+| LoMa | PhotoTourism | 100 | 81.6 | **82.5** | +0.9 | 26 / 16 |
+| LoMa | ETH3D | 100 | **95.7** | 95.6 | -0.1 | 33 / 16 |
+| LoMa | 7Scenes | 100 | 58.4 | **58.7** | +0.4 | 33 / 16 |
+| LoMa | **Overall** | 300 | 78.3 | **78.7** | +0.4 | 31 / 16 |
+| RoMa | PhotoTourism | 100 | **71.6** | 70.9 | -0.7 | 117 / 31 |
+| RoMa | ETH3D | 100 | **90.8** | 90.6 | -0.2 | 94 / 23 |
+| RoMa | 7Scenes | 100 | 61.8 | **62.0** | +0.2 | 96 / 25 |
+| RoMa | **Overall** | 300 | **74.5** | 74.3 | -0.2 | 102 / 26 |
+| DISK+LG | PhotoTourism | 100 | 62.9 | **63.1** | +0.3 | 26 / 15 |
+| DISK+LG | ETH3D | 99 | **77.2** | 76.8 | -0.4 | 32 / 18 |
+| DISK+LG | 7Scenes | 100 | **52.4** | 51.2 | -1.1 | 30 / 16 |
+| DISK+LG | **Overall** | 299 | **63.8** | 63.4 | -0.4 | 29 / 16 |
 
 ### Homography (AUC@5px, 4.0 px)
 
 | Matcher | Dataset | Pairs | PoseLib | SupeRANSAC | Δ | ms PoseLib / SupeRANSAC |
 |---|---|---:|---:|---:|---:|---:|
-| LoMa | EVD | 11 | 56.4 | **56.4** | +0.1 | 6 / 5 |
-| LoMa | Homogr | 5 | **71.0** | 69.4 | -1.7 | 11 / 6 |
-| LoMa | **Overall** | 16 | **59.5** | 58.6 | -0.9 | 8 / 5 |
-| RoMa | EVD | 11 | 57.2 | **57.6** | +0.4 | 31 / 13 |
-| RoMa | Homogr | 5 | 60.1 | **60.7** | +0.6 | 31 / 12 |
-| RoMa | **Overall** | 16 | 56.9 | **57.4** | +0.5 | 31 / 13 |
-| DISK+LG | EVD | 11 | 42.8 | **43.4** | +0.6 | 7 / 6 |
-| DISK+LG | Homogr | 5 | **54.8** | 54.4 | -0.5 | 7 / 4 |
-| DISK+LG | **Overall** | 16 | 43.9 | **44.1** | +0.2 | 7 / 5 |
+| LoMa | EVD | 11 | 56.4 | **56.4** | +0.1 | 6 / 4 |
+| LoMa | Homogr | 5 | **71.0** | 69.4 | -1.7 | 11 / 4 |
+| LoMa | **Overall** | 16 | **59.5** | 58.6 | -0.9 | 8 / 4 |
+| RoMa | EVD | 11 | 57.2 | **57.6** | +0.4 | 31 / 9 |
+| RoMa | Homogr | 5 | 60.1 | **60.7** | +0.6 | 31 / 8 |
+| RoMa | **Overall** | 16 | 56.9 | **57.4** | +0.5 | 31 / 8 |
+| DISK+LG | EVD | 11 | 42.8 | **43.4** | +0.6 | 7 / 4 |
+| DISK+LG | Homogr | 5 | **54.8** | 54.4 | -0.5 | 7 / 3 |
+| DISK+LG | **Overall** | 16 | 43.9 | **44.1** | +0.2 | 7 / 4 |
 
 ## 2. Seven feature matchers
 
@@ -66,13 +66,13 @@ Same pairs with **LoMa**, **RoMa**, **LoFTR**, **DISK + LightGlue**, **RootSIFT*
 
 | Matcher | $F$ AUC@10° PoseLib / SupeRANSAC | Δ [95% CI] | ms PoseLib / SupeRANSAC | $E$ AUC@10° PoseLib / SupeRANSAC | Δ [95% CI] | ms PoseLib / SupeRANSAC | $H$ AUC@5px PoseLib / SupeRANSAC | Δ [95% CI] | ms PoseLib / SupeRANSAC |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| LoMa | 71.5 / **72.0** | +0.5 [-1.2, +2.1] | 17 / 12 | 78.3 / **78.7** | +0.4 [-0.4, +1.0] | 31 / 19 | **59.5** / 58.6 | -0.9 [-2.8, +0.4] | 8 / 6 |
-| RoMa | **66.7** / 66.6 | -0.1 [-0.8, +0.6] | 63 / 23 | **74.5** / 74.3 | -0.2 [-1.4, +0.8] | 102 / 33 | 56.9 / **57.4** | +0.5 [-0.9, +1.6] | 34 / 15 |
-| LoFTR | **59.5** / 59.5 | -0.0 [-1.5, +1.4] | 41 / 21 | **69.2** / 68.5 | -0.7 [-2.4, +1.0] | 60 / 29 | **46.2** / 46.1 | -0.0 [-1.1, +0.6] | 18 / 12 |
-| DISK+LG | 49.9 / **50.2** | +0.2 [-1.5, +2.0] | 16 / 12 | **63.8** / 63.4 | -0.4 [-1.5, +0.6] | 29 / 18 | 43.9 / **44.1** | +0.2 [-0.4, +1.0] | 7 / 6 |
-| RootSIFT | 29.9 / **38.8** | +8.9 [+5.8, +12.1] | 88 / 59 | 54.7 / **54.9** | +0.2 [-2.0, +2.3] | 64 / 58 | 39.8 / **47.1** | +7.3 [-0.2, +19.1] | 7 / 13 |
-| SIFT | 25.9 / **34.8** | +8.9 [+5.9, +12.1] | 94 / 62 | 50.9 / **52.0** | +1.1 [-1.5, +3.6] | 64 / 60 | 39.9 / **47.0** | +7.1 [-0.3, +18.9] | 7 / 13 |
-| ORB | 17.0 / **19.9** | +2.8 [+0.1, +5.6] | 134 / 75 | 39.4 / **41.7** | +2.2 [-0.4, +4.9] | 80 / 79 | **33.8** / 33.7 | -0.1 [-0.4, +0.1] | 9 / 16 |
+| LoMa | 71.5 / **72.0** | +0.5 [-1.2, +2.1] | 17 / 8 | 78.3 / **78.7** | +0.4 [-0.4, +1.0] | 30 / 16 | **59.5** / 58.6 | -0.9 [-2.8, +0.4] | 8 / 4 |
+| RoMa | **66.7** / 66.6 | -0.1 [-0.8, +0.6] | 63 / 15 | **74.5** / 74.3 | -0.2 [-1.4, +0.8] | 102 / 26 | 56.9 / **57.4** | +0.5 [-0.9, +1.6] | 31 / 9 |
+| LoFTR | **59.5** / 59.5 | -0.0 [-1.5, +1.4] | 41 / 14 | **69.2** / 68.5 | -0.7 [-2.4, +1.0] | 60 / 24 | **46.2** / 46.1 | -0.0 [-1.1, +0.6] | 19 / 8 |
+| DISK+LG | 49.9 / **50.2** | +0.2 [-1.5, +2.0] | 16 / 8 | **63.8** / 63.4 | -0.4 [-1.5, +0.6] | 29 / 16 | 43.9 / **44.1** | +0.2 [-0.4, +1.0] | 7 / 4 |
+| RootSIFT | 29.9 / **38.8** | +8.9 [+5.8, +12.1] | 88 / 41 | 54.7 / **54.9** | +0.2 [-2.0, +2.3] | 64 / 47 | 39.8 / **47.1** | +7.3 [-0.2, +19.1] | 7 / 9 |
+| SIFT | 25.9 / **34.8** | +8.9 [+5.9, +12.1] | 94 / 44 | 50.9 / **52.0** | +1.1 [-1.5, +3.6] | 64 / 48 | 39.9 / **47.0** | +7.1 [-0.3, +18.9] | 7 / 11 |
+| ORB | 17.0 / **19.9** | +2.8 [+0.1, +5.6] | 133 / 53 | 39.4 / **41.7** | +2.2 [-0.4, +4.9] | 80 / 59 | **33.8** / 33.7 | -0.1 [-0.4, +0.1] | 9 / 11 |
 
 ## 3. Speed–accuracy sweep
 
@@ -81,21 +81,21 @@ Same pairs with **LoMa**, **RoMa**, **LoFTR**, **DISK + LightGlue**, **RootSIFT*
 | Problem | Matcher | Method | min 0 | min 25 | min 50 | min 100 | min 250 | min 500 | min 1000 | min 2500 | min 5000 |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | $F$ | LoMa | PoseLib | 70.2 (8 ms) | 70.2 (8 ms) | 70.2 (8 ms) | 70.6 (8 ms) | 71.1 (9 ms) | 71.5 (12 ms) | 71.5 (17 ms) | 71.5 (34 ms) | 71.3 (61 ms) |
-| $F$ | LoMa | SupeRANSAC | 71.8 (8 ms) | 71.8 (8 ms) | 71.8 (8 ms) | 71.8 (8 ms) | 71.4 (9 ms) | 71.8 (10 ms) | 72.0 (12 ms) | 72.3 (17 ms) | 72.0 (25 ms) |
-| $F$ | RoMa | PoseLib | 66.8 (25 ms) | 66.8 (26 ms) | 66.8 (27 ms) | 66.6 (29 ms) | 66.7 (35 ms) | 66.7 (45 ms) | 66.7 (63 ms) | 66.7 (117 ms) | 66.7 (204 ms) |
-| $F$ | RoMa | SupeRANSAC | 66.6 (20 ms) | 66.6 (20 ms) | 66.6 (20 ms) | 66.5 (19 ms) | 66.5 (20 ms) | 66.5 (21 ms) | 66.6 (23 ms) | 66.9 (31 ms) | 66.8 (43 ms) |
-| $F$ | DISK+LG | PoseLib | 48.4 (7 ms) | 48.4 (7 ms) | 48.4 (7 ms) | 48.3 (8 ms) | 49.1 (9 ms) | 49.9 (12 ms) | 49.9 (16 ms) | 50.0 (31 ms) | 50.5 (54 ms) |
-| $F$ | DISK+LG | SupeRANSAC | 48.6 (8 ms) | 48.7 (8 ms) | 48.8 (8 ms) | 48.8 (8 ms) | 49.6 (9 ms) | 49.8 (10 ms) | 50.2 (12 ms) | 50.0 (16 ms) | 50.2 (24 ms) |
-| $E$ | LoMa | PoseLib | 78.0 (6 ms) | 78.0 (6 ms) | 78.0 (6 ms) | 78.0 (7 ms) | 78.1 (11 ms) | 78.4 (17 ms) | 78.3 (31 ms) | 78.3 (69 ms) | 78.1 (127 ms) |
-| $E$ | LoMa | SupeRANSAC | 78.7 (6 ms) | 78.7 (6 ms) | 78.7 (7 ms) | 78.8 (7 ms) | 78.9 (9 ms) | 78.9 (13 ms) | 78.7 (19 ms) | 78.7 (36 ms) | 78.7 (63 ms) |
-| $E$ | RoMa | PoseLib | 74.1 (20 ms) | 74.1 (21 ms) | 74.5 (23 ms) | 74.5 (27 ms) | 74.5 (40 ms) | 74.5 (61 ms) | 74.5 (102 ms) | 74.5 (223 ms) | 74.5 (423 ms) |
-| $E$ | RoMa | SupeRANSAC | 74.8 (18 ms) | 74.8 (18 ms) | 74.8 (19 ms) | 74.9 (19 ms) | 74.5 (22 ms) | 74.2 (26 ms) | 74.3 (33 ms) | 74.6 (53 ms) | 74.6 (86 ms) |
-| $E$ | DISK+LG | PoseLib | 63.4 (7 ms) | 63.4 (6 ms) | 63.1 (7 ms) | 63.4 (8 ms) | 63.4 (11 ms) | 63.6 (17 ms) | 63.8 (29 ms) | 63.8 (65 ms) | 63.9 (120 ms) |
-| $E$ | DISK+LG | SupeRANSAC | 62.9 (7 ms) | 62.9 (7 ms) | 62.9 (7 ms) | 62.6 (8 ms) | 63.2 (10 ms) | 63.3 (13 ms) | 63.4 (18 ms) | 62.8 (35 ms) | 63.2 (60 ms) |
+| $F$ | LoMa | SupeRANSAC | 71.8 (5 ms) | 71.8 (5 ms) | 71.8 (5 ms) | 71.8 (5 ms) | 71.4 (6 ms) | 71.8 (7 ms) | 72.0 (8 ms) | 72.3 (12 ms) | 72.0 (19 ms) |
+| $F$ | RoMa | PoseLib | 66.8 (25 ms) | 66.8 (26 ms) | 66.8 (27 ms) | 66.6 (29 ms) | 66.7 (35 ms) | 66.7 (45 ms) | 66.7 (63 ms) | 66.7 (117 ms) | 66.7 (205 ms) |
+| $F$ | RoMa | SupeRANSAC | 66.6 (12 ms) | 66.6 (12 ms) | 66.6 (12 ms) | 66.5 (12 ms) | 66.5 (13 ms) | 66.5 (13 ms) | 66.6 (15 ms) | 66.9 (21 ms) | 66.8 (32 ms) |
+| $F$ | DISK+LG | PoseLib | 48.4 (7 ms) | 48.4 (7 ms) | 48.4 (7 ms) | 48.3 (8 ms) | 49.1 (9 ms) | 49.9 (12 ms) | 49.9 (17 ms) | 50.0 (31 ms) | 50.5 (54 ms) |
+| $F$ | DISK+LG | SupeRANSAC | 48.6 (5 ms) | 48.7 (5 ms) | 48.8 (5 ms) | 48.8 (6 ms) | 49.6 (6 ms) | 49.8 (7 ms) | 50.2 (8 ms) | 50.0 (12 ms) | 50.2 (18 ms) |
+| $E$ | LoMa | PoseLib | 78.0 (6 ms) | 78.0 (6 ms) | 78.0 (6 ms) | 78.0 (7 ms) | 78.1 (10 ms) | 78.4 (17 ms) | 78.3 (31 ms) | 78.3 (69 ms) | 78.1 (127 ms) |
+| $E$ | LoMa | SupeRANSAC | 78.7 (5 ms) | 78.7 (5 ms) | 78.7 (6 ms) | 78.8 (6 ms) | 78.9 (8 ms) | 78.9 (11 ms) | 78.7 (16 ms) | 78.7 (31 ms) | 78.7 (55 ms) |
+| $E$ | RoMa | PoseLib | 74.1 (20 ms) | 74.1 (21 ms) | 74.5 (23 ms) | 74.5 (27 ms) | 74.5 (40 ms) | 74.5 (61 ms) | 74.5 (102 ms) | 74.5 (224 ms) | 74.5 (424 ms) |
+| $E$ | RoMa | SupeRANSAC | 74.8 (14 ms) | 74.8 (14 ms) | 74.8 (15 ms) | 74.9 (15 ms) | 74.5 (17 ms) | 74.2 (21 ms) | 74.3 (26 ms) | 74.6 (43 ms) | 74.6 (71 ms) |
+| $E$ | DISK+LG | PoseLib | 63.4 (7 ms) | 63.4 (6 ms) | 63.1 (7 ms) | 63.4 (8 ms) | 63.4 (11 ms) | 63.6 (17 ms) | 63.8 (30 ms) | 63.8 (64 ms) | 63.9 (120 ms) |
+| $E$ | DISK+LG | SupeRANSAC | 62.9 (7 ms) | 62.9 (6 ms) | 62.9 (7 ms) | 62.6 (7 ms) | 63.2 (9 ms) | 63.3 (11 ms) | 63.4 (16 ms) | 62.8 (30 ms) | 63.2 (53 ms) |
 | PnP | 6 matchers | PoseLib | 37.0 (14 ms) | 37.0 (14 ms) | 37.0 (14 ms) | 37.0 (14 ms) | 37.0 (14 ms) | 37.0 (15 ms) | 37.0 (17 ms) | 37.0 (24 ms) | 36.9 (36 ms) |
-| PnP | 6 matchers | SupeRANSAC | 36.5 (10 ms) | 36.5 (10 ms) | 36.5 (10 ms) | 36.5 (10 ms) | 36.5 (10 ms) | 36.4 (11 ms) | 36.6 (12 ms) | 36.7 (14 ms) | 36.7 (18 ms) |
+| PnP | 6 matchers | SupeRANSAC | 36.5 (7 ms) | 36.5 (7 ms) | 36.5 (7 ms) | 36.5 (7 ms) | 36.5 (8 ms) | 36.4 (8 ms) | 36.6 (9 ms) | 36.7 (11 ms) | 36.7 (14 ms) |
 
-OpenCV RANSAC (PnP, no minimum iteration count; iteration cap): cap 25: 20.4 (2 ms), cap 50: 22.2 (4 ms), cap 100: 23.7 (6 ms), cap 250: 26.3 (14 ms), cap 500: 27.2 (26 ms), cap 1000: 28.7 (48 ms), cap 2500: 29.3 (102 ms), cap 5000: 30.7 (181 ms).
+OpenCV RANSAC (PnP, no minimum iteration count; iteration cap): cap 25: 20.4 (2 ms), cap 50: 22.2 (3 ms), cap 100: 23.7 (6 ms), cap 250: 26.3 (14 ms), cap 500: 27.2 (26 ms), cap 1000: 28.7 (47 ms), cap 2500: 29.3 (102 ms), cap 5000: 30.7 (179 ms).
 
 ## 4. Labelled tentative correspondences (high outlier ratios)
 
@@ -104,19 +104,19 @@ The original SIFT tentative matches shipped with **kusvod2**, **AdelaideRMF / Mu
 | Problem | Scenes × repeats | Method | AUC@1px / 2px / 5px ($F$) — AUC@2.5 / 5 / 10 px ($H$) | Med err (px) | Mean ms |
 |---|---:|---|---|---:|---:|
 | $F$ AdelaideRMF/Multi-H | 19 × 5 | PoseLib | 55.1 / 76.6 / 90.6 | 0.34 | 29 |
-| $F$ AdelaideRMF/Multi-H | 19 × 5 | SupeRANSAC | **58.2** / **79.1** / **91.6** | 0.33 | 19 |
+| $F$ AdelaideRMF/Multi-H | 19 × 5 | SupeRANSAC | **58.2** / **79.1** / **91.6** | 0.33 | 14 |
 | $F$ kusvod2 | 11 × 5 | PoseLib | 63.1 / **80.6** / **92.3** | 0.29 | 11 |
-| $F$ kusvod2 | 11 × 5 | SupeRANSAC | **65.7** / 79.4 / 87.4 | 0.29 | 15 |
+| $F$ kusvod2 | 11 × 5 | SupeRANSAC | **65.7** / 79.4 / 87.4 | 0.29 | 10 |
 | $F$ **Overall** | 30 × 5 | PoseLib | 57.9 / 77.7 / **91.1** | 0.33 | 22 |
-| $F$ **Overall** | 30 × 5 | SupeRANSAC | **60.8** / **79.0** / 90.0 | 0.32 | 17 |
+| $F$ **Overall** | 30 × 5 | SupeRANSAC | **60.8** / **79.0** / 90.0 | 0.32 | 12 |
 | $H$ EVD | 11 × 5 | PoseLib | 38.5 / **61.4** / **80.7** | 1.73 | 2 |
-| $H$ EVD | 11 × 5 | SupeRANSAC | **39.4** / 56.9 / 78.4 | 1.41 | 3 |
+| $H$ EVD | 11 × 5 | SupeRANSAC | **39.4** / 56.9 / 78.4 | 1.41 | 2 |
 | $H$ Homogr | 5 × 5 | PoseLib | 38.5 / **67.6** / **83.8** | 1.55 | 2 |
 | $H$ Homogr | 5 × 5 | SupeRANSAC | **38.6** / 66.9 / 83.5 | 1.59 | 2 |
 | $H$ AdelaideRMF/Multi-H | 19 × 5 | PoseLib | 51.9 / 62.6 / 71.8 | 0.99 | 9 |
-| $H$ AdelaideRMF/Multi-H | 19 × 5 | SupeRANSAC | **61.4** / **69.1** / **75.1** | 0.39 | 7 |
+| $H$ AdelaideRMF/Multi-H | 19 × 5 | SupeRANSAC | **61.4** / **69.1** / **75.1** | 0.39 | 5 |
 | $H$ **Overall** | 35 × 5 | PoseLib | 45.3 / 62.5 / 76.1 | 1.40 | 6 |
-| $H$ **Overall** | 35 × 5 | SupeRANSAC | **50.8** / **64.7** / **77.1** | 0.99 | 5 |
+| $H$ **Overall** | 35 × 5 | SupeRANSAC | **50.8** / **64.7** / **77.1** | 0.99 | 4 |
 
 ## 5. 6D absolute pose (PnP) and rigid registration
 
@@ -124,15 +124,15 @@ The original SIFT tentative matches shipped with **kusvod2**, **AdelaideRMF / Mu
 
 | Problem | Data | Method | AUC@(2°,4cm) | AUC@(5°,10cm) | AUC@(10°,20cm) | Med rot / trans | Mean ms |
 |---|---|---|---:|---:|---:|---:|---:|
-| PnP | 7Scenes RGB-D, 600 | SupeRANSAC | 7.4 | 36.6 | 61.4 | 2.44° / 4.9 cm | 12 |
+| PnP | 7Scenes RGB-D, 600 | SupeRANSAC | 7.4 | 36.6 | 61.4 | 2.44° / 4.9 cm | 9 |
 | PnP | 7Scenes RGB-D, 600 | PoseLib | **7.7** | **37.0** | **61.6** | 2.39° / 4.7 cm | 17 |
 | PnP | 7Scenes RGB-D, 600 | OpenCV RANSAC | 5.5 | 30.7 | 53.7 | 2.88° / 5.8 cm | 180 |
-| PnP | pose6dscene synthetic, 140 | SupeRANSAC | **10.1** | **33.8** | **53.4** | 1.20° / 6.4 cm | 25 |
+| PnP | pose6dscene synthetic, 140 | SupeRANSAC | **10.1** | **33.8** | **53.4** | 1.20° / 6.4 cm | 16 |
 | PnP | pose6dscene synthetic, 140 | PoseLib | 9.3 | 30.1 | 51.3 | 1.35° / 8.2 cm | 20 |
 | PnP | pose6dscene synthetic, 140 | OpenCV RANSAC | 1.7 | 10.2 | 24.1 | 2.66° / 19.2 cm | 208 |
-| Rigid | 7Scenes RGB-D, 599 | SupeRANSAC | **9.7** | **42.4** | **67.2** | 2.06° / 4.2 cm | 8 |
+| Rigid | 7Scenes RGB-D, 599 | SupeRANSAC | **9.7** | **42.4** | **67.2** | 2.06° / 4.2 cm | 6 |
 | Rigid | 7Scenes RGB-D, 599 | Procrustes RANSAC | 9.2 | 41.5 | 66.6 | 2.10° / 4.3 cm | Python |
-| Rigid | rigid_pose_example synthetic, 51 | SupeRANSAC | 1.1 | **45.0** | **70.9** | 2.37° / 5.2 cm | 14 |
+| Rigid | rigid_pose_example synthetic, 51 | SupeRANSAC | 1.1 | **45.0** | **70.9** | 2.37° / 5.2 cm | 10 |
 | Rigid | rigid_pose_example synthetic, 51 | Procrustes RANSAC | **1.2** | 41.9 | 63.7 | 2.33° / 4.7 cm | Python |
 
 Per matcher on 7Scenes (AUC@(5°,10cm)):

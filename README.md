@@ -41,28 +41,28 @@ All numbers compare **SupeRANSAC with its default `RANSACSettings()`** against *
 
 | Task | Data | Metric | PoseLib | SupeRANSAC | Δ [95% CI] | ms PoseLib / SupeRANSAC |
 |---|---|---|---:|---:|---:|---:|
-| $F$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 300 calibrated pairs | AUC@10° | 61.9 | 62.1 | +0.2 [-0.6, +0.9] | 34 / 17 |
-| $F$, classical matchers (RootSIFT, SIFT, ORB) | 300 calibrated pairs | AUC@10° | 24.3 | 31.1 | +6.9 [+5.1, +8.8] | 105 / 65 |
-| $E$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 300 calibrated pairs | AUC@10° | 71.4 | 71.2 | -0.2 [-0.9, +0.4] | 56 / 25 |
-| $E$, classical matchers (RootSIFT, SIFT, ORB) | 300 calibrated pairs | AUC@10° | 48.3 | 49.5 | +1.2 [-0.2, +2.6] | 69 / 66 |
-| $H$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 16 Homogr + EVD pairs | AUC@5px | 51.6 | 51.6 | -0.0 [-0.8, +0.5] | 17 / 10 |
-| $H$, classical matchers (RootSIFT, SIFT, ORB) | 16 Homogr + EVD pairs | AUC@5px | 37.8 | 42.6 | +4.8 [-0.2, +12.7] | 8 / 14 |
-| $F$, labelled SIFT tentative matches | 30 scenes × 5 | AUC@2px | 77.7 | 79.0 | +1.3 [-2.3, +4.8] | 22 / 17 |
-| $H$, labelled SIFT tentative matches | 35 scenes × 5 | AUC@5px | 62.5 | 64.7 | +2.2 [-2.3, +7.7] | 6 / 5 |
-| PnP, 6 matchers | 600 7Scenes RGB-D problems | AUC@(5°,10cm) | 37.0 | 36.6 | -0.4 [-1.2, +0.3] | 17 / 12 |
-| Rigid, 6 matchers (baseline: Procrustes RANSAC) | 599 7Scenes RGB-D problems | AUC@(5°,10cm) | 41.5 | 42.4 | +0.9 [+0.1, +1.7] | Python / 8 |
+| $F$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 300 calibrated pairs | AUC@10° | 61.9 | 62.1 | +0.2 [-0.6, +0.9] | 34 / 11 |
+| $F$, classical matchers (RootSIFT, SIFT, ORB) | 300 calibrated pairs | AUC@10° | 24.3 | 31.1 | +6.9 [+5.1, +8.8] | 105 / 46 |
+| $E$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 300 calibrated pairs | AUC@10° | 71.4 | 71.2 | -0.2 [-0.9, +0.4] | 55 / 20 |
+| $E$, classical matchers (RootSIFT, SIFT, ORB) | 300 calibrated pairs | AUC@10° | 48.3 | 49.5 | +1.2 [-0.2, +2.6] | 70 / 51 |
+| $H$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 16 Homogr + EVD pairs | AUC@5px | 51.6 | 51.6 | -0.0 [-0.8, +0.5] | 16 / 6 |
+| $H$, classical matchers (RootSIFT, SIFT, ORB) | 16 Homogr + EVD pairs | AUC@5px | 37.8 | 42.6 | +4.8 [-0.2, +12.7] | 8 / 10 |
+| $F$, labelled SIFT tentative matches | 30 scenes × 5 | AUC@2px | 77.7 | 79.0 | +1.3 [-2.3, +4.8] | 22 / 12 |
+| $H$, labelled SIFT tentative matches | 35 scenes × 5 | AUC@5px | 62.5 | 64.7 | +2.2 [-2.3, +7.7] | 6 / 4 |
+| PnP, 6 matchers | 600 7Scenes RGB-D problems | AUC@(5°,10cm) | 37.0 | 36.6 | -0.4 [-1.2, +0.3] | 17 / 9 |
+| Rigid, 6 matchers (baseline: Procrustes RANSAC) | 599 7Scenes RGB-D problems | AUC@(5°,10cm) | 41.5 | 42.4 | +0.9 [+0.1, +1.7] | Python / 6 |
 
 **In short.**
-* On matches from **learned matchers** (LoMa, RoMa, LoFTR, DISK+LightGlue) the two libraries are tied in accuracy: every group and per-matcher 95% confidence interval on $F$, $E$ and $H$ contains zero (Figure above), while at the default settings SupeRANSAC is roughly $2\times$ faster ($F$: 17 vs 34 ms, $E$: 25 vs 56 ms, $H$: 10 vs 17 ms).
-* On **classical matchers** (RootSIFT, SIFT, ORB; typically 10–40 % inliers) SupeRANSAC is significantly more accurate on $F$ (+6.9 AUC), ahead on $E$ (+1.2 AUC) and on $H$ with RootSIFT / SIFT (+7.3 / +7.1 AUC), while also faster on $F$ (65 vs 105 ms) and $E$ (66 vs 69 ms); on $H$ it is slower (14 vs 8 ms).
-* On the **labelled tentative matches** (high outlier ratios, no confidence order) it is ahead on both $F$ (+1.3 AUC) and $H$ (+2.2 AUC; inside the wide scene-level intervals of 30–35 scenes) and slightly faster.
-* **PnP**: tied with PoseLib within the 95% CI on 7Scenes (-0.4 [-1.2, +0.3]) while faster (12 vs 17 ms), ahead on the synthetic high-outlier stress benchmark (33.8 vs 30.1 AUC), and clearly ahead of OpenCV (36.6 vs 30.7 AUC, 12 vs 180 ms). **Rigid registration**: significantly ahead of the Procrustes RANSAC baseline across the 6 matchers (+0.9 AUC, 95% CI [+0.1, +1.7]) at 8 ms per problem (the baseline's runtime is not comparable because it is written in Python).
+* On matches from **learned matchers** (LoMa, RoMa, LoFTR, DISK+LightGlue) the two libraries are tied in accuracy: every group and per-matcher 95% confidence interval on $F$, $E$ and $H$ contains zero (Figure above), while at the default settings SupeRANSAC is roughly $3\times$ faster ($F$: 11 vs 34 ms, $E$: 20 vs 55 ms, $H$: 6 vs 16 ms).
+* On **classical matchers** (RootSIFT, SIFT, ORB; typically 10–40 % inliers) SupeRANSAC is significantly more accurate on $F$ (+6.9 AUC), ahead on $E$ (+1.2 AUC) and on $H$ with RootSIFT / SIFT (+7.3 / +7.1 AUC), while also faster on $F$ (46 vs 105 ms) and $E$ (51 vs 70 ms); on $H$ it is slightly slower (10 vs 8 ms).
+* On the **labelled tentative matches** (high outlier ratios, no confidence order) it is ahead on both $F$ (+1.3 AUC) and $H$ (+2.2 AUC; inside the wide scene-level intervals of 30–35 scenes) and faster ($F$: 12 vs 22 ms, $H$: 4 vs 6 ms).
+* **PnP**: tied with PoseLib within the 95% CI on 7Scenes (-0.4 [-1.2, +0.3]) while $2\times$ faster (9 vs 17 ms), ahead and faster on the synthetic high-outlier stress benchmark (33.8 vs 30.1 AUC, 16 vs 20 ms), and clearly ahead of OpenCV (36.6 vs 30.7 AUC, 9 vs 180 ms). **Rigid registration**: significantly ahead of the Procrustes RANSAC baseline across the 6 matchers (+0.9 AUC, 95% CI [+0.1, +1.7]) at 6 ms per problem (the baseline's runtime is not comparable because it is written in Python).
 
 ### Speed–accuracy trade-off
 
 <p align="center"><img src="assets/fig_speed_accuracy.png" width="100%"/></p>
 
-`min_iterations` is swept from 0 to 5000 while every library keeps its own adaptive termination (at most 5000 iterations); OpenCV has no minimum, so its iteration cap is swept instead. The ★ on each curve is the default configuration used in the tables. The accuracy of both libraries is nearly flat across budgets. At the default (1000 minimum iterations, which is also PoseLib's default) and above, SupeRANSAC is consistently faster ($F$: 12–23 vs 16–63 ms, $E$: 18–33 vs 29–102 ms over LoMa / RoMa / DISK+LG). When both may stop as soon as they are confident (`min_iterations = 0`), SupeRANSAC is faster on RoMa ($F$: 20 vs 25 ms, $E$: 18 vs 20 ms at 74.8 vs 74.1 AUC), tied in runtime and ahead in accuracy on LoMa ($F$: 8 ms, 71.8 vs 70.2 AUC; $E$: 6 ms, 78.7 vs 78.0 AUC), and within 0–1 ms on DISK+LG ($F$: 8 vs 7 ms; $E$: 7 vs 7 ms). On PnP, SupeRANSAC is faster across the entire sweep (10–18 vs 14–36 ms at AUC 36.4–36.7); OpenCV reaches 30.7 at 181 ms.
+`min_iterations` is swept from 0 to 5000 while every library keeps its own adaptive termination (at most 5000 iterations); OpenCV has no minimum, so its iteration cap is swept instead. The ★ on each curve is the default configuration used in the tables. The accuracy of both libraries is nearly flat across budgets. At the default (1000 minimum iterations, which is also PoseLib's default) and above, SupeRANSAC is consistently faster ($F$: 8–15 vs 17–63 ms, $E$: 16–26 vs 30–102 ms over LoMa / RoMa / DISK+LG). When both may stop as soon as they are confident (`min_iterations = 0`), SupeRANSAC is faster on RoMa ($F$: 12 vs 25 ms, $E$: 14 vs 20 ms at 74.8 vs 74.1 AUC), faster and ahead in accuracy on LoMa ($F$: 5 vs 8 ms, 71.8 vs 70.2 AUC; $E$: 5 vs 6 ms, 78.7 vs 78.0 AUC), and faster or tied on DISK+LG ($F$: 5 vs 7 ms; $E$: 7 vs 7 ms). On PnP, SupeRANSAC is faster across the entire sweep (7–14 vs 14–36 ms at AUC 36.4–36.7); OpenCV reaches 30.7 at 179 ms.
 
 ### Low inlier ratios and 6D pose
 

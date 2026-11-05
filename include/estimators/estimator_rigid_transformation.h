@@ -177,13 +177,60 @@ namespace superansac
 				const models::Model& kModel_,
 				const size_t kStartRow_,
 				const size_t kCount_,
-				double* kOut_) const override
+				double* __restrict__ kOut_) const override
 			{
 				const ModelMatrix& kDescriptor = kModel_.getData();
-				const size_t kCols = kData_.cols();
-				const double* row = kData_.data() + kStartRow_ * kCols;
-				for (size_t i = 0; i < kCount_; ++i, row += kCols)
-					kOut_[i] = squaredResidual(row, kDescriptor);
+				const double m00 = kDescriptor(0, 0), m10 = kDescriptor(1, 0), m20 = kDescriptor(2, 0), m30 = kDescriptor(3, 0);
+				const double m01 = kDescriptor(0, 1), m11 = kDescriptor(1, 1), m21 = kDescriptor(2, 1), m31 = kDescriptor(3, 1);
+				const double m02 = kDescriptor(0, 2), m12 = kDescriptor(1, 2), m22 = kDescriptor(2, 2), m32 = kDescriptor(3, 2);
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double* __restrict__ row = kData_.data() + kStartRow_ * kCols;
+				if (kCols == 6)
+				{
+					for (size_t i = 0; i < kCount_; ++i, row += 6)
+					{
+						const double x1 = row[0], y1 = row[1], z1 = row[2];
+						const double dx = row[3] - (m00 * x1 + m10 * y1 + m20 * z1 + m30);
+						const double dy = row[4] - (m01 * x1 + m11 * y1 + m21 * z1 + m31);
+						const double dz = row[5] - (m02 * x1 + m12 * y1 + m22 * z1 + m32);
+						kOut_[i] = dx * dx + dy * dy + dz * dz;
+					}
+				}
+				else
+				{
+					for (size_t i = 0; i < kCount_; ++i, row += kCols)
+					{
+						const double x1 = row[0], y1 = row[1], z1 = row[2];
+						const double dx = row[3] - (m00 * x1 + m10 * y1 + m20 * z1 + m30);
+						const double dy = row[4] - (m01 * x1 + m11 * y1 + m21 * z1 + m31);
+						const double dz = row[5] - (m02 * x1 + m12 * y1 + m22 * z1 + m32);
+						kOut_[i] = dx * dx + dy * dy + dz * dz;
+					}
+				}
+			}
+
+			void squaredResidualsIndexed(
+				const DataMatrix& kData_,
+				const models::Model& kModel_,
+				const size_t* __restrict__ kIndices_,
+				const size_t kCount_,
+				double* __restrict__ kOut_) const override
+			{
+				const ModelMatrix& kDescriptor = kModel_.getData();
+				const double m00 = kDescriptor(0, 0), m10 = kDescriptor(1, 0), m20 = kDescriptor(2, 0), m30 = kDescriptor(3, 0);
+				const double m01 = kDescriptor(0, 1), m11 = kDescriptor(1, 1), m21 = kDescriptor(2, 1), m31 = kDescriptor(3, 1);
+				const double m02 = kDescriptor(0, 2), m12 = kDescriptor(1, 2), m22 = kDescriptor(2, 2), m32 = kDescriptor(3, 2);
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double* __restrict__ kBase = kData_.data();
+				for (size_t i = 0; i < kCount_; ++i)
+				{
+					const double* __restrict__ row = kBase + kIndices_[i] * kCols;
+					const double x1 = row[0], y1 = row[1], z1 = row[2];
+					const double dx = row[3] - (m00 * x1 + m10 * y1 + m20 * z1 + m30);
+					const double dy = row[4] - (m01 * x1 + m11 * y1 + m21 * z1 + m31);
+					const double dz = row[5] - (m02 * x1 + m12 * y1 + m22 * z1 + m32);
+					kOut_[i] = dx * dx + dy * dy + dz * dz;
+				}
 			}
 
 			// Validate the model by checking the number of inlier with symmetric epipolar distance
@@ -230,68 +277,60 @@ namespace superansac
 				const DataMatrix& kData_, // All data points
 				const size_t *kSample_) const override // The indices of the selected points
 			{
-				// Check whether the selected points are collinear
+				// Check whether the selected points are collinear or violate isometric triangle congruence
 				constexpr double kCollinearityThreshold = 1e-6;
-				
-				// Extract the points based on indices in kSample_
-				const auto& p1 = kData_.row(kSample_[0]);
-				const auto& p2 = kData_.row(kSample_[1]);
-				const auto& p3 = kData_.row(kSample_[2]);
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double * __restrict__ kBase = kData_.data();
+				const double * __restrict__ p1 = kBase + kSample_[0] * kCols;
+				const double * __restrict__ p2 = kBase + kSample_[1] * kCols;
 
-				// Calculate vectors in the first domain (x1, y1, z1)
-				double v1x1 = p2[0] - p1[0], 
-					v1y1 = p2[1] - p1[1], 
-					v1z1 = p2[2] - p1[2];
-				double v2x1 = p3[0] - p1[0], 
-					v2y1 = p3[1] - p1[1], 
-					v2z1 = p3[2] - p1[2];
+				// Sqrt-free exact algebraic equivalent of |sqrt(s1) - sqrt(s2)| > m (for s1,s2 >= 0, m >= 0):
+				// |sqrt(s1) - sqrt(s2)| > m  <=>  (s1 + s2 - m^2 > 0) && (s1 + s2 - m^2)^2 > 4 * s1 * s2
+				const double mSq = 4.0 * inlierThreshold * inlierThreshold;
+				auto edgeIncompatible = [mSq](const double s1, const double s2) -> bool
+				{
+					const double diff = s1 + s2 - mSq;
+					return (diff > 0.0) && (diff * diff > 4.0 * s1 * s2);
+				};
 
-				// Calculate vectors in the second domain (x2, y2, z2)
-				double v1x2 = p2[3] - p1[3], v1y2 = p2[4] - p1[4], v1z2 = p2[5] - p1[5];
-				double v2x2 = p3[3] - p1[3], v2y2 = p3[4] - p1[4], v2z2 = p3[5] - p1[5];
-
-				// Isometric triangle edge-length congruence check: under any rigid transformation
-				// where all 3 sample points have residual <= inlierThreshold, each pairwise distance
-				// is preserved within 2 * inlierThreshold by the triangle inequality.
-				const double maxEdgeDiff = 2.0 * inlierThreshold;
-				const double d1_12 = std::sqrt(v1x1 * v1x1 + v1y1 * v1y1 + v1z1 * v1z1);
-				const double d2_12 = std::sqrt(v1x2 * v1x2 + v1y2 * v1y2 + v1z2 * v1z2);
-				if (std::abs(d1_12 - d2_12) > maxEdgeDiff)
+				// Test edge (1, 2) before touching p3 (rejects most invalid samples immediately)
+				const double v1x1 = p2[0] - p1[0], v1y1 = p2[1] - p1[1], v1z1 = p2[2] - p1[2];
+				const double v1x2 = p2[3] - p1[3], v1y2 = p2[4] - p1[4], v1z2 = p2[5] - p1[5];
+				if (edgeIncompatible(
+						v1x1 * v1x1 + v1y1 * v1y1 + v1z1 * v1z1,
+						v1x2 * v1x2 + v1y2 * v1y2 + v1z2 * v1z2))
 					return false;
 
-				const double d1_13 = std::sqrt(v2x1 * v2x1 + v2y1 * v2y1 + v2z1 * v2z1);
-				const double d2_13 = std::sqrt(v2x2 * v2x2 + v2y2 * v2y2 + v2z2 * v2z2);
-				if (std::abs(d1_13 - d2_13) > maxEdgeDiff)
+				const double * __restrict__ p3 = kBase + kSample_[2] * kCols;
+				const double v2x1 = p3[0] - p1[0], v2y1 = p3[1] - p1[1], v2z1 = p3[2] - p1[2];
+				const double v2x2 = p3[3] - p1[3], v2y2 = p3[4] - p1[4], v2z2 = p3[5] - p1[5];
+				if (edgeIncompatible(
+						v2x1 * v2x1 + v2y1 * v2y1 + v2z1 * v2z1,
+						v2x2 * v2x2 + v2y2 * v2y2 + v2z2 * v2z2))
 					return false;
 
 				const double v3x1 = p3[0] - p2[0], v3y1 = p3[1] - p2[1], v3z1 = p3[2] - p2[2];
 				const double v3x2 = p3[3] - p2[3], v3y2 = p3[4] - p2[4], v3z2 = p3[5] - p2[5];
-				const double d1_23 = std::sqrt(v3x1 * v3x1 + v3y1 * v3y1 + v3z1 * v3z1);
-				const double d2_23 = std::sqrt(v3x2 * v3x2 + v3y2 * v3y2 + v3z2 * v3z2);
-				if (std::abs(d1_23 - d2_23) > maxEdgeDiff)
+				if (edgeIncompatible(
+						v3x1 * v3x1 + v3y1 * v3y1 + v3z1 * v3z1,
+						v3x2 * v3x2 + v3y2 * v3y2 + v3z2 * v3z2))
 					return false;
 				
 				// Cross product in the first domain
-				double cross1_x = v1y1 * v2z1 - v1z1 * v2y1;
-				double cross1_y = v1z1 * v2x1 - v1x1 * v2z1;
-				double cross1_z = v1x1 * v2y1 - v1y1 * v2x1;
-				
-				// Check if cross product is near zero for collinearity in the first domain
-				if (std::abs(cross1_x) < kCollinearityThreshold && std::abs(cross1_y) < kCollinearityThreshold && std::abs(cross1_z) < kCollinearityThreshold) {
-					return false; // Collinear in the first domain
-				}
+				const double cross1_x = v1y1 * v2z1 - v1z1 * v2y1;
+				const double cross1_y = v1z1 * v2x1 - v1x1 * v2z1;
+				const double cross1_z = v1x1 * v2y1 - v1y1 * v2x1;
+				if (std::abs(cross1_x) < kCollinearityThreshold && std::abs(cross1_y) < kCollinearityThreshold && std::abs(cross1_z) < kCollinearityThreshold)
+					return false;
 				
 				// Cross product in the second domain
-				double cross2_x = v1y2 * v2z2 - v1z2 * v2y2;
-				double cross2_y = v1z2 * v2x2 - v1x2 * v2z2;
-				double cross2_z = v1x2 * v2y2 - v1y2 * v2x2;
-				
-				// Check if cross product is near zero for collinearity in the second domain
-				if (std::abs(cross2_x) < kCollinearityThreshold && std::abs(cross2_y) < kCollinearityThreshold && std::abs(cross2_z) < kCollinearityThreshold) {
-					return false; // Collinear in the second domain
-				}
+				const double cross2_x = v1y2 * v2z2 - v1z2 * v2y2;
+				const double cross2_y = v1z2 * v2x2 - v1x2 * v2z2;
+				const double cross2_z = v1x2 * v2y2 - v1y2 * v2x2;
+				if (std::abs(cross2_x) < kCollinearityThreshold && std::abs(cross2_y) < kCollinearityThreshold && std::abs(cross2_z) < kCollinearityThreshold)
+					return false;
 
-				return true; // Points are not collinear in either domain
+				return true;
 			}
 		};
 	}

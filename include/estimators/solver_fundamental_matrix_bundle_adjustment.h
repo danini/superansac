@@ -138,28 +138,32 @@ namespace superansac
 				if (useArgWeights || useMemberWeights)
 					weights.resize(kSampleNumber_);
 
+				const size_t kCols = static_cast<size_t>(kData_.cols());
+				const double * __restrict__ kBase = kData_.data();
 				if (kSample_ == nullptr)
 				{
-					for (size_t pointIdx = 0; pointIdx < kSampleNumber_; pointIdx++)
+					const double * __restrict__ row = kBase;
+					for (size_t pointIdx = 0; pointIdx < kSampleNumber_; ++pointIdx, row += kCols)
 					{
-						x1[pointIdx] = Eigen::Vector2d(kData_(pointIdx, 0), kData_(pointIdx, 1));
-						x2[pointIdx] = Eigen::Vector2d(kData_(pointIdx, 2), kData_(pointIdx, 3));
+						x1[pointIdx] = Eigen::Vector2d(row[0], row[1]);
+						x2[pointIdx] = Eigen::Vector2d(row[2], row[3]);
 						if (useArgWeights)
 							weights[pointIdx] = kWeights_[pointIdx];
 						else if (useMemberWeights)
-							weights[pointIdx] = pointWeights->at(pointIdx);
+							weights[pointIdx] = (*pointWeights)[pointIdx];
 					}
 				} else
 				{
-					for (size_t pointIdx = 0; pointIdx < kSampleNumber_; pointIdx++)
+					for (size_t pointIdx = 0; pointIdx < kSampleNumber_; ++pointIdx)
 					{
-						const size_t &idx = kSample_[pointIdx];
-						x1[pointIdx] = Eigen::Vector2d(kData_(idx, 0), kData_(idx, 1));
-						x2[pointIdx] = Eigen::Vector2d(kData_(idx, 2), kData_(idx, 3));
+						const size_t idx = kSample_[pointIdx];
+						const double * __restrict__ row = kBase + idx * kCols;
+						x1[pointIdx] = Eigen::Vector2d(row[0], row[1]);
+						x2[pointIdx] = Eigen::Vector2d(row[2], row[3]);
 						if (useArgWeights)
 							weights[pointIdx] = kWeights_[pointIdx];
 						else if (useMemberWeights)
-							weights[pointIdx] = pointWeights->at(idx);
+							weights[pointIdx] = (*pointWeights)[idx];
 					}
 				}
 				
@@ -167,7 +171,8 @@ namespace superansac
 				auto runEightPoint = [&]() -> bool
 				{
 					FundamentalMatrixEightPointSolver eightPointSolver;
-					std::vector<models::Model> eightPtModels;
+					static thread_local std::vector<models::Model> eightPtModels;
+					eightPtModels.clear();
 					if (eightPointSolver.estimateModel(kData_, kSample_, kSampleNumber_, eightPtModels, kWeights_))
 					{
 						for (auto &m : eightPtModels)
