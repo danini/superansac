@@ -48,6 +48,7 @@
 
 #include "solver_fundamental_matrix_seven_point.h"
 #include "solver_fundamental_matrix_eight_point.h"
+#include "numerical_optimizer/essential.h"
 
 namespace superansac
 {
@@ -56,9 +57,47 @@ namespace superansac
 		// This is the estimator class for estimating a homography matrix between two images. A model estimation method and error calculation method are implemented
 		class EssentialMatrixEstimator : public Estimator
 		{
+		protected:
+			bool enforce3DCheirality = true;
+			double invFx1 = 1.0, invFy1 = 1.0, invFx2 = 1.0, invFy2 = 1.0;
+			double invFx1Sq = 1.0, invFy1Sq = 1.0, invFx2Sq = 1.0, invFy2Sq = 1.0;
+			double cheiralityResidualCutoffSq = 0.01;
+			double cheiralityMargin = 0.0;
+
 		public:
 			EssentialMatrixEstimator() {}
 			~EssentialMatrixEstimator() {}
+
+			void setEnforce3DCheirality(const bool kEnabled_)
+			{
+				enforce3DCheirality = kEnabled_;
+			}
+
+			void setInverseFocalLengths(
+				const double kInvFx1_,
+				const double kInvFy1_,
+				const double kInvFx2_,
+				const double kInvFy2_)
+			{
+				invFx1 = kInvFx1_;
+				invFy1 = kInvFy1_;
+				invFx2 = kInvFx2_;
+				invFy2 = kInvFy2_;
+				invFx1Sq = kInvFx1_ * kInvFx1_;
+				invFy1Sq = kInvFy1_ * kInvFy1_;
+				invFx2Sq = kInvFx2_ * kInvFx2_;
+				invFy2Sq = kInvFy2_ * kInvFy2_;
+			}
+
+			void setCheiralityResidualCutoffSq(const double kCutoffSq_)
+			{
+				cheiralityResidualCutoffSq = kCutoffSq_;
+			}
+
+			void setCheiralityMargin(const double kMargin_)
+			{
+				cheiralityMargin = kMargin_;
+			}
             
 			// A flag deciding if the points can be weighted when the non-minimal fitting is applied 
 			bool isWeightingApplicable() const override
@@ -90,14 +129,81 @@ namespace superansac
 			{
 				const size_t kSampleSize = sampleSize();
 
-				// Estimate the model parameters by the minimal solver
-				minimalSolver->estimateModel(kData_, // The data points
-					kSample_, // The sample used for the estimation
-					kSampleSize, // The size of a minimal sample
-					*models_); // The estimated model parameters
+				if (!enforce3DCheirality || kSample_ == nullptr)
+				{
+					minimalSolver->estimateModel(kData_, kSample_, kSampleSize, *models_);
+					return models_->size() > 0;
+				}
 
-				// The estimation was successfull if at least one model is kept
-				return models_->size() > 0;
+				static thread_local std::vector<models::Model> rawModels;
+				static thread_local std::vector<Eigen::Vector3d> b1, b2;
+				static const std::vector<Eigen::Vector3d> kEmptyBearings;
+				rawModels.clear();
+				minimalSolver->estimateModel(kData_, kSample_, kSampleSize, rawModels);
+				if (rawModels.empty())
+					return false;
+
+				if (cheiralityMargin <= 0.0)
+				{
+					b1.resize(kSampleSize);
+					b2.resize(kSampleSize);
+					for (size_t i = 0; i < kSampleSize; ++i)
+					{
+						const size_t idx = kSample_[i];
+						b1[i] = Eigen::Vector3d(kData_(idx, 0), kData_(idx, 1), 1.0).normalized();
+						b2[i] = Eigen::Vector3d(kData_(idx, 2), kData_(idx, 3), 1.0).normalized();
+					}
+				}
+
+				poselib::CameraPoseVector poses;
+				for (const auto &raw : rawModels)
+				{
+					const Eigen::Matrix3d E = raw.getData().block<3, 3>(0, 0);
+					if (!E.allFinite())
+						continue;
+					poses.clear();
+					if (cheiralityMargin <= 0.0)
+					{
+						poselib::motion_from_essential(E, b1, b2, &poses);
+						for (const auto &pose : poses)
+						{
+							models::Model m;
+							m.getMutableData() = E;
+							m.setPose(pose.Rt());
+							models_->push_back(m);
+						}
+					}
+					else
+					{
+						poselib::motion_from_essential(E, kEmptyBearings, kEmptyBearings, &poses);
+						for (const auto &pose : poses)
+						{
+							const Eigen::Matrix<double, 3, 4, Eigen::RowMajor> rt = pose.Rt();
+							bool allCheiral = true;
+							for (size_t i = 0; i < kSampleSize; ++i)
+							{
+								if (!isPointCheiral(kData_.row(kSample_[i]).data(), rt))
+								{
+									allCheiral = false;
+									break;
+								}
+							}
+							if (allCheiral)
+							{
+								models::Model m;
+								m.getMutableData() = E;
+								m.setPose(rt);
+								models_->push_back(m);
+							}
+						}
+					}
+				}
+
+				// Return a single unposed placeholder when all minimal roots fail 3D cheirality so
+				// SupeRansac::run advances 1 iteration per minimal sample and rejects in isValidModel.
+				if (models_->empty())
+					models_->push_back(rawModels[0]);
+				return true;
 			}
 
 			// Estimating the model from a non-minimal sample
@@ -121,10 +227,42 @@ namespace superansac
 				return true;
 			}
 
+			// Exact division-free and sqrt-free 3D positive-depth check (equivalent to
+			// poselib::check_cheirality with min_depth = 0 on unit bearing vectors).
+			FORCE_INLINE bool isPointCheiral(
+				const double* kPoint_,
+				const Eigen::Matrix<double, 3, 4, Eigen::RowMajor>& kRt_) const
+			{
+				const double x1 = kPoint_[0], y1 = kPoint_[1];
+				const double x2 = kPoint_[2], y2 = kPoint_[3];
+				const double r1_0 = kRt_(0, 0) * x1 + kRt_(0, 1) * y1 + kRt_(0, 2);
+				const double r1_1 = kRt_(1, 0) * x1 + kRt_(1, 1) * y1 + kRt_(1, 2);
+				const double r1_2 = kRt_(2, 0) * x1 + kRt_(2, 1) * y1 + kRt_(2, 2);
+				const double tx = kRt_(0, 3), ty = kRt_(1, 3), tz = kRt_(2, 3);
+				const double c  = -(r1_0 * x2 + r1_1 * y2 + r1_2);
+				const double d1 = -(r1_0 * tx + r1_1 * ty + r1_2 * tz);
+				const double d2 =   x2 * tx + y2 * ty + tz;
+				const double n1 = x1 * x1 + y1 * y1 + 1.0;
+				const double n2 = x2 * x2 + y2 * y2 + 1.0;
+				const double num1 = d1 * n2 - c * d2;
+				const double num2 = d2 * n1 - c * d1;
+				if (num1 > 0.0 && num2 > 0.0)
+					return true;
+				if (cheiralityMargin > 0.0 && c < 0.0)
+				{
+					const double tol = -cheiralityMargin * n1 * n2;
+					return (num1 > tol) && (num2 > tol);
+				}
+				return false;
+			}
+
 			FORCE_INLINE double squaredResidual(const double* point_,
 				const models::Model& model_) const override
 			{
-				return squaredResidual(point_, model_.getData());
+				const double r2 = squaredSampsonDistance(point_, model_.getData());
+				if (enforce3DCheirality && model_.hasPose() && r2 < cheiralityResidualCutoffSq && !isPointCheiral(point_, model_.getPose()))
+					return 1e18;
+				return r2;
 			}
 
 			FORCE_INLINE double squaredResidual(
@@ -160,8 +298,8 @@ namespace superansac
 				const double r = (x1 * rxc + y1 * ryc + rwc);
 				const double rx = e11 * x1 + e12 * y1 + e13;
 				const double ry = e21 * x1 + e22 * y1 + e23;
-				const double a = rxc * rxc + ryc * ryc;
-				const double b = rx * rx + ry * ry;
+				const double a = invFx1Sq * rxc * rxc + invFy1Sq * ryc * ryc;
+				const double b = invFx2Sq * rx * rx + invFy2Sq * ry * ry;
 
 				return r * r * (a + b) / (a * b);
 			}
@@ -186,8 +324,8 @@ namespace superansac
 				const double Ex2_1 = E0_1 * x2_0 + E1_1 * x2_1 + E2_1;
 
 				const double C = x2_0 * Ex1_0 + x2_1 * Ex1_1 + Ex1_2;
-				const double Cx = Ex1_0 * Ex1_0 + Ex1_1 * Ex1_1;
-				const double Cy = Ex2_0 * Ex2_0 + Ex2_1 * Ex2_1;
+				const double Cx = invFx2Sq * Ex1_0 * Ex1_0 + invFy2Sq * Ex1_1 * Ex1_1;
+				const double Cy = invFx1Sq * Ex2_0 * Ex2_0 + invFy1Sq * Ex2_1 * Ex2_1;
 
 				// Use reciprocal multiplication (faster than division with -ffast-math)
 				const double denom_sum = Cx + Cy;
@@ -199,7 +337,7 @@ namespace superansac
 			FORCE_INLINE double residual(const double* point_,
 				const models::Model& model_) const override
 			{
-				return residual(point_, model_.getData());
+				return sqrt(squaredResidual(point_, model_));
 			}
 
 			FORCE_INLINE double residual(const double* point_,
@@ -221,8 +359,20 @@ namespace superansac
 				const ModelMatrix& kDescriptor = kModel_.getData();
 				const size_t kCols = kData_.cols();
 				const double* row = kData_.data() + kStartRow_ * kCols;
-				for (size_t i = 0; i < kCount_; ++i, row += kCols)
-					kOut_[i] = squaredSampsonDistance(row, kDescriptor);
+				if (enforce3DCheirality && kModel_.hasPose())
+				{
+					const auto& kRt = kModel_.getPose();
+					for (size_t i = 0; i < kCount_; ++i, row += kCols)
+					{
+						const double r2 = squaredSampsonDistance(row, kDescriptor);
+						kOut_[i] = (r2 < cheiralityResidualCutoffSq && !isPointCheiral(row, kRt)) ? 1e18 : r2;
+					}
+				}
+				else
+				{
+					for (size_t i = 0; i < kCount_; ++i, row += kCols)
+						kOut_[i] = squaredSampsonDistance(row, kDescriptor);
+				}
 			}
 
 			// Validate the model by checking the number of inlier with symmetric epipolar distance
@@ -236,6 +386,8 @@ namespace superansac
 				const double kThreshold_,
 				bool& modelUpdated_) const override
 			{ 
+				if (enforce3DCheirality && kMinimalSample_ != nullptr)
+					return model_.hasPose();
 				if (kMinimalSample_ != nullptr &&
 					!isOrientationValid(model_.getData().block<3, 3>(0, 0), kData_, kMinimalSample_, sampleSize()))
 					return false;

@@ -205,12 +205,13 @@ namespace
         std::vector<size_t> &inliers_)
     {
         const size_t kRows = kData_.rows();
-        const size_t kCols = kData_.cols();
-        const double *row = kData_.data();
+        static thread_local std::vector<double> sqResiduals;
+        sqResiduals.resize(kRows);
+        kEstimator_->squaredResiduals(kData_, kModel_, 0, kRows, sqResiduals.data());
         inliers_.clear();
         inliers_.reserve(kRows);
-        for (size_t i = 0; i < kRows; ++i, row += kCols)
-            if (kEstimator_->squaredResidual(row, kModel_) < kSquaredThreshold_)
+        for (size_t i = 0; i < kRows; ++i)
+            if (sqResiduals[i] < kSquaredThreshold_)
                 inliers_.push_back(i);
     }
 
@@ -219,24 +220,74 @@ namespace
         poselib::BundleOptions opt;
         // Robust rounds use the Cauchy loss; rounds with sigma-consensus weights switch to weighted least
         // squares inside the refine lambdas (see withLoss()).
+        const double kLossScale = (kSettings_.finalBundleLossScale > 0.0) ? kSettings_.finalBundleLossScale : 0.5;
         opt.loss_type = poselib::BundleOptions::LossType::CAUCHY;
-        opt.loss_scale = kSettings_.finalBundleLossScale * kSettings_.inlierThreshold;
+        opt.loss_scale = kLossScale * kSettings_.inlierThreshold;
         opt.max_iterations = kSettings_.finalBundleMaxIterations;
         return opt;
     }
 
-    // Options for one refinement round: robust rounds use the Cauchy loss, sigma-consensus weighted rounds
-    // solve a weighted least-squares problem.
-    inline poselib::BundleOptions withLoss(const poselib::BundleOptions &kOpt_, const bool kRobust_)
+    // Options for one refinement round inside runFinalBundle:
+    //   0: dynamic Cauchy IRLS (loss_scale = finalBundleLossScale * inlierThreshold) in every round
+    //   1: static pre-LM MAGSAC++ weights + TRIVIAL L2 in every round
+    //   2: static pre-LM MAGSAC++ weights + TRIVIAL L2 in rounds 0..R-2, dynamic Cauchy IRLS in round R-1
+    //   3: dynamic MAGSAC++ IRLS inside LM (scale = inlierThreshold * kMult) in rounds 0..R-2, dynamic Cauchy IRLS in round R-1
+    //   4: round-scaled dynamic Cauchy IRLS (loss_scale = finalBundleLossScale * inlierThreshold * kMult) in every round
+    //   5: dynamic MAGSAC++ IRLS inside LM (scale = inlierThreshold * kMult) in every round
+    inline poselib::BundleOptions roundBundleOptions(
+        const poselib::BundleOptions &kBaseOpt_,
+        const superansac::RANSACSettings &kSettings_,
+        const double kMult_,
+        const size_t kRound_,
+        const size_t kRounds_)
     {
-        poselib::BundleOptions opt = kOpt_;
-        if (!kRobust_)
+        poselib::BundleOptions opt = kBaseOpt_;
+        const int kMode = kSettings_.finalBundleWeighting;
+        const bool kIsLast = (kRound_ + 1 >= kRounds_);
+        const double kLossScale = (kSettings_.finalBundleLossScale > 0.0) ? kSettings_.finalBundleLossScale : 0.5;
+        if (kMode == 1 || (kMode == 2 && !kIsLast))
+        {
             opt.loss_type = poselib::BundleOptions::LossType::TRIVIAL;
+        }
+        else if (kMode == 5 || (kMode == 3 && !kIsLast))
+        {
+            opt.loss_type = poselib::BundleOptions::LossType::MAGSACPlusPlus;
+            opt.loss_scale = kSettings_.inlierThreshold * kMult_;
+        }
+        else if (kMode == 4)
+        {
+            opt.loss_type = poselib::BundleOptions::LossType::CAUCHY;
+            opt.loss_scale = kLossScale * kSettings_.inlierThreshold * kMult_;
+        }
+        else
+        {
+            opt.loss_type = poselib::BundleOptions::LossType::CAUCHY;
+            opt.loss_scale = kLossScale * kSettings_.inlierThreshold;
+        }
         return opt;
     }
 
+    inline void buildConfidenceWeights(
+        const std::vector<double> &kProbs_,
+        const double kFloor_,
+        std::vector<double> &out_)
+    {
+        if (kProbs_.empty())
+        {
+            out_.clear();
+            return;
+        }
+        const double floorVal = std::max(0.0, std::min(1.0, kFloor_));
+        out_.resize(kProbs_.size());
+        for (size_t i = 0; i < kProbs_.size(); ++i)
+        {
+            const double c = std::max(1e-3, std::min(1.0, kProbs_[i]));
+            out_[i] = floorVal + (1.0 - floorVal) * c;
+        }
+    }
+
     // Optional per-point weights of the fit set besides the sigma-consensus ones (empty = none): the
-    // caller-provided match confidences, raised to settings.finalBundleConfidenceExponent.
+    // caller-provided match confidences, raised to settings.finalBundleConfidenceExponent with optional affine floor.
     inline void extraFinalWeights(
         const DataMatrix &kData_,
         const superansac::RANSACSettings &kSettings_,
@@ -248,16 +299,19 @@ namespace
         if (kSettings_.finalBundleConfidenceWeights <= 0 || kConfidences_ == nullptr ||
             kConfidences_->size() != static_cast<size_t>(kData_.rows()) || kFitSet_.empty())
             return;
-        const double kExponent = kSettings_.finalBundleConfidenceExponent;
+        const double kExponent = (kSettings_.finalBundleConfidenceExponent > 0.0)
+            ? kSettings_.finalBundleConfidenceExponent : 1.0;
+        const double kFloor = std::max(0.0, std::min(1.0, kSettings_.confidenceWeightFloor));
         weights_.resize(kFitSet_.size());
         for (size_t i = 0; i < kFitSet_.size(); ++i)
         {
             const double c = std::max(1e-3, (*kConfidences_)[kFitSet_[i]]);
-            weights_[i] = kExponent == 1.0 ? c : std::pow(c, kExponent);
+            const double cp = (kExponent == 1.0) ? c : std::pow(c, kExponent);
+            weights_[i] = kFloor > 0.0 ? (kFloor + (1.0 - kFloor) * std::min(1.0, cp)) : cp;
         }
     }
 
-    // Generic driver: refineFn_(inlierIndices, modelInOut, weights, robust) -> bool (empty weights = unweighted).
+    // Generic driver: refineFn_(inlierIndices, modelInOut, weights, roundOpt) -> bool (empty weights = unweighted).
     // Round r collects the fit set with a threshold multiplier that shrinks geometrically from
     // settings.finalBundleScheduleStart to 1.0 (LO-RANSAC style iterative re-collection), so that true
     // inliers excluded by a locally tight fit can be re-admitted before the final robust fit.
@@ -276,6 +330,7 @@ namespace
         const size_t kRounds = kSettings_.finalBundleRounds;
         if (kRounds == 0)
             return;
+        const poselib::BundleOptions kBaseOpt = finalBundleOptions(kSettings_);
         const double kSqTh = kSettings_.inlierThreshold * kSettings_.inlierThreshold;
         const double kStart = std::max(1.0, kSettings_.finalBundleScheduleStart);
         std::vector<size_t> current, fitSet, next;
@@ -292,10 +347,9 @@ namespace
             if (fitSet.size() < kMinInliers_)
                 break;
             weights.clear();
-            // 1: sigma-consensus weights in every round; 2: in every round but the last (which is an unweighted Cauchy fit)
-            const bool kWeighted = kSettings_.finalBundleWeighting == 1 ||
+            const bool kStaticSigmaWeights = kSettings_.finalBundleWeighting == 1 ||
                 (kSettings_.finalBundleWeighting == 2 && round + 1 < kRounds);
-            if (kWeighted)
+            if (kStaticSigmaWeights)
             {
                 // sigma-consensus (MAGSAC++) weights of the fit set at this round's scale
                 superansac::scoring::MAGSACScoring magsac;
@@ -312,8 +366,9 @@ namespace
                     for (size_t i = 0; i < weights.size(); ++i)
                         weights[i] *= extra[i];
             }
+            const poselib::BundleOptions roundOpt = roundBundleOptions(kBaseOpt, kSettings_, kMult, round, kRounds);
             superansac::models::Model candidate = model_;
-            if (!refineFn_(fitSet, candidate, weights, !kWeighted) || !candidate.getData().allFinite())
+            if (!refineFn_(fitSet, candidate, weights, roundOpt) || !candidate.getData().allFinite())
                 break;
             collectInliers(kData_, kEstimator_, candidate, kSqTh, next);
             if (next.size() * 5 < kInitialInliers * 4 || next.size() < kMinInliers_)
@@ -335,10 +390,20 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
     superansac::RANSACSettings settings_ = kSettingsIn_;
+    if (settings_.finalBundleLossScale < 0.0) // auto
+        settings_.finalBundleLossScale = 0.5;
     if (settings_.finalBundleWeighting < 0) // auto
         settings_.finalBundleWeighting = 1;
     if (settings_.finalBundleConfidenceWeights < 0) // auto
         settings_.finalBundleConfidenceWeights = 0;
+    if (settings_.finalBundleConfidenceExponent < 0.0) // auto
+        settings_.finalBundleConfidenceExponent = 1.0;
+    if (settings_.confidenceWeightFloor < 0.0) // auto
+        settings_.confidenceWeightFloor = 0.0;
+    if (settings_.localOptimizationDuplicateOverlap < 0.0) // auto
+        settings_.localOptimizationDuplicateOverlap = 0.95;
+    if (settings_.inLoopPolish < 0) // auto
+        settings_.inLoopPolish = 0;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 5) 
         throw std::invalid_argument("The input matrix must have 5 columns (x1, y1, x2, y2, z2).");
@@ -385,14 +450,18 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     const superansac::termination::TerminationType kTerminationCriterion = settings_.terminationCriterion;
 
     // Create the solvers and the estimator
+    std::vector<double> dampedProbabilities;
+    if (!kPointProbabilities_.empty() && settings_.nonminimalConfidenceWeights)
+        buildConfidenceWeights(kPointProbabilities_, settings_.confidenceWeightFloor, dampedProbabilities);
+
     std::unique_ptr<superansac::estimator::AbsolutePoseEstimator> estimator = 
         std::unique_ptr<superansac::estimator::AbsolutePoseEstimator>(new superansac::estimator::AbsolutePoseEstimator());
     estimator->setMinimalSolver(new superansac::estimator::solver::P3PLambdaTwistSolver());
     estimator->setNonMinimalSolver(new superansac::estimator::solver::PnPBundleAdjustmentSolver());
     auto *pnpNonMinimalSolver = dynamic_cast<superansac::estimator::solver::PnPBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver());
     pnpNonMinimalSolver->setCamera(onlyScaledCamera.get());
-    if (!kPointProbabilities_.empty() && settings_.nonminimalConfidenceWeights)
-        pnpNonMinimalSolver->setWeights(&kPointProbabilities_);
+    if (!dampedProbabilities.empty() && settings_.nonminimalConfidenceWeights)
+        pnpNonMinimalSolver->setWeights(&dampedProbabilities);
     auto &solverOptions = pnpNonMinimalSolver->getMutableOptions();
     solverOptions.loss_type = poselib::BundleOptions::LossType::TRUNCATED;
     solverOptions.loss_scale = settings_.inlierThreshold;
@@ -597,28 +666,50 @@ std::tuple<Eigen::Matrix3d, Eigen::Vector3d, std::vector<size_t>, double, size_t
     if (finalInliers.size() < estimator->sampleSize())
         return std::make_tuple(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero(), std::vector<size_t>(), 0.0, totalIterations);
 
-    // Final robust bundle polish: PoseLib's absolute-pose LM (Cauchy on the reprojection error) on the re-collected inliers.
+    // Final robust bundle polish: PoseLib's absolute-pose LM on the re-collected inliers.
     pnpNonMinimalSolver->setWeights(nullptr);
     if (settings_.finalBundleRounds > 0)
     {
-        const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
+        const bool kUseExactPinholeCam =
+            (kCameraType_ == superansac::camera::CameraType::Pinhole &&
+             kCameraParams_.size() == 4 &&
+             std::abs(kCameraParams_[0] - kCameraParams_[1]) > 1e-6 * (kCameraParams_[0] + kCameraParams_[1]));
+        poselib::Camera poselibCam;
+        if (kUseExactPinholeCam)
+        {
+            poselibCam.model_id = poselib::PinholeCameraModel::model_id;
+            poselibCam.params = kCameraParams_;
+        }
+        const double kFocalScale = currentCamera->focalLength();
         runFinalBundle(normalizedCorrespondences, estimator.get(), settings_, 4, bestModel, finalInliers,
             kPointProbabilities_.empty() ? nullptr : &kPointProbabilities_,
-            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const bool robust) -> bool
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const poselib::BundleOptions &roundOpt) -> bool
             {
                 std::vector<Eigen::Vector2d> x(inl.size());
                 std::vector<Eigen::Vector3d> X(inl.size());
                 for (size_t i = 0; i < inl.size(); ++i)
                 {
                     const size_t idx = inl[i];
-                    x[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 0), normalizedCorrespondences(idx, 1));
+                    if (kUseExactPinholeCam)
+                        x[i] = Eigen::Vector2d(kCorrespondences_(idx, 0), kCorrespondences_(idx, 1));
+                    else
+                        x[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 0), normalizedCorrespondences(idx, 1));
                     X[i] = Eigen::Vector3d(normalizedCorrespondences(idx, 2), normalizedCorrespondences(idx, 3), normalizedCorrespondences(idx, 4));
                 }
                 poselib::CameraPose pose;
                 const Eigen::Matrix3d R = model.getData().block<3, 3>(0, 0);
                 pose.q = poselib::rotmat_to_quat(R);
                 pose.t = model.getData().block<3, 1>(0, 3);
-                poselib::bundle_adjust(x, X, &pose, withLoss(kOpt, robust), w);
+                if (kUseExactPinholeCam)
+                {
+                    poselib::BundleOptions pxOpt = roundOpt;
+                    pxOpt.loss_scale *= kFocalScale;
+                    poselib::bundle_adjust(x, X, poselibCam, &pose, pxOpt, w);
+                }
+                else
+                {
+                    poselib::bundle_adjust(x, X, &pose, roundOpt, w);
+                }
                 model.getMutableData().block<3, 3>(0, 0) = pose.R();
                 model.getMutableData().block<3, 1>(0, 3) = pose.t;
                 return true;
@@ -677,6 +768,20 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
     const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
     superansac::RANSACSettings settings_ = kSettingsIn_;
+    if (settings_.finalBundleLossScale < 0.0) // auto
+        settings_.finalBundleLossScale = 0.5;
+    if (settings_.finalBundleWeighting < 0) // auto
+        settings_.finalBundleWeighting = 0;
+    if (settings_.finalBundleConfidenceWeights < 0) // auto
+        settings_.finalBundleConfidenceWeights = 0;
+    if (settings_.finalBundleConfidenceExponent < 0.0) // auto
+        settings_.finalBundleConfidenceExponent = 1.0;
+    if (settings_.confidenceWeightFloor < 0.0) // auto
+        settings_.confidenceWeightFloor = 0.0;
+    if (settings_.localOptimizationDuplicateOverlap < 0.0) // auto
+        settings_.localOptimizationDuplicateOverlap = 0.95;
+    if (settings_.inLoopPolish < 0) // auto
+        settings_.inLoopPolish = 0;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 6) 
         throw std::invalid_argument("The input matrix must have 6 columns (x1, y1, z1, x2, y2, z2).");
@@ -685,6 +790,12 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
     if (settings_.sampler == superansac::samplers::SamplerType::ImportanceSampler && 
         kPointProbabilities_.size() != kCorrespondences_.rows())
         throw std::invalid_argument("The point probabilities must have the same number of elements as the number of correspondences when using the ImportanceSampler or the ARSampler.");
+
+    if (kPointProbabilities_.empty() && settings_.sampler == superansac::samplers::SamplerType::PROSAC)
+    {
+        settings_.sampler = superansac::samplers::SamplerType::Uniform;
+        settings_.useSprt = false;
+    }
 
     // Normalize the point correspondences
     /*DataMatrix normalizedCorrespondences;
@@ -931,38 +1042,70 @@ std::tuple<Eigen::Matrix4d, std::vector<size_t>, double, size_t> estimateRigidTr
     if (finalInliers.size() < estimator->sampleSize())
         return std::make_tuple(Eigen::Matrix4d::Identity(), std::vector<size_t>(), 0.0, totalIterations);
 
-    // Get the best rigid transformation
-    Eigen::Matrix4d rigidTransform = bestModel.getData();
-    if (finalInliers.size() >= estimator->nonMinimalSampleSize())
+    // Iterative weighted/IRLS Procrustes bundle refinement on a shrinking threshold schedule
+    // (finalBundleScheduleStart * th -> 1.0 * th), replacing the legacy fixed unweighted refit.
+    if (settings_.finalBundleRounds > 0 && finalInliers.size() >= estimator->nonMinimalSampleSize())
     {
-        // Gauss-Markov unweighted least-squares SVD polish over the isolated 3D surface
-        // consensus set (within 1.8x the tight 0.275x threshold = ~0.50x original threshold).
-        const double kPolishSqThreshold = (1.8 * settings_.inlierThreshold) * (1.8 * settings_.inlierThreshold);
-        std::vector<size_t> polishInliers;
-        polishInliers.reserve(finalInliers.size() + 32);
-        const int kRows = kCorrespondences_.rows();
+        const double kScaleSq = std::max(1e-12,
+            (settings_.finalBundleLossScale * settings_.inlierThreshold) *
+            (settings_.finalBundleLossScale * settings_.inlierThreshold));
         const int kCols = kCorrespondences_.cols();
-        const double *rowPtr = kCorrespondences_.data();
-        for (int rIdx = 0; rIdx < kRows; ++rIdx, rowPtr += kCols)
-        {
-            if (estimator->squaredResidual(rowPtr, rigidTransform) < kPolishSqThreshold)
-                polishInliers.push_back(static_cast<size_t>(rIdx));
-        }
-        if (polishInliers.size() >= estimator->nonMinimalSampleSize())
-        {
-            std::vector<superansac::models::Model> polishedModels;
-            if (estimator->estimateModelNonminimal(
-                kCorrespondences_,
-                polishInliers.data(),
-                polishInliers.size(),
-                &polishedModels,
-                nullptr) && !polishedModels.empty())
+        const double *kBasePtr = kCorrespondences_.data();
+        std::vector<double> irlsWeights;
+
+        runFinalBundle(
+            kCorrespondences_,
+            estimator.get(),
+            settings_,
+            estimator->nonMinimalSampleSize(),
+            bestModel,
+            finalInliers,
+            kPointProbabilities_.empty() ? nullptr : &kPointProbabilities_,
+            [&](const std::vector<size_t> &fitSet,
+                superansac::models::Model &modelInOut,
+                const std::vector<double> &weights,
+                const poselib::BundleOptions &roundOpt) -> bool
             {
-                rigidTransform = polishedModels.back().getData();
-                finalInliers.swap(polishInliers);
-            }
-        }
+                const size_t kN = fitSet.size();
+                if (roundOpt.loss_type == poselib::BundleOptions::LossType::TRIVIAL)
+                {
+                    std::vector<superansac::models::Model> polished;
+                    const double *wPtr = (weights.size() == kN) ? weights.data() : nullptr;
+                    if (!estimator->estimateModelNonminimal(kCorrespondences_, fitSet.data(), kN, &polished, wPtr) ||
+                        polished.empty())
+                        return false;
+                    modelInOut = polished.back();
+                    return true;
+                }
+                // Robust Cauchy IRLS closed-form weighted Procrustes (4 fast 3x3 SVD steps)
+                const double kRoundScaleSq = std::max(1e-12, roundOpt.loss_scale * roundOpt.loss_scale);
+                irlsWeights.resize(kN);
+                superansac::models::Model cur = modelInOut;
+                bool ok = false;
+                for (int it = 0; it < 4; ++it)
+                {
+                    const auto &desc = cur.getData();
+                    for (size_t i = 0; i < kN; ++i)
+                    {
+                        const double r2 = estimator->squaredResidual(kBasePtr + fitSet[i] * kCols, desc);
+                        const double wCauchy = 1.0 / (1.0 + r2 / kRoundScaleSq);
+                        irlsWeights[i] = (weights.size() == kN) ? (weights[i] * wCauchy) : wCauchy;
+                    }
+                    std::vector<superansac::models::Model> polished;
+                    if (!estimator->estimateModelNonminimal(
+                            kCorrespondences_, fitSet.data(), kN, &polished, irlsWeights.data()) ||
+                        polished.empty())
+                        break;
+                    cur = polished.back();
+                    ok = true;
+                }
+                if (ok)
+                    modelInOut = cur;
+                return ok;
+            });
     }
+
+    Eigen::Matrix4d rigidTransform = bestModel.getData();
 
     // Transform the estimated fundamental matrix back to the not normalized space
     //rigidTransform = normalizingTransformDestination.transpose() * rigidTransform * normalizingTransformSource;
@@ -981,12 +1124,20 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
     superansac::RANSACSettings settings_ = kSettingsIn_;
+    if (settings_.finalBundleLossScale < 0.0) // auto
+        settings_.finalBundleLossScale = 0.5;
     if (settings_.finalBundleWeighting < 0) // auto: sigma-consensus weighted rounds + final unweighted Cauchy round
         settings_.finalBundleWeighting = 2;
     if (settings_.finalBundleConfidenceWeights < 0) // auto: match confidences as final-bundle weights
         settings_.finalBundleConfidenceWeights = 1;
+    if (settings_.finalBundleConfidenceExponent < 0.0) // auto
+        settings_.finalBundleConfidenceExponent = 1.5;
+    if (settings_.confidenceWeightFloor < 0.0) // auto
+        settings_.confidenceWeightFloor = 0.0;
     if (settings_.localOptimizationDuplicateOverlap < 0) // auto: skip the local optimization of near-duplicate top-K candidates
         settings_.localOptimizationDuplicateOverlap = 0.95;
+    if (settings_.inLoopPolish < 0) // auto
+        settings_.inLoopPolish = 0;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 4) 
         throw std::invalid_argument("The input matrix must have 4 columns (x1, y1, x2, y2).");
@@ -1014,8 +1165,11 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
         0.5 * (normalizingTransformSource(0, 0) + normalizingTransformDestination(0, 0));
     settings_.inlierThreshold *= kScale;
     // The DEGENSAC homography threshold lives in pixel units; convert it to the
-    // normalized units the core operates in, same convention as inlierThreshold.
-    settings_.degensacSettings.homographyThreshold *= kScale;
+    // normalized units the core operates in. Forward transfer error is measured
+    // in the destination image, so scaling by s2 makes the pixel threshold exact
+    // when source and destination resolutions differ.
+    settings_.degensacSettings.homographyThreshold *=
+        settings_.degensacSettings.useDestinationScale ? normalizingTransformDestination(0, 0) : kScale;
 
     // Fundamental-matrix final-refinement defaults: a sigma-consensus polish
     // (shrinking-threshold re-collect-and-refit, applied to every top-K
@@ -1320,10 +1474,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
     // Final robust bundle polish in the normalized frame (PoseLib's 7-DoF F refinement, Cauchy loss).
     if (settings_.finalBundleRounds > 0)
     {
-        const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
         runFinalBundle(normalizedCorrespondences, estimator.get(), settings_, 8, bestModel, finalInliers,
             kPointProbabilities_.empty() ? nullptr : &kPointProbabilities_,
-            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const bool robust) -> bool
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const poselib::BundleOptions &roundOpt) -> bool
             {
                 std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
                 for (size_t i = 0; i < inl.size(); ++i)
@@ -1333,7 +1486,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateFundame
                     x2[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 2), normalizedCorrespondences(idx, 3));
                 }
                 Eigen::Matrix3d F = model.getData().block<3, 3>(0, 0);
-                poselib::refine_fundamental(x1, x2, &F, withLoss(kOpt, robust), w);
+                poselib::refine_fundamental(x1, x2, &F, roundOpt, w);
                 F.normalize();
                 model.getMutableData() = F;
                 return true;
@@ -1807,12 +1960,20 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
     superansac::RANSACSettings settings_ = kSettingsIn_;
-    if (settings_.finalBundleWeighting < 0) // auto
-        settings_.finalBundleWeighting = 1;
+    if (settings_.finalBundleLossScale < 0.0) // auto
+        settings_.finalBundleLossScale = 0.5;
+    if (settings_.finalBundleWeighting < 0) // auto: round-scaled Cauchy IRLS
+        settings_.finalBundleWeighting = 4;
     if (settings_.finalBundleConfidenceWeights < 0) // auto: match confidences as final-bundle weights
         settings_.finalBundleConfidenceWeights = 1;
+    if (settings_.finalBundleConfidenceExponent < 0.0) // auto
+        settings_.finalBundleConfidenceExponent = 1.0;
+    if (settings_.confidenceWeightFloor < 0.0) // auto
+        settings_.confidenceWeightFloor = 0.0;
     if (settings_.localOptimizationDuplicateOverlap < 0) // auto: skip the local optimization of near-duplicate top-K candidates
         settings_.localOptimizationDuplicateOverlap = 0.95;
+    if (settings_.inLoopPolish < 0) // auto
+        settings_.inLoopPolish = 1;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 4) 
         throw std::invalid_argument("The input matrix must have 4 columns (x1, y1, x2, y2).");
@@ -1838,6 +1999,13 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
         
     const double kScale =
         0.25 * (kIntrinsicsSource_(0, 0) + kIntrinsicsSource_(1, 1) + kIntrinsicsDestination_(0, 0) + kIntrinsicsDestination_(1, 1));
+    // Scale-normalized inverse focal ratios (beta = kScale / f): equals 1.0 when K1 == K2 and fx == fy,
+    // makes r_scaled = r_exact_px / kScale identically for general K1 != K2 / fx != fy, and keeps
+    // LM Jacobian JtJ = O(N) well-conditioned for initial_lambda = 1e-4 across arbitrary focal lengths.
+    const double kInvFx1 = kScale / kIntrinsicsSource_(0, 0);
+    const double kInvFy1 = kScale / kIntrinsicsSource_(1, 1);
+    const double kInvFx2 = kScale / kIntrinsicsDestination_(0, 0);
+    const double kInvFy2 = kScale / kIntrinsicsDestination_(1, 1);
     settings_.inlierThreshold /= kScale;
 
     // Essential-matrix final-refinement defaults: the same sigma-consensus polish
@@ -1865,12 +2033,22 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     // Create the solvers and the estimator
     std::unique_ptr<superansac::estimator::EssentialMatrixEstimator> estimator =
         std::unique_ptr<superansac::estimator::EssentialMatrixEstimator>(new superansac::estimator::EssentialMatrixEstimator());
+    estimator->setEnforce3DCheirality(settings_.essentialEnforceCheirality);
+    estimator->setCheiralityMargin(settings_.essentialCheiralityMargin);
+    if (settings_.essentialExactPixelSampson)
+        estimator->setInverseFocalLengths(kInvFx1, kInvFy1, kInvFx2, kInvFy2);
     estimator->setMinimalSolver(new superansac::estimator::solver::EssentialMatrixFivePointNisterSolver());
     estimator->setNonMinimalSolver(new superansac::estimator::solver::EssentialMatrixBundleAdjustmentSolver());
     superansac::estimator::solver::EssentialMatrixBundleAdjustmentSolver * nonminimalSolver = 
         dynamic_cast<superansac::estimator::solver::EssentialMatrixBundleAdjustmentSolver *>(estimator->getMutableNonMinimalSolver());
+    std::vector<double> dampedProbabilities;
     if (kPointProbabilities_.size() > 0 && settings_.nonminimalConfidenceWeights)
-        nonminimalSolver->setWeights(&kPointProbabilities_);
+    {
+        buildConfidenceWeights(kPointProbabilities_, settings_.confidenceWeightFloor, dampedProbabilities);
+        nonminimalSolver->setWeights(&dampedProbabilities);
+    }
+    if (settings_.essentialExactPixelSampson)
+        nonminimalSolver->setInverseFocalLengths(kInvFx1, kInvFy1, kInvFx2, kInvFy2);
     nonminimalSolver->setCheiralityPointNumber(settings_.essentialCheiralityPointNumber);
     auto &solverOptions = nonminimalSolver->getMutableOptions();
     solverOptions.loss_type = poselib::BundleOptions::LossType::TRUNCATED;
@@ -2104,45 +2282,65 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateEssenti
     // Final robust bundle polish: refine (R, t) on the re-collected inliers in normalized image coordinates.
     if (settings_.finalBundleRounds > 0)
     {
-        const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
         runFinalBundle(normalizedCorrespondences, estimator.get(), settings_, 8, bestModel, finalInliers,
             kPointProbabilities_.empty() ? nullptr : &kPointProbabilities_,
-            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const bool robust) -> bool
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const poselib::BundleOptions &roundOpt) -> bool
             {
                 const Eigen::Matrix3d E = model.getData().block<3, 3>(0, 0);
                 std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
-                std::vector<Eigen::Vector3d> b1(inl.size()), b2(inl.size());
                 for (size_t i = 0; i < inl.size(); ++i)
                 {
                     const size_t idx = inl[i];
                     x1[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 0), normalizedCorrespondences(idx, 1));
                     x2[i] = Eigen::Vector2d(normalizedCorrespondences(idx, 2), normalizedCorrespondences(idx, 3));
-                    b1[i] = x1[i].homogeneous().normalized();
-                    b2[i] = x2[i].homogeneous().normalized();
                 }
-                // Disambiguate the four decompositions by a cheirality vote over the inliers.
-                poselib::CameraPoseVector poses;
-                poselib::motion_from_essential(E, {}, {}, &poses);
-                int best = -1;
-                size_t bestVotes = 0;
-                for (size_t p = 0; p < poses.size(); ++p)
+                poselib::CameraPose pose;
+                if (model.hasPose() && model.getPose().allFinite())
                 {
-                    size_t votes = 0;
-                    for (size_t i = 0; i < inl.size(); ++i)
-                        votes += poselib::check_cheirality(poses[p], b1[i], b2[i]) ? 1 : 0;
-                    if (votes > bestVotes)
-                    {
-                        bestVotes = votes;
-                        best = static_cast<int>(p);
-                    }
+                    const auto &rt = model.getPose();
+                    const Eigen::Matrix3d R = rt.block<3, 3>(0, 0);
+                    const Eigen::Vector3d t = rt.block<3, 1>(0, 3);
+                    pose = poselib::CameraPose(R, t);
                 }
-                if (best < 0)
-                    return false;
-                poselib::CameraPose pose = poses[best];
-                poselib::refine_relpose(x1, x2, &pose, withLoss(kOpt, robust), w);
+                else
+                {
+                    std::vector<Eigen::Vector3d> b1(inl.size()), b2(inl.size());
+                    for (size_t i = 0; i < inl.size(); ++i)
+                    {
+                        b1[i] = x1[i].homogeneous().normalized();
+                        b2[i] = x2[i].homogeneous().normalized();
+                    }
+                    // Disambiguate the four decompositions by a cheirality vote over the inliers.
+                    poselib::CameraPoseVector poses;
+                    poselib::motion_from_essential(E, {}, {}, &poses);
+                    int best = -1;
+                    size_t bestVotes = 0;
+                    for (size_t p = 0; p < poses.size(); ++p)
+                    {
+                        size_t votes = 0;
+                        for (size_t i = 0; i < inl.size(); ++i)
+                            votes += poselib::check_cheirality(poses[p], b1[i], b2[i]) ? 1 : 0;
+                        if (votes > bestVotes)
+                        {
+                            bestVotes = votes;
+                            best = static_cast<int>(p);
+                        }
+                    }
+                    if (best < 0)
+                        return false;
+                    pose = poses[best];
+                }
+                if (settings_.essentialExactPixelSampson)
+                    poselib::refine_relpose_calibrated(x1, x2, kInvFx1, kInvFy1, kInvFx2, kInvFy2, &pose, roundOpt, w);
+                else
+                    poselib::refine_relpose(x1, x2, &pose, roundOpt, w);
+                if (pose.t.squaredNorm() > 1e-24)
+                    pose.t.normalize();
                 Eigen::Matrix3d refined;
                 poselib::essential_from_motion(pose, &refined);
                 model.getMutableData() = refined;
+                if (settings_.essentialEnforceCheirality)
+                    model.setPose(pose.Rt());
                 return true;
             });
     }
@@ -2164,10 +2362,20 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     const superansac::RANSACSettings &kSettingsIn_) // The RANSAC settings (copied: the caller's object is never modified)
 {
     superansac::RANSACSettings settings_ = kSettingsIn_;
+    if (settings_.finalBundleLossScale < 0.0) // auto
+        settings_.finalBundleLossScale = 0.35;
     if (settings_.finalBundleWeighting < 0) // auto
         settings_.finalBundleWeighting = 0;
     if (settings_.finalBundleConfidenceWeights < 0) // auto
         settings_.finalBundleConfidenceWeights = 0;
+    if (settings_.finalBundleConfidenceExponent < 0.0) // auto
+        settings_.finalBundleConfidenceExponent = 1.0;
+    if (settings_.confidenceWeightFloor < 0.0) // auto
+        settings_.confidenceWeightFloor = 0.0;
+    if (settings_.localOptimizationDuplicateOverlap < 0.0) // auto
+        settings_.localOptimizationDuplicateOverlap = 0.95;
+    if (settings_.inLoopPolish < 0) // auto
+        settings_.inLoopPolish = 1;
     // Check if the input matrix has the correct dimensions
     if (kCorrespondences_.cols() != 4) 
         throw std::invalid_argument("The input matrix must have 4 columns (x1, y1, x2, y2).");
@@ -2201,6 +2409,7 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     // Nonlinear reprojection-error refinement of the non-minimal homography fit
     // (the DLT only gives the algebraic optimum). loss_scale = inlier threshold (px).
     estimator->setBundleRefinement(settings_.homographyBundleRefinement, settings_.inlierThreshold, settings_.homographyBundleMaxIterations);
+    estimator->setConditionedLM(settings_.homographyConditionedLM);
 
     // Create the sampler
     std::unique_ptr<superansac::samplers::AbstractSampler> sampler = 
@@ -2440,10 +2649,9 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
     if (settings_.finalBundleRounds > 0)
     {
         // Final robust bundle polish: PoseLib's homography LM (Cauchy on the transfer error) on the re-collected inliers.
-        const poselib::BundleOptions kOpt = finalBundleOptions(settings_);
         runFinalBundle(kCorrespondences_, estimator.get(), settings_, estimator->nonMinimalSampleSize(), bestModel, finalInliers,
             kPointProbabilities_.empty() ? nullptr : &kPointProbabilities_,
-            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const bool robust) -> bool
+            [&](const std::vector<size_t> &inl, superansac::models::Model &model, const std::vector<double> &w, const poselib::BundleOptions &roundOpt) -> bool
             {
                 std::vector<Eigen::Vector2d> x1(inl.size()), x2(inl.size());
                 for (size_t i = 0; i < inl.size(); ++i)
@@ -2453,7 +2661,10 @@ std::tuple<Eigen::Matrix3d, std::vector<size_t>, double, size_t> estimateHomogra
                     x2[i] = Eigen::Vector2d(kCorrespondences_(idx, 2), kCorrespondences_(idx, 3));
                 }
                 Eigen::Matrix3d H = model.getData().block<3, 3>(0, 0);
-                poselib::refine_homography(x1, x2, &H, withLoss(kOpt, robust), w);
+                if (settings_.homographyConditionedLM)
+                    poselib::refine_homography_conditioned(x1, x2, &H, roundOpt, w);
+                else
+                    poselib::refine_homography(x1, x2, &H, roundOpt, w);
                 if (std::abs(H(2, 2)) > 1e-12)
                     H /= H(2, 2);
                 model.getMutableData() = H;

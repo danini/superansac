@@ -62,6 +62,7 @@ namespace superansac
 			// analog of the bundle adjustment F/E already run. The DLT solver only
 			// gives the algebraic (linear) optimum.
 			bool useBundleRefinement = false;
+			bool conditionedLM = false;
 			double bundleLossScale = 1.0; // Robust loss scale (= inlier threshold, in pixels)
 			size_t bundleMaxIterations = 100; // LM iterations for the refinement
 
@@ -74,6 +75,11 @@ namespace superansac
 				useBundleRefinement = kEnabled_;
 				bundleLossScale = kLossScale_;
 				bundleMaxIterations = kMaxIterations_;
+			}
+
+			void setConditionedLM(const bool kConditioned_)
+			{
+				conditionedLM = kConditioned_;
 			}
 
 			// A flag deciding if the points can be weighted when the non-minimal fitting is applied
@@ -98,6 +104,17 @@ namespace superansac
 				return 2;
 			}
 
+			// Closed-form inverse of the upper-triangular similarity matrix [s, 0, tx; 0, s, ty; 0, 0, 1].
+			FORCE_INLINE static Eigen::Matrix3d inverseSimilarityTransform(const Eigen::Matrix3d &kT_)
+			{
+				const double invS = 1.0 / kT_(0, 0);
+				Eigen::Matrix3d invT;
+				invT << invS, 0.0, -kT_(0, 2) * invS,
+						0.0, invS, -kT_(1, 2) * invS,
+						0.0, 0.0, 1.0;
+				return invT;
+			}
+
 			// Estimating the model from a minimal sample
 			FORCE_INLINE bool estimateModel(
 				const DataMatrix& kData_, // The data points
@@ -105,7 +122,9 @@ namespace superansac
 				std::vector<models::Model>* models_) const override // The estimated model parameters
 			{
 				static thread_local DataMatrix normalizedPoints;
-				normalizedPoints.resize(sampleSize(), kData_.cols());
+				if (normalizedPoints.rows() != static_cast<Eigen::Index>(sampleSize()) ||
+					normalizedPoints.cols() != kData_.cols())
+					normalizedPoints.resize(sampleSize(), kData_.cols());
 				Eigen::Matrix3d normalizingTransformSource,
 					normalizingTransformDestination;
 
@@ -124,7 +143,7 @@ namespace superansac
 					return false;
 
 				const Eigen::Matrix3d kNormalizingTransformDestinationInverse =
-					normalizingTransformDestination.inverse();
+					inverseSimilarityTransform(normalizingTransformDestination);
 				for (auto &model : *models_)
 					model.setData(kNormalizingTransformDestinationInverse * model.getData() * normalizingTransformSource);
 				return true;
@@ -142,72 +161,104 @@ namespace superansac
 				if (kSampleNumber_ < nonMinimalSampleSize())
 					return false;
 
-				// Thread-local scratch (used in the local-optimization inner loops);
-				// fully overwritten by normalizePoints below.
-				static thread_local DataMatrix normalizedPoints;
-				normalizedPoints.resize(kSampleNumber_, kData_.cols()); // The normalized point coordinates
-				Eigen::Matrix3d normalizingTransformSource, // The normalizing transformations in the source image
-					normalizingTransformDestination; // The normalizing transformations in the destination image
-
-				// Normalize the point coordinates to achieve numerical stability when
-				// applying the least-squares model fitting.
-				if (!normalizePoints(kData_, // The data points
-					kSample_, // The points to which the model will be fit
-					kSampleNumber_, // The number of points
-					normalizedPoints, // The normalized point coordinates
-					normalizingTransformSource, // The normalizing transformation in the first image
-					normalizingTransformDestination)) // The normalizing transformation in the second image
-					return false;
-				
-				const size_t kInitialModelCount = models_->size();
-
-				// The four point fundamental matrix fitting algorithm
-				if (!nonMinimalSolver->estimateModel(normalizedPoints,
-					nullptr,
-					kSampleNumber_,
-					*models_,
-					kWeights_))
-					return false;
-
-				// Denormalizing the newly estimated homography matrices
-				const Eigen::Matrix3d kNormalizingTransformDestinationInverse = normalizingTransformDestination.inverse();
-				for (size_t i = kInitialModelCount; i < models_->size(); ++i)
-					(*models_)[i].setData(kNormalizingTransformDestinationInverse * (*models_)[i].getData() * normalizingTransformSource);
-
-				// Nonlinear refinement: polish the (denormalized) DLT homography by
-				// minimizing the robust reprojection error in pixel space. The DLT
-				// only minimizes algebraic error; this is the homography analog of
-				// the bundle adjustment run for F/E.
-				if (useBundleRefinement)
+				auto runNormalizedDLT = [&]() -> bool
 				{
-					static thread_local std::vector<Eigen::Vector2d> x1, x2;
-					static thread_local std::vector<double> weights;
-					x1.resize(kSampleNumber_);
-					x2.resize(kSampleNumber_);
-					weights.clear();
-					const bool kUseWeights = kWeights_ != nullptr;
+					models_->clear();
+					// Thread-local scratch (used in the local-optimization inner loops);
+					// fully overwritten by normalizePoints below.
+					static thread_local DataMatrix normalizedPoints;
+					normalizedPoints.resize(kSampleNumber_, kData_.cols()); // The normalized point coordinates
+					Eigen::Matrix3d normalizingTransformSource, // The normalizing transformations in the source image
+						normalizingTransformDestination; // The normalizing transformations in the destination image
+
+					// Normalize the point coordinates to achieve numerical stability when
+					// applying the least-squares model fitting.
+					if (!normalizePoints(kData_, // The data points
+						kSample_, // The points to which the model will be fit
+						kSampleNumber_, // The number of points
+						normalizedPoints, // The normalized point coordinates
+						normalizingTransformSource, // The normalizing transformation in the first image
+						normalizingTransformDestination)) // The normalizing transformation in the second image
+						return false;
+
+					if (!nonMinimalSolver->estimateModel(normalizedPoints,
+						nullptr,
+						kSampleNumber_,
+						*models_,
+						kWeights_))
+						return false;
+
+					// Denormalizing the newly estimated homography matrices
+					const Eigen::Matrix3d kNormalizingTransformDestinationInverse =
+						inverseSimilarityTransform(normalizingTransformDestination);
+					for (auto &m : *models_)
+						m.setData(kNormalizingTransformDestinationInverse * m.getData() * normalizingTransformSource);
+					return !models_->empty();
+				};
+
+				const bool kWasWarmStarted = !models_->empty();
+				if (!useBundleRefinement)
+					return runNormalizedDLT();
+
+				if (!kWasWarmStarted && !runNormalizedDLT())
+					return false;
+
+				// Nonlinear refinement: polish the homography by minimizing the robust
+				// reprojection error in pixel space.
+				static thread_local std::vector<Eigen::Vector2d> x1, x2;
+				static thread_local std::vector<double> weights;
+				x1.resize(kSampleNumber_);
+				x2.resize(kSampleNumber_);
+				weights.clear();
+				const bool kUseWeights = kWeights_ != nullptr;
+				if (kUseWeights)
+					weights.resize(kSampleNumber_);
+				for (size_t i = 0; i < kSampleNumber_; ++i)
+				{
+					const size_t idx = kSample_ == nullptr ? i : kSample_[i];
+					x1[i] = Eigen::Vector2d(kData_(idx, 0), kData_(idx, 1));
+					x2[i] = Eigen::Vector2d(kData_(idx, 2), kData_(idx, 3));
 					if (kUseWeights)
-						weights.resize(kSampleNumber_);
-					for (size_t i = 0; i < kSampleNumber_; ++i)
+						weights[i] = kWeights_[i];
+				}
+
+				const bool kIsInnerSubsample = (kSample_ != nullptr && kWeights_ == nullptr && kSampleNumber_ <= 40);
+				poselib::BundleOptions bundleOptions;
+				bundleOptions.loss_type = poselib::BundleOptions::LossType::CAUCHY;
+				bundleOptions.loss_scale = 0.5 * bundleLossScale;
+				bundleOptions.max_iterations = kIsInnerSubsample
+					? std::min<size_t>(bundleMaxIterations, 10)
+					: (kWasWarmStarted
+						? std::min<size_t>(bundleMaxIterations, 25)
+						: std::min<size_t>(bundleMaxIterations, 35));
+
+				auto runRefine = [&](Eigen::Matrix3d &H)
+				{
+					if (conditionedLM)
+						poselib::refine_homography_conditioned(x1, x2, &H, bundleOptions, weights);
+					else
+						poselib::refine_homography(x1, x2, &H, bundleOptions, weights);
+				};
+
+				bool anyFinite = false;
+				for (auto &model : *models_)
+				{
+					Eigen::Matrix3d homography = model.getData().block<3, 3>(0, 0);
+					runRefine(homography);
+					if (homography.allFinite())
 					{
-						const size_t idx = kSample_ == nullptr ? i : kSample_[i];
-						x1[i] = Eigen::Vector2d(kData_(idx, 0), kData_(idx, 1));
-						x2[i] = Eigen::Vector2d(kData_(idx, 2), kData_(idx, 3));
-						if (kUseWeights)
-							weights[i] = kWeights_[i];
+						model.getMutableData() = homography;
+						anyFinite = true;
 					}
-
-					// Robust Cauchy loss at half the inlier threshold, matching the
-					// F/E bundle-adjustment configuration.
-					poselib::BundleOptions bundleOptions;
-					bundleOptions.loss_type = poselib::BundleOptions::LossType::CAUCHY;
-					bundleOptions.loss_scale = 0.5 * bundleLossScale;
-					bundleOptions.max_iterations = bundleMaxIterations;
-
+				}
+				if (!anyFinite && kWasWarmStarted)
+				{
+					if (!runNormalizedDLT())
+						return false;
 					for (auto &model : *models_)
 					{
 						Eigen::Matrix3d homography = model.getData().block<3, 3>(0, 0);
-						poselib::refine_homography(x1, x2, &homography, bundleOptions, weights);
+						runRefine(homography);
 						if (homography.allFinite())
 							model.getMutableData() = homography;
 					}

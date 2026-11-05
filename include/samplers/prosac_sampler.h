@@ -59,7 +59,8 @@ protected:
     {
         ++kthSampleNumber;
 
-        if (kthSampleNumber > ransacConvergenceIterations)
+        if (kthSampleNumber > ransacConvergenceIterations ||
+            (subsetSize >= pointNumber && kthSampleNumber > growthFunction[pointNumber - 1]))
         {
             randomGenerator->resetGenerator(0, pointNumber - 1);
         }
@@ -117,7 +118,11 @@ public:
                 subsetSize = std::min(subsetSize, pointNumber);
                 largestSampleSize = std::max(largestSampleSize, subsetSize);
 
-                randomGenerator->resetGenerator(0, subsetSize - 2);
+                randomGenerator->resetGenerator(0, subsetSize > 1 ? subsetSize - 2 : 0);
+            }
+            if (subsetSize >= pointNumber && kthSampleNumber > growthFunction[pointNumber - 1])
+            {
+                randomGenerator->resetGenerator(0, pointNumber - 1);
             }
         }
     }
@@ -189,9 +194,10 @@ public:
         if (kNumSamples_ != sampleSize)
             throw std::invalid_argument("An error occurred when sampling. PROSAC is not implemented to change the sample size after being initialized.");
 
-        if (kthSampleNumber > ransacConvergenceIterations)
+        if (kthSampleNumber > ransacConvergenceIterations ||
+            (subsetSize >= pointNumber && kthSampleNumber > growthFunction[pointNumber - 1]))
         {
-            randomGenerator->generateUniqueRandomSet(samples_, sampleSize);
+            randomGenerator->generateUniqueRandomSet(samples_, sampleSize, pointNumber - 1);
             return true;
         }
 

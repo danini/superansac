@@ -57,6 +57,8 @@ namespace superansac
 				poselib::BundleOptions options;
 				size_t pointNumberForCheiralityCheck;
 				const std::vector<double> *pointWeights;
+				bool useCalibratedSampson = false;
+				double invFx1 = 1.0, invFy1 = 1.0, invFx2 = 1.0, invFy2 = 1.0;
 
 			public:
 				EssentialMatrixBundleAdjustmentSolver(poselib::BundleOptions kOptions_ = poselib::BundleOptions())
@@ -102,6 +104,19 @@ namespace superansac
 				void setCheiralityPointNumber(const size_t kPointNumber_)
 				{
 					pointNumberForCheiralityCheck = kPointNumber_;
+				}
+
+				void setInverseFocalLengths(
+					const double kInvFx1_,
+					const double kInvFy1_,
+					const double kInvFx2_,
+					const double kInvFy2_)
+				{
+					useCalibratedSampson = true;
+					invFx1 = kInvFx1_;
+					invFy1 = kInvFy1_;
+					invFx2 = kInvFx2_;
+					invFy2 = kInvFy2_;
 				}
 
 				// Estimate the model parameters from the given point sample
@@ -174,18 +189,11 @@ namespace superansac
 					}
 				}
 				
-				// Estimating the essential matrix using the five-point and/or weighted eight-point
-				// algorithms if no model is provided
-				{
-					// Initializing the five-point solver
-					EssentialMatrixFivePointNisterSolver fivePointSolver;
-					std::vector<models::Model> fivePtModels;
-					if (fivePointSolver.estimateModel(kData_, kSample_, kSampleNumber_, fivePtModels, kWeights_))
-					{
-						for (auto &m : fivePtModels)
-							models_.push_back(std::move(m));
-					}
+				const bool kWasWarmStarted = !models_.empty();
+				const bool kIsInnerSubsample = (kSample_ != nullptr && kWeights_ == nullptr && kSampleNumber_ <= 40);
 
+				auto populateAlgebraicSeeds = [&]() -> bool
+				{
 					if (kSampleNumber_ >= 8)
 					{
 						FundamentalMatrixEightPointSolver eightPointSolver;
@@ -205,41 +213,61 @@ namespace superansac
 						}
 					}
 
-					// If the estimation failed, return false
-					if (models_.size() == 0)
-						return false;
-				}
+					// On inner subsamples >= 8 points, 8-point SVD + manifold LM is already fast and non-degenerate.
+					if (!kIsInnerSubsample || models_.empty())
+					{
+						EssentialMatrixFivePointNisterSolver fivePointSolver;
+						std::vector<models::Model> fivePtModels;
+						if (fivePointSolver.estimateModel(kData_, kSample_, kSampleNumber_, fivePtModels, kWeights_))
+						{
+							for (auto &m : fivePtModels)
+								models_.push_back(std::move(m));
+						}
+					}
+
+					return !models_.empty();
+				};
+
+				// Estimating the essential matrix using the five-point and/or weighted eight-point
+				// algorithms if no model is provided
+				if (!kWasWarmStarted && !populateAlgebraicSeeds())
+					return false;
 				
 				// The options for the bundle adjustment
 				poselib::BundleOptions tmpOptions = options;
-				const bool kIsInnerSubsample = (kSample_ != nullptr && kWeights_ == nullptr && kSampleNumber_ <= 40);
 				// If the sample is provided, we use a more robust loss function. This typically runs in the end of the robust estimation
 				if (kSample_ != nullptr) 
 				{
 					tmpOptions.loss_scale = 0.5 * options.loss_scale;
-					tmpOptions.max_iterations = kIsInnerSubsample ? 12 : 50;
+					tmpOptions.max_iterations = kIsInnerSubsample ? 10 : (kWasWarmStarted ? ((kWeights_ == nullptr) ? 15 : 25) : 35);
 					tmpOptions.loss_type = poselib::BundleOptions::LossType::CAUCHY;
 				}
 
 				poselib::BundleOptions tightOptions = tmpOptions;
 				tightOptions.loss_scale = 0.25 * options.loss_scale;
-				tightOptions.max_iterations = 25;
+				tightOptions.max_iterations = kWasWarmStarted ? 12 : 20;
 				
+				const bool kDirectWarmPose =
+					kWasWarmStarted && models_.size() == 1 && models_[0].hasPose() && models_[0].getPose().allFinite();
+
 				// Build the (normalized) bearing vectors used to disambiguate the
 				// four essential-matrix decompositions by cheirality. Use up to 64
 				// sample points for reliable majority voting.
 				const size_t kPointNumberForCheck = std::max<size_t>(1,
 					std::min<size_t>(std::max<size_t>(pointNumberForCheiralityCheck, 64), kSampleNumber_));
 				static thread_local std::vector<Eigen::Vector3d> x1CheiralityCheck, x2CheiralityCheck;
-				x1CheiralityCheck.resize(kPointNumberForCheck);
-				x2CheiralityCheck.resize(kPointNumberForCheck);
-				for (size_t idx = 0; idx < kPointNumberForCheck; idx++)
+				if (!kDirectWarmPose)
 				{
-					const size_t& pointIdx = kSample_ == nullptr ? idx : kSample_[idx];
-					x1CheiralityCheck[idx] = Eigen::Vector3d(kData_(pointIdx, 0), kData_(pointIdx, 1), 1);
-					x2CheiralityCheck[idx] = Eigen::Vector3d(kData_(pointIdx, 2), kData_(pointIdx, 3), 1);
-					x1CheiralityCheck[idx].normalize();
-					x2CheiralityCheck[idx].normalize();
+					x1CheiralityCheck.resize(kPointNumberForCheck);
+					x2CheiralityCheck.resize(kPointNumberForCheck);
+					for (size_t idx = 0; idx < kPointNumberForCheck; idx++)
+					{
+						const size_t& pointIdx = kSample_ == nullptr ? idx : kSample_[idx];
+						x1CheiralityCheck[idx] = Eigen::Vector3d(kData_(pointIdx, 0), kData_(pointIdx, 1), 1);
+						x2CheiralityCheck[idx] = Eigen::Vector3d(kData_(pointIdx, 2), kData_(pointIdx, 3), 1);
+						x1CheiralityCheck[idx].normalize();
+						x2CheiralityCheck[idx].normalize();
+					}
 				}
 
 				// Empty filter so motion_from_essential returns all four candidate poses.
@@ -256,58 +284,98 @@ namespace superansac
 
 				const double scaleSq = std::max(1e-12, tmpOptions.loss_scale * tmpOptions.loss_scale);
 
-				// First pass: evaluate all candidate models and their 4 pose decompositions cheaply
-				// using weighted cheirality + Sampson residual cost, so we only run expensive LM
-				// bundle adjustment on the top candidate poses across all models.
-				for (auto& model : models_)
+				auto collectCandidates = [&]()
 				{
-					const Eigen::Matrix3d E = model.getData().block<3, 3>(0, 0);
-					if (!E.allFinite())
-						continue;
-
-					double sampsonCost = 0.0;
-					for (size_t i = 0; i < kPointNumberForCheck; ++i)
+					const bool kNeedTiebreakCost = models_.size() > 1;
+					// First pass: evaluate all candidate models and their 4 pose decompositions cheaply
+					// using weighted cheirality + Sampson residual cost, so we only run expensive LM
+					// bundle adjustment on the top candidate poses across all models.
+					for (auto& model : models_)
 					{
-						const Eigen::Vector3d p1(x1[i](0), x1[i](1), 1.0);
-						const Eigen::Vector3d p2(x2[i](0), x2[i](1), 1.0);
-						const Eigen::Vector3d Ep1 = E * p1;
-						const Eigen::Vector3d Etp2 = E.transpose() * p2;
-						const double r = p2.dot(Ep1);
-						const double denom = Ep1(0) * Ep1(0) + Ep1(1) * Ep1(1) + Etp2(0) * Etp2(0) + Etp2(1) * Etp2(1) + 1e-15;
-						const double sqErr = (r * r) / denom;
-						const double w = weights.empty() ? 1.0 : weights[i];
-						sampsonCost += w * std::log(1.0 + sqErr / scaleSq);
-					}
+						const Eigen::Matrix3d E = model.getData().block<3, 3>(0, 0);
+						if (!E.allFinite())
+							continue;
 
-					poselib::CameraPoseVector poses;
-					poselib::motion_from_essential(
-						E,
-						kEmptyCheck, kEmptyCheck,
-						&poses);
-
-					double maxModelVotes = 0.0;
-					int bestPoseIdx = -1;
-					for (size_t pIdx = 0; pIdx < poses.size(); ++pIdx)
-					{
-						double votes = 0.0;
-						for (size_t i = 0; i < kPointNumberForCheck; ++i)
+						double sampsonCost = 0.0;
+						if (kNeedTiebreakCost)
 						{
-							if (poselib::check_cheirality(poses[pIdx], x1CheiralityCheck[i], x2CheiralityCheck[i]))
+							const double ax1Sq = useCalibratedSampson ? (invFx1 * invFx1) : 1.0;
+							const double ay1Sq = useCalibratedSampson ? (invFy1 * invFy1) : 1.0;
+							const double ax2Sq = useCalibratedSampson ? (invFx2 * invFx2) : 1.0;
+							const double ay2Sq = useCalibratedSampson ? (invFy2 * invFy2) : 1.0;
+							for (size_t i = 0; i < kPointNumberForCheck; ++i)
 							{
-								votes += (weights.empty() ? 1.0 : weights[i]);
+								const Eigen::Vector3d p1(x1[i](0), x1[i](1), 1.0);
+								const Eigen::Vector3d p2(x2[i](0), x2[i](1), 1.0);
+								const Eigen::Vector3d Ep1 = E * p1;
+								const Eigen::Vector3d Etp2 = E.transpose() * p2;
+								const double r = p2.dot(Ep1);
+								const double denom = ax2Sq * Ep1(0) * Ep1(0) + ay2Sq * Ep1(1) * Ep1(1) +
+								                     ax1Sq * Etp2(0) * Etp2(0) + ay1Sq * Etp2(1) * Etp2(1) + 1e-24;
+								const double sqErr = (r * r) / denom;
+								const double w = weights.empty() ? 1.0 : weights[i];
+								sampsonCost += w * std::log(1.0 + sqErr / scaleSq);
 							}
 						}
-						if (votes > maxModelVotes)
+
+						poselib::CameraPoseVector poses;
+						poselib::motion_from_essential(
+							E,
+							kEmptyCheck, kEmptyCheck,
+							&poses);
+
+						double maxModelVotes = 0.0;
+						int bestPoseIdx = -1;
+						for (size_t pIdx = 0; pIdx < poses.size(); ++pIdx)
 						{
-							maxModelVotes = votes;
-							bestPoseIdx = static_cast<int>(pIdx);
+							double votes = 0.0;
+							for (size_t i = 0; i < kPointNumberForCheck; ++i)
+							{
+								if (poselib::check_cheirality(poses[pIdx], x1CheiralityCheck[i], x2CheiralityCheck[i]))
+								{
+									votes += (weights.empty() ? 1.0 : weights[i]);
+								}
+							}
+							if (votes > maxModelVotes)
+							{
+								maxModelVotes = votes;
+								bestPoseIdx = static_cast<int>(pIdx);
+							}
+						}
+
+						if (bestPoseIdx >= 0 && maxModelVotes > 0.0)
+						{
+							candidates.push_back({poses[bestPoseIdx], maxModelVotes, sampsonCost});
 						}
 					}
+				};
 
-					if (bestPoseIdx >= 0 && maxModelVotes > 0.0)
+				if (kDirectWarmPose)
+				{
+					const auto &rt = models_[0].getPose();
+					const Eigen::Matrix3d R = rt.block<3, 3>(0, 0);
+					const Eigen::Vector3d t = rt.block<3, 1>(0, 3);
+					candidates.push_back({poselib::CameraPose(R, t), 1.0, 0.0});
+				}
+				else
+				{
+					collectCandidates();
+				}
+				if (candidates.empty() && kWasWarmStarted)
+				{
+					x1CheiralityCheck.resize(kPointNumberForCheck);
+					x2CheiralityCheck.resize(kPointNumberForCheck);
+					for (size_t idx = 0; idx < kPointNumberForCheck; idx++)
 					{
-						candidates.push_back({poses[bestPoseIdx], maxModelVotes, sampsonCost});
+						const size_t& pointIdx = kSample_ == nullptr ? idx : kSample_[idx];
+						x1CheiralityCheck[idx] = Eigen::Vector3d(kData_(pointIdx, 0), kData_(pointIdx, 1), 1);
+						x2CheiralityCheck[idx] = Eigen::Vector3d(kData_(pointIdx, 2), kData_(pointIdx, 3), 1);
+						x1CheiralityCheck[idx].normalize();
+						x2CheiralityCheck[idx].normalize();
 					}
+					models_.clear();
+					if (populateAlgebraicSeeds())
+						collectCandidates();
 				}
 
 				if (candidates.empty())
@@ -319,28 +387,27 @@ namespace superansac
 					return a.initialCost < b.initialCost;
 				});
 
-				const size_t kMaxRefinements = std::min<size_t>(kIsInnerSubsample ? 1 : 2, candidates.size());
+				const size_t kMaxRefinements = std::min<size_t>((kIsInnerSubsample || kWasWarmStarted) ? 1 : 2, candidates.size());
 				double bestCost = std::numeric_limits<double>::max();
 				poselib::CameraPose bestPose;
 				bool haveBestPose = false;
+				const bool kRunTightPass = !kIsInnerSubsample && (!kWasWarmStarted || kWeights_ != nullptr);
 
 				for (size_t cIdx = 0; cIdx < kMaxRefinements; ++cIdx)
 				{
 					poselib::CameraPose pose = candidates[cIdx].pose;
-					poselib::BundleStats stats = poselib::refine_relpose(
-						x1,
-						x2,
-						&pose,
-						tmpOptions,
-						weights);
-					if (!kIsInnerSubsample)
+					poselib::BundleStats stats = useCalibratedSampson
+						? poselib::refine_relpose_calibrated(
+							x1, x2, invFx1, invFy1, invFx2, invFy2, &pose, tmpOptions, weights)
+						: poselib::refine_relpose(
+							x1, x2, &pose, tmpOptions, weights);
+					if (kRunTightPass)
 					{
-						stats = poselib::refine_relpose(
-							x1,
-							x2,
-							&pose,
-							tightOptions,
-							weights);
+						stats = useCalibratedSampson
+							? poselib::refine_relpose_calibrated(
+								x1, x2, invFx1, invFy1, invFx2, invFy2, &pose, tightOptions, weights)
+							: poselib::refine_relpose(
+								x1, x2, &pose, tightOptions, weights);
 					}
 
 					if (!haveBestPose || stats.cost < bestCost)
@@ -354,12 +421,15 @@ namespace superansac
 				// Composing the essential matrix from the pose
 				if (haveBestPose)
 				{
+					if (bestPose.t.squaredNorm() > 1e-24)
+						bestPose.t.normalize();
 					Eigen::Matrix3d essentialMatrix;
 					poselib::essential_from_motion(bestPose, &essentialMatrix);
 
 					// Adding the essential matrix as the estimated models.
 					models_.resize(1);
 					models_[0].getMutableData() = essentialMatrix;
+					models_[0].setPose(bestPose.Rt());
 				}
 
 				return models_.size() > 0;

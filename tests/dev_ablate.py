@@ -158,8 +158,8 @@ def _pnp(args):
         cfg = make_cfg(ov)
         cfg.inlier_threshold = thr
         t0 = time.perf_counter()
-        R, t, inl, _, _ = pysuperansac.estimateAbsolutePose(corrs_su, pysuperansac.CameraType.SimplePinhole,
-                                                            [float(K[0, 0]), float(K[0, 2]), float(K[1, 2])], bbox,
+        R, t, inl, _, _ = pysuperansac.estimateAbsolutePose(corrs_su, pysuperansac.CameraType.Pinhole,
+                                                            [float(K[0, 0]), float(K[1, 1]), float(K[0, 2]), float(K[1, 2])], bbox,
                                                             prob["probs"] if len(prob["probs"]) else [], config=cfg)
         dt = (time.perf_counter() - t0) * 1e3
         if R is None or len(inl) < 4:

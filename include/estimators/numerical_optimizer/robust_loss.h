@@ -91,19 +91,44 @@ class MAGSACPlusPlusLoss {
     superansac::scoring::MAGSACScoring magsac_scoring;
 
     MAGSACPlusPlusLoss(double threshold, const size_t degrees_of_freedom = 2)
+        : sq_thr_(threshold * threshold),
+          two_sq_thr_(2.0 * threshold * threshold),
+          inv_two_sq_thr_(1.0 / std::max(1e-24, 2.0 * threshold * threshold))
     {
-      magsac_scoring.setThreshold(threshold);
-      magsac_scoring.initialize(degrees_of_freedom);
-
+        magsac_scoring.setThreshold(threshold);
+        magsac_scoring.initialize(degrees_of_freedom);
+        // Continuous C^1 MAGSAC++ M-estimator loss on u = r^2 / (2 * thr^2) in [0, 0.5]:
+        //   loss(r^2)   = 2*thr^2 * gamma((n+1)/2, u) + r^2 * (Gamma((n-1)/2, u) - g_half)
+        //   weight(r^2) = d loss / d(r^2) = Gamma((n-1)/2, u) - g_half >= 0
+        const auto half_vals = magsac_scoring.getGammaValuesPublic(0.5);
+        outlier_loss_ = two_sq_thr_ * half_vals.first;
+        upper_at_cutoff_ = half_vals.second;
     }
-    double loss(double r2) const 
-    { 
-      return magsac_scoring.getLoss(r2);
+
+    double loss(double r2) const {
+        if (r2 >= sq_thr_) {
+            return outlier_loss_;
+        }
+        const double u = r2 * inv_two_sq_thr_;
+        const auto gv = magsac_scoring.getGammaValuesPublic(u);
+        return two_sq_thr_ * gv.first + r2 * std::max(0.0, gv.second - upper_at_cutoff_);
     }
 
     double weight(double r2) const {
-      return magsac_scoring.getWeight(r2);
+        if (r2 >= sq_thr_) {
+            return 0.0;
+        }
+        const double u = r2 * inv_two_sq_thr_;
+        const auto gv = magsac_scoring.getGammaValuesPublic(u);
+        return std::max(0.0, gv.second - upper_at_cutoff_);
     }
+
+  private:
+    double sq_thr_;
+    double two_sq_thr_;
+    double inv_two_sq_thr_;
+    double outlier_loss_;
+    double upper_at_cutoff_;
 };
 
 class HuberLoss {

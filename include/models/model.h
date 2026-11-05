@@ -60,6 +60,7 @@ public:
     // no heap allocation).
     void setData(const ModelMatrix &kData_) {
         data = kData_;
+        hasPoseFlag = false;
     }
 
     // Return the data of the model
@@ -69,11 +70,32 @@ public:
 
     // Return the data of the model
     ModelMatrix &getMutableData() {
+        hasPoseFlag = false;
         return data;
+    }
+
+    bool hasPose() const {
+        return hasPoseFlag;
+    }
+
+    const Eigen::Matrix<double, 3, 4, Eigen::RowMajor> &getPose() const {
+        return poseRt;
+    }
+
+    void setPose(const Eigen::Ref<const Eigen::Matrix<double, 3, 4>> &kPoseRt_) {
+        poseRt = kPoseRt_;
+        hasPoseFlag = true;
+    }
+
+    void clearPose() {
+        hasPoseFlag = false;
     }
 
 protected:
     ModelMatrix data;
+    Eigen::Matrix<double, 3, 4, Eigen::RowMajor> poseRt =
+        Eigen::Matrix<double, 3, 4, Eigen::RowMajor>::Zero();
+    bool hasPoseFlag = false;
 };
 
 }

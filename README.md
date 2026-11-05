@@ -41,28 +41,28 @@ All numbers compare **SupeRANSAC with its default `RANSACSettings()`** against *
 
 | Task | Data | Metric | PoseLib | SupeRANSAC | Δ [95% CI] | ms PoseLib / SupeRANSAC |
 |---|---|---|---:|---:|---:|---:|
-| $F$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 300 calibrated pairs | AUC@10° | 61.9 | 61.9 | -0.0 [-0.8, +0.6] | 35 / 19 |
-| $F$, classical matchers (RootSIFT, SIFT, ORB) | 300 calibrated pairs | AUC@10° | 24.3 | 31.5 | +7.2 [+5.4, +9.2] | 107 / 67 |
-| $E$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 300 calibrated pairs | AUC@10° | 71.3 | 71.7 | +0.4 [-0.3, +1.0] | 56 / 32 |
-| $E$, classical matchers (RootSIFT, SIFT, ORB) | 300 calibrated pairs | AUC@10° | 48.3 | 49.3 | +1.0 [-0.5, +2.5] | 71 / 51 |
-| $H$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 16 Homogr + EVD pairs | AUC@5px | 51.5 | 51.3 | -0.2 [-0.7, +0.4] | 16 / 10 |
-| $H$, classical matchers (RootSIFT, SIFT, ORB) | 16 Homogr + EVD pairs | AUC@5px | 37.8 | 42.8 | +5.0 [-0.1, +12.1] | 8 / 14 |
-| $F$, labelled SIFT tentative matches | 30 scenes × 5 | AUC@2px | 77.7 | 79.0 | +1.2 [-2.3, +4.6] | 23 / 19 |
-| $H$, labelled SIFT tentative matches | 35 scenes × 5 | AUC@5px | 62.5 | 64.6 | +2.1 [-1.6, +7.3] | 6 / 5 |
-| PnP, 6 matchers | 600 7Scenes RGB-D problems | AUC@(5°,10cm) | 37.1 | 37.2 | +0.1 [-0.8, +1.0] | 18 / 19 |
-| Rigid, 6 matchers (baseline: Procrustes RANSAC) | 599 7Scenes RGB-D problems | AUC@(5°,10cm) | 41.5 | 39.1 | -2.5 [-4.0, -1.1] | Python / 8 |
+| $F$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 300 calibrated pairs | AUC@10° | 61.9 | 62.1 | +0.2 [-0.6, +0.9] | 34 / 17 |
+| $F$, classical matchers (RootSIFT, SIFT, ORB) | 300 calibrated pairs | AUC@10° | 24.3 | 31.1 | +6.9 [+5.1, +8.8] | 105 / 65 |
+| $E$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 300 calibrated pairs | AUC@10° | 71.4 | 71.2 | -0.2 [-0.9, +0.4] | 56 / 25 |
+| $E$, classical matchers (RootSIFT, SIFT, ORB) | 300 calibrated pairs | AUC@10° | 48.3 | 49.5 | +1.2 [-0.2, +2.6] | 69 / 66 |
+| $H$, learned matchers (LoMa, RoMa, LoFTR, DISK+LG) | 16 Homogr + EVD pairs | AUC@5px | 51.6 | 51.6 | -0.0 [-0.8, +0.5] | 17 / 10 |
+| $H$, classical matchers (RootSIFT, SIFT, ORB) | 16 Homogr + EVD pairs | AUC@5px | 37.8 | 42.6 | +4.8 [-0.2, +12.7] | 8 / 14 |
+| $F$, labelled SIFT tentative matches | 30 scenes × 5 | AUC@2px | 77.7 | 79.0 | +1.3 [-2.3, +4.8] | 22 / 17 |
+| $H$, labelled SIFT tentative matches | 35 scenes × 5 | AUC@5px | 62.5 | 64.7 | +2.2 [-2.3, +7.7] | 6 / 5 |
+| PnP, 6 matchers | 600 7Scenes RGB-D problems | AUC@(5°,10cm) | 37.0 | 36.6 | -0.4 [-1.2, +0.3] | 17 / 12 |
+| Rigid, 6 matchers (baseline: Procrustes RANSAC) | 599 7Scenes RGB-D problems | AUC@(5°,10cm) | 41.5 | 42.4 | +0.9 [+0.1, +1.7] | Python / 8 |
 
 **In short.**
-* On matches from **learned matchers** (LoMa, RoMa, LoFTR, DISK+LightGlue) the two libraries are close: averaged over the four matchers every confidence interval contains zero. Per matcher, SupeRANSAC is significantly ahead on $E$ with RoMa and significantly behind on $F$ with RoMa (Figure above). At the default settings SupeRANSAC is faster on $F$, $E$ and $H$.
-* On **classical matchers** (RootSIFT, SIFT, ORB; typically 10–40 % inliers) SupeRANSAC is clearly more accurate on $F$ and on $H$ with RootSIFT / SIFT, and faster on $F$ and $E$; on $H$ it is slower (14 vs 8 ms).
-* On the **labelled tentative matches** (high outlier ratios, no confidence order) it is ahead on both $F$ and $H$, inside the wide scene-level intervals of 30–35 scenes.
-* **PnP**: a tie with PoseLib, clearly ahead of OpenCV. **Rigid registration**: the Procrustes RANSAC baseline is more accurate; its runtime is not comparable because it is written in Python.
+* On matches from **learned matchers** (LoMa, RoMa, LoFTR, DISK+LightGlue) the two libraries are tied in accuracy: every group and per-matcher 95% confidence interval on $F$, $E$ and $H$ contains zero (Figure above), while at the default settings SupeRANSAC is roughly $2\times$ faster ($F$: 17 vs 34 ms, $E$: 25 vs 56 ms, $H$: 10 vs 17 ms).
+* On **classical matchers** (RootSIFT, SIFT, ORB; typically 10–40 % inliers) SupeRANSAC is significantly more accurate on $F$ (+6.9 AUC), ahead on $E$ (+1.2 AUC) and on $H$ with RootSIFT / SIFT (+7.3 / +7.1 AUC), while also faster on $F$ (65 vs 105 ms) and $E$ (66 vs 69 ms); on $H$ it is slower (14 vs 8 ms).
+* On the **labelled tentative matches** (high outlier ratios, no confidence order) it is ahead on both $F$ (+1.3 AUC) and $H$ (+2.2 AUC; inside the wide scene-level intervals of 30–35 scenes) and slightly faster.
+* **PnP**: tied with PoseLib within the 95% CI on 7Scenes (-0.4 [-1.2, +0.3]) while faster (12 vs 17 ms), ahead on the synthetic high-outlier stress benchmark (33.8 vs 30.1 AUC), and clearly ahead of OpenCV (36.6 vs 30.7 AUC, 12 vs 180 ms). **Rigid registration**: significantly ahead of the Procrustes RANSAC baseline across the 6 matchers (+0.9 AUC, 95% CI [+0.1, +1.7]) at 8 ms per problem (the baseline's runtime is not comparable because it is written in Python).
 
 ### Speed–accuracy trade-off
 
 <p align="center"><img src="assets/fig_speed_accuracy.png" width="100%"/></p>
 
-`min_iterations` is swept from 0 to 5000 while every library keeps its own adaptive termination (at most 5000 iterations); OpenCV has no minimum, so its iteration cap is swept instead. The ★ on each curve is the default configuration used in the tables. The accuracy of both libraries is nearly flat across budgets; which one is faster depends on the budget. At the default (1000 minimum iterations, which is also PoseLib's default) and above, SupeRANSAC is faster ($F$: 13–26 vs 17–64 ms, $E$: 23–44 vs 30–103 ms over LoMa / RoMa / DISK+LG). When both may stop as soon as they are confident (`min_iterations = 0`), PoseLib is faster on $E$ (6–20 vs 15–39 ms) and on $F$ with LoMa / DISK+LG, because SupeRANSAC has a fixed per-call cost (local optimisation of the top candidates and the final robust bundle). On PnP the two curves coincide (AUC 37.0–37.3 between 14 and 37 ms); OpenCV reaches 30.7 at 183 ms.
+`min_iterations` is swept from 0 to 5000 while every library keeps its own adaptive termination (at most 5000 iterations); OpenCV has no minimum, so its iteration cap is swept instead. The ★ on each curve is the default configuration used in the tables. The accuracy of both libraries is nearly flat across budgets. At the default (1000 minimum iterations, which is also PoseLib's default) and above, SupeRANSAC is consistently faster ($F$: 12–23 vs 16–63 ms, $E$: 18–33 vs 29–102 ms over LoMa / RoMa / DISK+LG). When both may stop as soon as they are confident (`min_iterations = 0`), SupeRANSAC is faster on RoMa ($F$: 20 vs 25 ms, $E$: 18 vs 20 ms at 74.8 vs 74.1 AUC), tied in runtime and ahead in accuracy on LoMa ($F$: 8 ms, 71.8 vs 70.2 AUC; $E$: 6 ms, 78.7 vs 78.0 AUC), and within 0–1 ms on DISK+LG ($F$: 8 vs 7 ms; $E$: 7 vs 7 ms). On PnP, SupeRANSAC is faster across the entire sweep (10–18 vs 14–36 ms at AUC 36.4–36.7); OpenCV reaches 30.7 at 181 ms.
 
 ### Low inlier ratios and 6D pose
 
@@ -80,7 +80,7 @@ python tests/test_6d_pose.py --problem all                        # PnP and rigi
 python tests/make_readme_figures.py && python tests/make_readme_tables.py
 ```
 
-All defaults are data-independent and were chosen on a separate development split (`tests/datasets/pairs/calibrated_pairs_dev.json`, 600 pairs disjoint from the 300 test pairs; ablations in `tests/ablations/`, harness `tests/dev_ablate.py` with paired bootstrap confidence intervals). The final defaults of every problem were evaluated once on the test split. One choice was prompted by a test result: an intermediate run showed $F$ slightly worse with the dense matchers, after which the $F$ final-bundle weighting was re-selected on the development split. The confidence-weighted final refinement and the skipping of near-duplicate top-K candidates for $F$ and $E$ (`final_bundle_confidence_weights`, `local_optimization_duplicate_overlap`) were selected on the development split and evaluated once on the test split.
+All defaults are data-independent and were chosen on separate development splits (`tests/datasets/pairs/calibrated_pairs_dev.json` for calibrated pairs, disjoint from the 300 test pairs; 7Scenes validation split for 6D pose; ablations in `tests/ablations/`, harness `tests/dev_ablate.py` with paired bootstrap confidence intervals). Every set of final per-problem defaults was evaluated once on the test split.
 
 ---
 
@@ -208,7 +208,7 @@ E, inliers, score, iterations = pysuperansac.estimateEssentialMatrix(
 - **Description**: Estimates the 6D absolute pose $(R, t)$ of a camera from 2D-3D correspondences.
 - **Parameters**:
   - `correspondences`: `(N, 5)` `np.ndarray` (`[u, v, X, Y, Z]`).
-  - `camera_type`: Type of the camera (e.g., `CameraType.SimpleRadial`, `CameraType.SimplePinhole`).
+  - `camera_type`: Type of the camera (e.g., `CameraType.Pinhole`, `CameraType.SimplePinhole`, `CameraType.SimpleRadial`).
   - `camera_params`: Camera intrinsic/distortion parameters.
   - `bounding_box`: `[height, width, max_X, max_Y, max_Z]`.
   - `probabilities` *(optional)*: Length-`N` list/array of prior match confidences.
@@ -230,12 +230,16 @@ config.sampler = SamplerType.PROSAC
 config.local_optimization = LocalOptimizationType.NestedRANSAC
 config.final_optimization = LocalOptimizationType.Nothing   # the final robust bundle below replaces it
 config.neighborhood = NeighborhoodType.Grid
-# Final robust bundle on the re-collected inliers (F, E, H, absolute pose)
+# Final robust bundle on the re-collected inliers (F, E, H, absolute pose, rigid)
 config.final_bundle_rounds = 3
-config.final_bundle_weighting = -1       # -1 = auto (F: 2, E and PnP: 1, H: 0); 0 = Cauchy loss,
-                                         # 1 = MAGSAC++ weights, 2 = weighted rounds + a final Cauchy round
+config.final_bundle_loss_scale = -1.0    # -1 = auto (H: 0.35; F, E, PnP, rigid: 0.5)
+config.final_bundle_weighting = -1       # -1 = auto (F: 2, E: 4, PnP: 1, H and rigid: 0); 0 = Cauchy loss,
+                                         # 1 = MAGSAC++ weights, 2 = weighted rounds + a final Cauchy round, 4 = round-scaled Cauchy IRLS
 config.final_bundle_confidence_weights = -1   # -1 = auto (F, E: on); multiply those weights by the match confidences
-config.local_optimization_duplicate_overlap = -1  # -1 = auto (F, E: 0.95); skip LO of near-duplicate top-K candidates
+config.local_optimization_duplicate_overlap = -1  # -1 = auto (0.95); skip LO of near-duplicate top-K candidates
+config.in_loop_polish = -1               # -1 = auto (E, H: on; F, PnP, rigid: off)
+config.homography_bundle_refinement = True    # LM forward-transfer refinement of non-minimal homography fits
+config.homography_conditioned_lm = True       # Isotropically Hartley-conditioned homography LM around the inlier centroid
 ```
 
 ### Enumerations and Their Values
@@ -273,8 +277,9 @@ config.local_optimization_duplicate_overlap = -1  # -1 = auto (F, E: 0.95); skip
 - `NeighborhoodType.BruteForce`
 
 **Camera Types**
-- `CameraType.SimpleRadial`
+- `CameraType.Pinhole`
 - `CameraType.SimplePinhole`
+- `CameraType.SimpleRadial`
 
 ---
 

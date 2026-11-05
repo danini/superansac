@@ -182,7 +182,7 @@ namespace superansac
 				{
 					// Calculate the score of the estimated model
 					tmpInliers.clear();
-					currentScore = kScoring_->score(kData_, model, kEstimator_, tmpInliers);
+					currentScore = kScoring_->score(kData_, model, kEstimator_, tmpInliers, true, estimatedScore_);
 
 					// Check if the current model is better than the previous one
 					if (estimatedScore_ < currentScore)
@@ -258,7 +258,7 @@ namespace superansac
 					for (const auto &model : refinedModels)
 					{
 						tmpInliers.clear();
-						currentScore = kScoring_->score(kData_, model, kEstimator_, tmpInliers);
+						currentScore = kScoring_->score(kData_, model, kEstimator_, tmpInliers, true, estimatedScore_);
 						if (estimatedScore_ < currentScore)
 						{
 							estimatedModel_ = model;

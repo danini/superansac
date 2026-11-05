@@ -25,9 +25,9 @@ ETH3D_SCENES = [
     "electro",
     "facade",
     "kicker",
-    "office",
     "playground",
     "relief",
+    "terrace",
 ]
 
 SEVEN_SCENES_LIST = [

@@ -171,13 +171,17 @@ namespace superansac
 					}
 				}
 				
+				const bool kWasWarmStarted = !models_.empty();
+				const bool kIsInnerSubsample = (kSample_ != nullptr && kWeights_ == nullptr && kSampleNumber_ <= 24);
+
+				auto populateAlgebraicSeeds = [&]() -> bool
 				{
 					epnpSolver.estimateModel(kData_, kSample_, kSampleNumber_, models_);
 
 					P3PLambdaTwistSolver p3pSolver;
 					std::vector<models::Model> p3pCands;
 					const size_t kStep = std::max<size_t>(1, kSampleNumber_ / 3);
-					const size_t kMaxTrials = std::min<size_t>(12, kSampleNumber_);
+					const size_t kMaxTrials = std::min<size_t>(kIsInnerSubsample ? 6 : 12, kSampleNumber_);
 					for (size_t t = 0; t < kMaxTrials; ++t)
 					{
 						const size_t i0 = t % kSampleNumber_;
@@ -228,8 +232,19 @@ namespace superansac
 							models_.push_back(p3pCands[bestIdx]);
 					}
 
-					if (models_.size() == 0)
+					return !models_.empty();
+				};
+
+				if (!kWasWarmStarted)
+				{
+					if (!populateAlgebraicSeeds())
 						return false;
+				}
+				else if (!kIsInnerSubsample && kSampleNumber_ >= 4)
+				{
+					// Include closed-form EPnP and best P3P seeds alongside the warm-started pose
+					// on outer full-consensus fits so planar-flip P3P local minima are escaped.
+					populateAlgebraicSeeds();
 				}
 
 				// The options for the bundle adjustment
@@ -238,7 +253,7 @@ namespace superansac
 				if (kSample_ != nullptr) 
 				{
 					tmpOptions.loss_scale = 0.5 * options.loss_scale;
-					tmpOptions.max_iterations = 100;
+					tmpOptions.max_iterations = kIsInnerSubsample ? 12 : (kWasWarmStarted ? 25 : 35);
 					tmpOptions.loss_type = poselib::BundleOptions::LossType::CAUCHY;
 				}
 				
@@ -274,44 +289,81 @@ namespace superansac
 					return c;
 				};
 
-				// Iterating through the potential models.
-				for (auto& model : models_)
+				auto refineCurrentModels = [&]()
 				{
-					if (model.getData().rows() < 3 || model.getData().cols() < 4 || !model.getData().allFinite())
-						continue;
-
-					// Get the pose parameters
-					Eigen::Matrix3d R = model.getData().block<3, 3>(0, 0);
-					Eigen::Vector3d t = model.getData().block<3, 1>(0, 3);
-
-					size_t initFront = 0;
-					const double initCost = evaluatePoseCost(R, t, initFront);
-					if (initFront < 3)
-						continue;
-					if (initCost < bestCost)
+					int onlySeedIdx = -1;
+					if (kIsInnerSubsample && models_.size() > 1)
 					{
-						bestCost = initCost;
-						bestPose = poselib::CameraPose(R, t);
+						double bestSeedCost = std::numeric_limits<double>::max();
+						for (size_t mIdx = 0; mIdx < models_.size(); ++mIdx)
+						{
+							const auto &md = models_[mIdx].getData();
+							if (md.rows() < 3 || md.cols() < 4 || !md.allFinite())
+								continue;
+							const Eigen::Matrix3d R = md.block<3, 3>(0, 0);
+							const Eigen::Vector3d t = md.block<3, 1>(0, 3);
+							size_t initFront = 0;
+							const double initCost = evaluatePoseCost(R, t, initFront);
+							if (initFront >= 3 && initCost < bestSeedCost)
+							{
+								bestSeedCost = initCost;
+								onlySeedIdx = static_cast<int>(mIdx);
+							}
+						}
+						if (onlySeedIdx < 0)
+							return;
 					}
 
-					poselib::CameraPose pose(R, t);
-					if (!pose.q.allFinite() || !pose.t.allFinite())
-						continue;
-					
-					// Perform the bundle adjustment
-					poselib::BundleStats stats =
-						poselib::bundle_adjust(points2d, points3d, &pose, tmpOptions, weights);
-
-					if (std::isfinite(stats.cost) && pose.q.allFinite() && pose.t.allFinite())
+					// Iterating through the potential models.
+					for (size_t mIdx = 0; mIdx < models_.size(); ++mIdx)
 					{
-						size_t refinedFront = 0;
-						const double refinedCost = evaluatePoseCost(pose.R(), pose.t, refinedFront);
-						if (refinedFront >= 3 && refinedCost < bestCost)
+						if (onlySeedIdx >= 0 && static_cast<int>(mIdx) != onlySeedIdx)
+							continue;
+						auto &model = models_[mIdx];
+						if (model.getData().rows() < 3 || model.getData().cols() < 4 || !model.getData().allFinite())
+							continue;
+
+						// Get the pose parameters
+						Eigen::Matrix3d R = model.getData().block<3, 3>(0, 0);
+						Eigen::Vector3d t = model.getData().block<3, 1>(0, 3);
+
+						size_t initFront = 0;
+						const double initCost = evaluatePoseCost(R, t, initFront);
+						if (initFront < 3)
+							continue;
+						if (initCost < bestCost)
 						{
-							bestCost = refinedCost;
-							bestPose = pose;
+							bestCost = initCost;
+							bestPose = poselib::CameraPose(R, t);
+						}
+
+						poselib::CameraPose pose(R, t);
+						if (!pose.q.allFinite() || !pose.t.allFinite())
+							continue;
+						
+						// Perform the bundle adjustment
+						poselib::BundleStats stats =
+							poselib::bundle_adjust(points2d, points3d, &pose, tmpOptions, weights);
+
+						if (std::isfinite(stats.cost) && pose.q.allFinite() && pose.t.allFinite())
+						{
+							size_t refinedFront = 0;
+							const double refinedCost = evaluatePoseCost(pose.R(), pose.t, refinedFront);
+							if (refinedFront >= 3 && refinedCost < bestCost)
+							{
+								bestCost = refinedCost;
+								bestPose = pose;
+							}
 						}
 					}
+				};
+
+				refineCurrentModels();
+				if (kWasWarmStarted && bestCost == std::numeric_limits<double>::max())
+				{
+					models_.clear();
+					if (populateAlgebraicSeeds())
+						refineCurrentModels();
 				}
 				
 				// Composing the pose matrix from the best refined pose

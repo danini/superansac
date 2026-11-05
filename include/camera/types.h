@@ -35,6 +35,7 @@
 
 #include "utils/macros.h"
 #include "abstract_camera.h"
+#include "pinhole_camera.h"
 #include "simple_pinhole_camera.h"
 #include "simple_radial_camera.h"
 
@@ -44,7 +45,8 @@ namespace camera {
     // Enum defining available sampler types
     enum class CameraType {
         SimpleRadial,
-        SimplePinhole
+        SimplePinhole,
+        Pinhole
     };
     
     // Factory function to create samplers
@@ -56,6 +58,8 @@ namespace camera {
                 return std::make_unique<SimpleRadialCamera>(kParams_);
             case CameraType::SimplePinhole:
                 return std::make_unique<SimplePinholeCamera>(kParams_);
+            case CameraType::Pinhole:
+                return std::make_unique<PinholeCamera>(kParams_);
             default:
                 throw std::invalid_argument("Unknown Camera Type");
         }
@@ -70,6 +74,8 @@ namespace camera {
                 return std::make_unique<SimpleRadialCamera>(std::vector<double>({ 1.0, 0.0, 0.0, 0.0 }));
             case CameraType::SimplePinhole:
                 return std::make_unique<SimplePinholeCamera>(std::vector<double>({ 1.0, 0.0, 0.0 }));
+            case CameraType::Pinhole:
+                return std::make_unique<PinholeCamera>(std::vector<double>({ 1.0, 1.0, 0.0, 0.0 }));
             default:
                 throw std::invalid_argument("Unknown Camera Type");
         }

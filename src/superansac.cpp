@@ -3,7 +3,6 @@
 
 #include "estimators/degensac.h"
 #include "estimators/estimator_fundamental_matrix.h"
-#include "estimators/estimator_rigid_transformation.h"
 
 #include <iostream>
 
@@ -89,10 +88,22 @@ void SupeRansac::run(const DataMatrix &kData_)
     // epipolar distance as well.
     const bool kUseSymmetricValidation =
         settings.fundamentalSymmetricValidation && kFundamentalEstimator != nullptr;
-    const estimator::RigidTransformationEstimator *kRigidEstimator =
-        dynamic_cast<const estimator::RigidTransformationEstimator *>(estimator);
     const double kSquaredThreshold = kThreshold_ * kThreshold_;
-    const double kFourSquaredThreshold = 4.0 * kSquaredThreshold;
+    auto passesSymmetricValidation = [&](const models::Model &m, const std::vector<size_t> &inl) -> bool
+    {
+        if (!kUseSymmetricValidation)
+            return true;
+        const size_t kRequired = std::max(kSampleSize, inl.size() / 2);
+        size_t passing = 0;
+        const auto &desc = m.getData();
+        const size_t kCols = static_cast<size_t>(kData_.cols());
+        const double *basePtr = kData_.data();
+        for (const size_t &idx : inl)
+            if (kFundamentalEstimator->squaredSymmetricEpipolarDistance(basePtr + idx * kCols, desc) < kSquaredThreshold &&
+                ++passing >= kRequired)
+                return true;
+        return false;
+    };
 
     // Iterate until the maximum number of iterations is reached and the minimum number of iterations is exceeded
     while (iterationNumber < maxIterations || iterationNumber < minIterations)
@@ -199,44 +210,8 @@ void SupeRansac::run(const DataMatrix &kData_)
                 // Validate the would-be best model with the symmetric epipolar
                 // distance: require at least half of its Sampson inliers (and at
                 // least a minimal sample) to also pass the symmetric test.
-                if (kUseSymmetricValidation)
-                {
-                    const size_t kRequired = std::max(kSampleSize, tmpInliers.size() / 2);
-                    size_t passing = 0;
-                    const auto &kDescriptor = model.getData();
-                    for (const size_t &idx : tmpInliers)
-                        if (kFundamentalEstimator->squaredSymmetricEpipolarDistance(
-                                kData_.row(idx).data(), kDescriptor) < kSquaredThreshold &&
-                            ++passing >= kRequired)
-                            break;
-                    if (passing < kRequired)
-                        continue; // Reject this model; keep the previous best
-                }
-
-                // 3D surface concentration (halo) check for rigid transformation:
-                // a genuine surface alignment concentrates inliers inside r < tau with
-                // a sparse outer shell [tau, 2*tau), whereas a false mode inside a
-                // diffuse 3D outlier cloud has more points in [tau, 2*tau) than [0, tau).
-                if (kRigidEstimator != nullptr && tmpInliers.size() >= 12)
-                {
-                    const auto &kDescriptor = model.getData();
-                    const size_t kMaxHalo = (tmpInliers.size() * 2) / 3;
-                    size_t haloCount = 0;
-                    const int kRows = kData_.rows();
-                    const int kCols = kData_.cols();
-                    const double *rowPtr = kData_.data();
-                    for (int rIdx = 0; rIdx < kRows; ++rIdx, rowPtr += kCols)
-                    {
-                        const double sqRes = kRigidEstimator->squaredResidual(rowPtr, kDescriptor);
-                        if (sqRes >= kSquaredThreshold && sqRes < kFourSquaredThreshold)
-                        {
-                            if (++haloCount > kMaxHalo)
-                                break;
-                        }
-                    }
-                    if (haloCount > kMaxHalo)
-                        continue;
-                }
+                if (!passesSymmetricValidation(model, tmpInliers))
+                    continue; // Reject this model; keep the previous best
 
                 // DEGENSAC: test the candidate minimal-sample model for
                 // dominant-plane degeneracy before accepting it as the new
@@ -260,6 +235,74 @@ void SupeRansac::run(const DataMatrix &kData_)
                         continue; // Reject the H-degenerate candidate
                     if (!(bestScore < currentScore))
                         continue; // The replacement does not beat the best model
+                }
+
+                // Fast warm-started non-minimal polish inside the loop: snaps a noisy minimal
+                // candidate onto its full consensus basin (~0.1 ms) so adaptive termination,
+                // SPRT, and duplicate-overlap skipping immediately see the true consensus set.
+                if (settings.inLoopPolish > 0 && tmpInliers.size() >= estimator->nonMinimalSampleSize())
+                {
+                    std::vector<models::Model> warmModels;
+                    std::vector<size_t> warmInliers;
+                    warmInliers.reserve(kData_.rows());
+
+                    if (settings.inLoopPolish >= 2)
+                    {
+                        const size_t kTotalRows = static_cast<size_t>(kData_.rows());
+                        static thread_local std::vector<double> wideResiduals;
+                        wideResiduals.resize(kTotalRows);
+                        estimator->squaredResiduals(kData_, model, 0, kTotalRows, wideResiduals.data());
+                        const double kWideSqTh = (1.75 * kThreshold_) * (1.75 * kThreshold_);
+                        static thread_local std::vector<size_t> wideSet;
+                        wideSet.clear();
+                        wideSet.reserve(tmpInliers.size() * 2);
+                        for (size_t r = 0; r < kTotalRows; ++r)
+                            if (wideResiduals[r] < kWideSqTh)
+                                wideSet.push_back(r);
+                        if (wideSet.size() >= estimator->nonMinimalSampleSize())
+                        {
+                            warmModels.clear();
+                            warmModels.push_back(model);
+                            if (estimator->estimateModelNonminimal(
+                                    kData_, wideSet.data(), wideSet.size(), &warmModels, nullptr))
+                            {
+                                for (const auto &wm : warmModels)
+                                {
+                                    warmInliers.clear();
+                                    const scoring::Score wScore = scoring->score(
+                                        kData_, wm, estimator, warmInliers, true, currentScore);
+                                    if (currentScore < wScore && passesSymmetricValidation(wm, warmInliers))
+                                    {
+                                        currentScore = wScore;
+                                        model = wm;
+                                        tmpInliers.swap(warmInliers);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (tmpInliers.size() >= estimator->nonMinimalSampleSize())
+                    {
+                        warmModels.clear();
+                        warmModels.push_back(model);
+                        if (estimator->estimateModelNonminimal(
+                                kData_, tmpInliers.data(), tmpInliers.size(), &warmModels, nullptr))
+                        {
+                            for (const auto &wm : warmModels)
+                            {
+                                warmInliers.clear();
+                                const scoring::Score wScore = scoring->score(
+                                    kData_, wm, estimator, warmInliers, true, currentScore);
+                                if (currentScore < wScore && passesSymmetricValidation(wm, warmInliers))
+                                {
+                                    currentScore = wScore;
+                                    model = wm;
+                                    tmpInliers.swap(warmInliers);
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Update the best model
@@ -295,23 +338,24 @@ void SupeRansac::run(const DataMatrix &kData_)
                     bestScore = currentScore;
                     bestModel = locallyOptimizedModel;
                     inliers.swap(tmpInliers);  // Swap keeps tmpInliers' capacity for reuse
+                    if (!bestModels.empty())
+                        bestModels.back() = std::make_tuple(bestModel, inliers, bestScore);
                 }
             }
 
-            // Update the termination criterion
-            terminationCriterion->check(
-                kData_, // Data matrix
-                bestScore, // The score of the best model
-                kSampleSize, // The sample size
-                maxIterations, // The iteration number
-                immediateTermination); // Immediate termination flag
-
-            if (immediateTermination)
-                break;
-
-            // Update the maximum number of iterations
-            if (maxIterations > kStrickIterationLimit)
-                maxIterations = kStrickIterationLimit;
+            if (terminationCriterion != nullptr)
+            {
+                size_t requiredIterations = kStrickIterationLimit;
+                terminationCriterion->check(
+                    kData_,
+                    bestScore,
+                    kSampleSize,
+                    requiredIterations,
+                    immediateTermination);
+                if (immediateTermination)
+                    break;
+                maxIterations = std::min(requiredIterations, kStrickIterationLimit);
+            }
         }
         else if (settings.adaptiveTermination && isModelUpdated && terminationCriterion != nullptr)
         {
@@ -344,7 +388,7 @@ void SupeRansac::run(const DataMatrix &kData_)
             updateSprt(scoring, isModelUpdated, bestScore, iterationNumber, kData_.rows());
     }
 
-    if (localOptimizer != nullptr)
+    if (localOptimizer != nullptr && settings.topKForLocalOptimization > 0 && !bestModels.empty())
     {
         // Scratch for the optional per-candidate final polish
         models::Model polishedModel;
@@ -427,27 +471,6 @@ void SupeRansac::run(const DataMatrix &kData_)
 
             if (bestScore < currentScore)
             {
-                if (kRigidEstimator != nullptr && tmpInliers.size() >= 12)
-                {
-                    const auto &kDescriptor = locallyOptimizedModel.getData();
-                    const size_t kMaxHalo = tmpInliers.size() / 2;
-                    size_t haloCount = 0;
-                    const int kRows = kData_.rows();
-                    const int kCols = kData_.cols();
-                    const double *rowPtr = kData_.data();
-                    for (int rIdx = 0; rIdx < kRows; ++rIdx, rowPtr += kCols)
-                    {
-                        const double sqRes = kRigidEstimator->squaredResidual(rowPtr, kDescriptor);
-                        if (sqRes >= kSquaredThreshold && sqRes < kFourSquaredThreshold)
-                        {
-                            if (++haloCount > kMaxHalo)
-                                break;
-                        }
-                    }
-                    if (haloCount > kMaxHalo)
-                        continue;
-                }
-
                 // Update the best model
                 bestScore = currentScore;
                 bestModel = locallyOptimizedModel;

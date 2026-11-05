@@ -87,7 +87,7 @@ namespace superansac
 			// Degrees of freedom for the MAGSAC++ scoring
 			size_t getDegreesOfFreedom() const
 			{
-				return 2;
+				return 3;
 			}
 			
 			// Estimating the model from a minimal sample

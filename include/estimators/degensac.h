@@ -321,7 +321,7 @@ namespace superansac
 				}
 			}
 
-			if (!updated)
+			if (!updated || !(candidateScore_ < runningBest))
 				return true; // Keep the candidate model if no better plane-and-parallax model was found
 
 			// Replace the candidate with the re-estimated model

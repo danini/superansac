@@ -76,6 +76,7 @@ namespace superansac {
         bool enabled = true; // Enabled by default for F estimation
         double homographyThreshold = 2.0; // H-consistency threshold (pixels; scaled with the data normalization)
         size_t innerRansacIterations = 50; // Plane-and-parallax draws per degenerate event
+        bool useDestinationScale = true; // Scale homographyThreshold by destination image normalizing scale s2 instead of 0.5*(s1+s2)
     };
 
     struct RANSACSettings
@@ -84,7 +85,7 @@ namespace superansac {
             minIterations = 1000, // Minimum number of iterations
             maxIterations = 5000, // Maximum number of iterations
             finalRefinementRounds = 0; // Extra score-gated re-collect-and-refit rounds in the final LSQ optimization
-        double localOptimizationDuplicateOverlap = -1.0; // Skip the local optimization of a top-K candidate whose inlier set overlaps (Jaccard) an already optimized candidate's by at least this fraction: -1 = auto (F, E: 0.95; other problems: off; chosen on the dev split), 0 = off
+        double localOptimizationDuplicateOverlap = -1.0; // Skip the local optimization of a top-K candidate whose inlier set overlaps (Jaccard) an already optimized candidate's by at least this fraction: -1 = auto (0.95; chosen on the dev split), 0 = off
         double finalRefinementScheduleStart = 3.0, // Widest sigma multiplier in the final-refinement schedule
             finalRefinementScheduleEnd = 0.5; // Narrowest sigma multiplier in the final-refinement schedule
         double inlierThreshold = 1.5; // Inlier threshold
@@ -97,21 +98,27 @@ namespace superansac {
             finalRefinementSchedule = false, // Use a shrinking-threshold schedule in the final refinement rounds
             finalPolishTopK = false, // Run the final optimizer on every top-K LO candidate before selecting the best
             finalRefinementWeighted = false; // Feed per-point confidences into the final-refinement bundle adjustment
+        int inLoopPolish = -1; // Fast warm-started non-minimal polish on new-best candidates inside the main loop: -1 = auto (E, H: 1; F, PnP, Rigid: 0; chosen on the dev split), 0 = off, 1 = 1-round on inliers, 2 = 2-round (1.75x -> 1.0x)
+        bool essentialEnforceCheirality = true; // Enforce 3D positive-depth cheirality on minimal E roots and residual evaluation
+        bool essentialExactPixelSampson = true; // Evaluate and refine E in exact pixel Sampson space with per-axis intrinsics (fx1, fy1, fx2, fy2)
+        double essentialCheiralityMargin = 0.002; // Angular parallax tolerance (radians) for near-infinity 3D points during cheirality checks
         size_t essentialCheiralityPointNumber = 1; // Cheirality-vote points for E pose disambiguation (raise to ~25 for dense/RoMA matches; splg gains nothing as cv2.recoverPose redoes cheirality)
-        bool homographyBundleRefinement = false; // Nonlinear (LM) reprojection-error refinement of the non-minimal homography fit (H only)
+        bool homographyBundleRefinement = true; // Nonlinear (LM) reprojection-error refinement of the non-minimal homography fit (H only)
+        bool homographyConditionedLM = true; // Isotropically Hartley-condition homography LM refinement around the inlier centroid
         size_t homographyBundleMaxIterations = 5; // LM iterations: early stopping regularizes (full convergence over-fits the plane) and stays within the runtime budget
         bool fundamentalPlaneParallaxPostRefinement = false; // Post-RANSAC dominant-plane detection + Plane-and-Parallax re-estimation (F only). Off: no measurable effect on real data (see tests/test_relative_pose.py --ablate_pp)
-        // Final robust bundle polish (F, E, H, absolute pose): after RANSAC + local optimization, re-collect the
-        // inliers of the best model and run a robust LM refinement on them (Cauchy loss or MAGSAC++ sigma-consensus
+        // Final robust bundle polish (F, E, H, absolute pose, rigid): after RANSAC + local optimization, re-collect the
+        // inliers of the best model and run a robust refinement on them (Cauchy loss or MAGSAC++ sigma-consensus
         // weights, see finalBundleWeighting); repeat for the given number of rounds. Unlike the score-gated
         // optimizers above, the result is accepted unless the consensus set collapses (divergence guard). 0 = off.
-        size_t finalBundleRounds = 3; // Dev-split ablation (tests/ablations/): 3 rounds, start 2.0, Cauchy 0.5*threshold
-        double finalBundleLossScale = 0.5; // Cauchy scale as a multiple of the inlier threshold
+        size_t finalBundleRounds = 3; // Dev-split ablation (tests/ablations/): 3 rounds, start 2.0, Cauchy loss
+        double finalBundleLossScale = -1.0; // Cauchy scale as a multiple of the inlier threshold: -1 = auto (H: 0.35; F, E, absolute pose, rigid: 0.5; chosen on the dev split)
         double finalBundleScheduleStart = 2.0; // First-round collection threshold multiplier (shrinks geometrically to 1.0 over the rounds)
         size_t finalBundleMaxIterations = 100; // LM iterations per round
-        int finalBundleWeighting = -1; // -1 = auto (F: 2, E and absolute pose: 1, H: 0; chosen on the dev split), 0 = Cauchy loss in every round, 1 = MAGSAC++ (sigma-consensus) weighted least squares in every round, 2 = weighted rounds followed by a final unweighted Cauchy round
-        int finalBundleConfidenceWeights = -1; // Multiply the final-bundle weights by the caller-provided match confidences: -1 = auto (F, E: on; H, absolute pose: off; chosen on the dev split), 0 = off, 1 = on
-        double finalBundleConfidenceExponent = 1.0; // Confidence weights are raised to this power
+        int finalBundleWeighting = -1; // -1 = auto (F: 2, E: 4, absolute pose: 1, H and rigid: 0; chosen on the dev split), 0 = Cauchy loss in every round, 1 = MAGSAC++ (sigma-consensus) weighted least squares in every round, 2 = weighted rounds followed by a final unweighted Cauchy round, 4 = round-scaled Cauchy IRLS
+        int finalBundleConfidenceWeights = -1; // Multiply the final-bundle weights by the caller-provided match confidences: -1 = auto (F, E: on; H, absolute pose, rigid: off; chosen on the dev split), 0 = off, 1 = on
+        double finalBundleConfidenceExponent = -1.0; // Confidence weights are raised to this power: -1 = auto (F: 1.5; E, H, absolute pose, rigid: 1.0; chosen on the dev split)
+        double confidenceWeightFloor = -1.0; // Damped affine confidence floor w = floor + (1 - floor) * c^p in [0, 1); -1 = auto per problem
         bool nonminimalConfidenceWeights = true; // Feed caller-provided confidences as weights into the non-minimal (LM) solver
         double prosacConvergenceMultiplier = 1.0; // > 0: PROSAC becomes uniform after multiplier * maxIterations samples (0 = legacy schedule: 200000 samples)
         bool lowInlierUniformFallback = false; // Re-run with uniform sampling when PROSAC ends with a small consensus set (result-dependent; off: no accuracy gain, up to 2x runtime)

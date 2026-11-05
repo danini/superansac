@@ -125,6 +125,7 @@ namespace superansac
 				std::vector<double> weights;
 				kScoring_->getWeights(kData_, estimatedModel_, kEstimator_, weights, &estimatedInliers_);
 				currentlyEstimatedModels.clear();
+				currentlyEstimatedModels.push_back(estimatedModel_);
 				if (kEstimator_->estimateModelNonminimal(
 					kData_,
 					estimatedInliers_.data(),
@@ -135,7 +136,7 @@ namespace superansac
 					for (const auto &model : currentlyEstimatedModels)
 					{
 						currentInliers.clear();
-						currentScore = kScoring_->score(kData_, model, kEstimator_, currentInliers);
+						currentScore = kScoring_->score(kData_, model, kEstimator_, currentInliers, true, estimatedScore_);
 						if (currentScore > estimatedScore_)
 						{
 							estimatedModel_ = model;
@@ -204,7 +205,7 @@ namespace superansac
 					{
 						// Calculate the score of the estimated model
 						currentInliers.clear();
-						currentScore = kScoring_->score(kData_, model, kEstimator_, currentInliers);
+						currentScore = kScoring_->score(kData_, model, kEstimator_, currentInliers, true, estimatedScore_);
 
 						// Check if the current model is better than the previous one
 						if (currentScore > estimatedScore_)

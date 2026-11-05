@@ -168,7 +168,7 @@ def _eval_pnp(args):
     cfg.min_iterations, cfg.max_iterations = min_iters, max_iters
     t0 = time.perf_counter()
     R, t, inl, _, _ = pysuperansac.estimateAbsolutePose(
-        corrs_su, pysuperansac.CameraType.SimplePinhole, [float(K[0, 0]), float(K[0, 2]), float(K[1, 2])],
+        corrs_su, pysuperansac.CameraType.Pinhole, [float(K[0, 0]), float(K[1, 1]), float(K[0, 2]), float(K[1, 2])],
         bbox, prob["probs"] if len(prob["probs"]) else [], config=cfg)
     dt = (time.perf_counter() - t0) * 1000.0
     if R is None or len(inl) < 4:

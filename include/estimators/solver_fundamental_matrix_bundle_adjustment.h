@@ -134,7 +134,7 @@ namespace superansac
 				// with uniform per-point weights.
 				const bool useArgWeights = kWeights_ != nullptr;
 				const bool useMemberWeights = !useArgWeights &&
-					pointWeights != nullptr && pointWeights->size() == kSampleNumber_;
+					pointWeights != nullptr && pointWeights->size() >= static_cast<size_t>(kData_.rows());
 				if (useArgWeights || useMemberWeights)
 					weights.resize(kSampleNumber_);
 
@@ -163,6 +163,8 @@ namespace superansac
 					}
 				}
 				
+				const bool kWasWarmStarted = !models_.empty();
+				auto runEightPoint = [&]() -> bool
 				{
 					FundamentalMatrixEightPointSolver eightPointSolver;
 					std::vector<models::Model> eightPtModels;
@@ -171,19 +173,21 @@ namespace superansac
 						for (auto &m : eightPtModels)
 							models_.push_back(std::move(m));
 					}
+					return !models_.empty();
+				};
 
-					if (models_.size() == 0)
-						return false;
-				}
+				if (!kWasWarmStarted && !runEightPoint())
+					return false;
 
 				poselib::BundleOptions tmpOptions = options;
 				if (kSample_ != nullptr)
 				{
 					tmpOptions.loss_scale = 0.5 * options.loss_scale;
-					tmpOptions.max_iterations = (kWeights_ == nullptr) ? 15 : 35;
+					tmpOptions.max_iterations = (kWeights_ == nullptr) ? (kWasWarmStarted ? 15 : 10) : 25;
 					tmpOptions.loss_type = poselib::BundleOptions::LossType::CAUCHY;
 				}
 
+				bool anyFinite = false;
 				for (auto& model : models_)
 				{
 					// Get the fundamental matrix
@@ -191,15 +195,29 @@ namespace superansac
 
 					// Perform the bundle adjustment
 					poselib::refine_fundamental(
-						x1,
-						x2,
-						&fundamentalMatrix,
-						tmpOptions,
-						weights);
+						x1, x2, &fundamentalMatrix, tmpOptions, weights);
 
 					// Update the model
 					if (fundamentalMatrix.allFinite())
+					{
 						model.getMutableData().block<3, 3>(0, 0) = fundamentalMatrix;
+						anyFinite = true;
+					}
+				}
+
+				if (!anyFinite && kWasWarmStarted)
+				{
+					models_.clear();
+					if (!runEightPoint())
+						return false;
+					for (auto &model : models_)
+					{
+						Eigen::Matrix3d fundamentalMatrix = model.getMutableData().block<3, 3>(0, 0).eval();
+						poselib::refine_fundamental(
+							x1, x2, &fundamentalMatrix, tmpOptions, weights);
+						if (fundamentalMatrix.allFinite())
+							model.getMutableData().block<3, 3>(0, 0) = fundamentalMatrix;
+					}
 				}
 
 				return true;

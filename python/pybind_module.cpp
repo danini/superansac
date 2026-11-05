@@ -159,6 +159,7 @@ PYBIND11_MODULE(pysuperansac, m) {
     py::enum_<superansac::camera::CameraType>(m, "CameraType")
         .value("SimpleRadial", superansac::camera::CameraType::SimpleRadial)
         .value("SimplePinhole", superansac::camera::CameraType::SimplePinhole)
+        .value("Pinhole", superansac::camera::CameraType::Pinhole)
         .export_values();
 
     // Expose the AR sampler settings to Python
@@ -187,7 +188,8 @@ PYBIND11_MODULE(pysuperansac, m) {
         .def(py::init<>())
         .def_readwrite("enabled", &superansac::DegensacSettings::enabled)
         .def_readwrite("homography_threshold", &superansac::DegensacSettings::homographyThreshold)
-        .def_readwrite("inner_ransac_iterations", &superansac::DegensacSettings::innerRansacIterations);
+        .def_readwrite("inner_ransac_iterations", &superansac::DegensacSettings::innerRansacIterations)
+        .def_readwrite("use_destination_scale", &superansac::DegensacSettings::useDestinationScale);
 
     // Expose the RANSAC settings to Python
     py::class_<superansac::RANSACSettings>(m, "RANSACSettings")
@@ -232,10 +234,16 @@ PYBIND11_MODULE(pysuperansac, m) {
         .def_readwrite("final_bundle_weighting", &superansac::RANSACSettings::finalBundleWeighting)
         .def_readwrite("final_bundle_confidence_weights", &superansac::RANSACSettings::finalBundleConfidenceWeights)
         .def_readwrite("final_bundle_confidence_exponent", &superansac::RANSACSettings::finalBundleConfidenceExponent)
+        .def_readwrite("confidence_weight_floor", &superansac::RANSACSettings::confidenceWeightFloor)
         .def_readwrite("nonminimal_confidence_weights", &superansac::RANSACSettings::nonminimalConfidenceWeights)
         .def_readwrite("low_inlier_uniform_fallback", &superansac::RANSACSettings::lowInlierUniformFallback)
         .def_readwrite("prosac_convergence_multiplier", &superansac::RANSACSettings::prosacConvergenceMultiplier)
-        .def_readwrite("homography_bundle_max_iterations", &superansac::RANSACSettings::homographyBundleMaxIterations);
+        .def_readwrite("homography_bundle_max_iterations", &superansac::RANSACSettings::homographyBundleMaxIterations)
+        .def_readwrite("in_loop_polish", &superansac::RANSACSettings::inLoopPolish)
+        .def_readwrite("essential_enforce_cheirality", &superansac::RANSACSettings::essentialEnforceCheirality)
+        .def_readwrite("essential_exact_pixel_sampson", &superansac::RANSACSettings::essentialExactPixelSampson)
+        .def_readwrite("essential_cheirality_margin", &superansac::RANSACSettings::essentialCheiralityMargin)
+        .def_readwrite("homography_conditioned_lm", &superansac::RANSACSettings::homographyConditionedLM);
 
     // Expose the function to Python
     m.def(

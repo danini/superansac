@@ -113,6 +113,11 @@ class MAGSACScoring : public AbstractScoring
         }
 
     public:
+        FORCE_INLINE std::pair<double, double> getGammaValuesPublic(double residual_) const
+        {
+            return getGammaValues(residual_);
+        }
+
         // Constructor 
         MAGSACScoring()
         {

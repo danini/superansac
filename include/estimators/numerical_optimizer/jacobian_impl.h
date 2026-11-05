@@ -614,6 +614,162 @@ class RelativePoseJacobianAccumulator {
 };
 
 template <typename LossFunction, typename ResidualWeightVector = UniformWeightVector>
+class CalibratedRelativePoseJacobianAccumulator {
+  public:
+    CalibratedRelativePoseJacobianAccumulator(const std::vector<Point2D> &points2D_1,
+                                              const std::vector<Point2D> &points2D_2,
+                                              double inv_fx1, double inv_fy1,
+                                              double inv_fx2, double inv_fy2,
+                                              const LossFunction &l,
+                                              const ResidualWeightVector &w = ResidualWeightVector())
+        : x1(points2D_1), x2(points2D_2),
+          ax1_sq(inv_fx1 * inv_fx1), ay1_sq(inv_fy1 * inv_fy1),
+          ax2_sq(inv_fx2 * inv_fx2), ay2_sq(inv_fy2 * inv_fy2),
+          loss_fn(l), weights(w) {}
+
+    double residual(const CameraPose &pose) const {
+        Eigen::Matrix3d E;
+        essential_from_motion(pose, &E);
+
+        double cost = 0.0;
+        for (size_t k = 0; k < x1.size(); ++k) {
+            const Eigen::Vector3d u1(x1[k](0), x1[k](1), 1.0);
+            const Eigen::Vector3d u2(x2[k](0), x2[k](1), 1.0);
+            const Eigen::Vector3d Eu1 = E * u1;
+            const double g1x = E(0, 0) * u2(0) + E(1, 0) * u2(1) + E(2, 0);
+            const double g1y = E(0, 1) * u2(0) + E(1, 1) * u2(1) + E(2, 1);
+            const double C = u2.dot(Eu1);
+            const double nJc_sq = ax1_sq * g1x * g1x + ay1_sq * g1y * g1y +
+                                  ax2_sq * Eu1(0) * Eu1(0) + ay2_sq * Eu1(1) * Eu1(1);
+            const double r2 = (C * C) / std::max(1e-24, nJc_sq);
+            cost += weights[k] * loss_fn.loss(r2);
+        }
+        return cost;
+    }
+
+    size_t accumulate(const CameraPose &pose, Eigen::Matrix<double, 5, 5> &JtJ, Eigen::Matrix<double, 5, 1> &Jtr) {
+        if (std::abs(pose.t.x()) < std::abs(pose.t.y())) {
+            if (std::abs(pose.t.x()) < std::abs(pose.t.z())) {
+                tangent_basis.col(0) = pose.t.cross(Eigen::Vector3d::UnitX()).normalized();
+            } else {
+                tangent_basis.col(0) = pose.t.cross(Eigen::Vector3d::UnitZ()).normalized();
+            }
+        } else {
+            if (std::abs(pose.t.y()) < std::abs(pose.t.z())) {
+                tangent_basis.col(0) = pose.t.cross(Eigen::Vector3d::UnitY()).normalized();
+            } else {
+                tangent_basis.col(0) = pose.t.cross(Eigen::Vector3d::UnitZ()).normalized();
+            }
+        }
+        tangent_basis.col(1) = tangent_basis.col(0).cross(pose.t).normalized();
+
+        Eigen::Matrix3d E, R;
+        R = pose.R();
+        essential_from_motion(pose, &E);
+
+        Eigen::Matrix<double, 9, 3> dR;
+        Eigen::Matrix<double, 9, 2> dt;
+        dR.block<3, 1>(0, 0).setZero();
+        dR.block<3, 1>(0, 1) = -E.col(2);
+        dR.block<3, 1>(0, 2) = E.col(1);
+        dR.block<3, 1>(3, 0) = E.col(2);
+        dR.block<3, 1>(3, 1).setZero();
+        dR.block<3, 1>(3, 2) = -E.col(0);
+        dR.block<3, 1>(6, 0) = -E.col(1);
+        dR.block<3, 1>(6, 1) = E.col(0);
+        dR.block<3, 1>(6, 2).setZero();
+
+        dt.block<3, 1>(0, 0) = tangent_basis.col(0).cross(R.col(0));
+        dt.block<3, 1>(0, 1) = tangent_basis.col(1).cross(R.col(0));
+        dt.block<3, 1>(3, 0) = tangent_basis.col(0).cross(R.col(1));
+        dt.block<3, 1>(3, 1) = tangent_basis.col(1).cross(R.col(1));
+        dt.block<3, 1>(6, 0) = tangent_basis.col(0).cross(R.col(2));
+        dt.block<3, 1>(6, 1) = tangent_basis.col(1).cross(R.col(2));
+
+        size_t num_residuals = 0;
+        for (size_t k = 0; k < x1.size(); ++k) {
+            const double u1x = x1[k](0), u1y = x1[k](1);
+            const double u2x = x2[k](0), u2y = x2[k](1);
+            const double g2x = E(0, 0) * u1x + E(0, 1) * u1y + E(0, 2);
+            const double g2y = E(1, 0) * u1x + E(1, 1) * u1y + E(1, 2);
+            const double g2z = E(2, 0) * u1x + E(2, 1) * u1y + E(2, 2);
+            const double g1x = E(0, 0) * u2x + E(1, 0) * u2y + E(2, 0);
+            const double g1y = E(0, 1) * u2x + E(1, 1) * u2y + E(2, 1);
+            const double C = u2x * g2x + u2y * g2y + g2z;
+
+            const double j0 = ax1_sq * g1x;
+            const double j1 = ay1_sq * g1y;
+            const double j2 = ax2_sq * g2x;
+            const double j3 = ay2_sq * g2y;
+            const double nJ_sq = j0 * g1x + j1 * g1y + j2 * g2x + j3 * g2y;
+            if (nJ_sq <= 1e-24) {
+                continue;
+            }
+            const double inv_nJ_C = 1.0 / std::sqrt(nJ_sq);
+            const double r = C * inv_nJ_C;
+
+            const double weight = weights[k] * loss_fn.weight(r * r);
+            if (weight == 0.0) {
+                continue;
+            }
+            num_residuals++;
+
+            Eigen::Matrix<double, 1, 9> dF;
+            dF << u1x * u2x, u1x * u2y, u1x, u1y * u2x, u1y * u2y, u1y, u2x, u2y, 1.0;
+            const double s = C * inv_nJ_C * inv_nJ_C;
+            dF(0) -= s * (j2 * u1x + j0 * u2x);
+            dF(1) -= s * (j3 * u1x + j0 * u2y);
+            dF(2) -= s * j0;
+            dF(3) -= s * (j2 * u1y + j1 * u2x);
+            dF(4) -= s * (j3 * u1y + j1 * u2y);
+            dF(5) -= s * j1;
+            dF(6) -= s * j2;
+            dF(7) -= s * j3;
+            dF *= inv_nJ_C;
+
+            Eigen::Matrix<double, 1, 5> J;
+            J.block<1, 3>(0, 0) = dF * dR;
+            J.block<1, 2>(0, 3) = dF * dt;
+
+            Jtr += weight * r * J.transpose();
+            JtJ(0, 0) += weight * (J(0) * J(0));
+            JtJ(1, 0) += weight * (J(1) * J(0));
+            JtJ(1, 1) += weight * (J(1) * J(1));
+            JtJ(2, 0) += weight * (J(2) * J(0));
+            JtJ(2, 1) += weight * (J(2) * J(1));
+            JtJ(2, 2) += weight * (J(2) * J(2));
+            JtJ(3, 0) += weight * (J(3) * J(0));
+            JtJ(3, 1) += weight * (J(3) * J(1));
+            JtJ(3, 2) += weight * (J(3) * J(2));
+            JtJ(3, 3) += weight * (J(3) * J(3));
+            JtJ(4, 0) += weight * (J(4) * J(0));
+            JtJ(4, 1) += weight * (J(4) * J(1));
+            JtJ(4, 2) += weight * (J(4) * J(2));
+            JtJ(4, 3) += weight * (J(4) * J(3));
+            JtJ(4, 4) += weight * (J(4) * J(4));
+        }
+        return num_residuals;
+    }
+
+    CameraPose step(Eigen::Matrix<double, 5, 1> dp, const CameraPose &pose) const {
+        CameraPose pose_new;
+        pose_new.q = quat_step_post(pose.q, dp.block<3, 1>(0, 0));
+        pose_new.t = pose.t + tangent_basis * dp.block<2, 1>(3, 0);
+        return pose_new;
+    }
+    typedef CameraPose param_t;
+    static constexpr size_t num_params = 5;
+
+  private:
+    const std::vector<Point2D> &x1;
+    const std::vector<Point2D> &x2;
+    const double ax1_sq, ay1_sq, ax2_sq, ay2_sq;
+    const LossFunction &loss_fn;
+    const ResidualWeightVector &weights;
+    Eigen::Matrix<double, 3, 2> tangent_basis;
+};
+
+template <typename LossFunction, typename ResidualWeightVector = UniformWeightVector>
 class SharedFocalRelativePoseJacobianAccumulator {
   public:
     SharedFocalRelativePoseJacobianAccumulator(const std::vector<Point2D> &points2D_1,
@@ -1274,7 +1430,12 @@ class HomographyJacobianAccumulator {
 
             const double Hx1_0 = H0_0 * x1_0 + H0_1 * x1_1 + H0_2;
             const double Hx1_1 = H1_0 * x1_0 + H1_1 * x1_1 + H1_2;
-            const double inv_Hx1_2 = 1.0 / (H2_0 * x1_0 + H2_1 * x1_1 + H2_2);
+            const double denom = H2_0 * x1_0 + H2_1 * x1_1 + H2_2;
+            if (std::abs(denom) < 1e-12) {
+                cost += weights[k] * loss_fn.loss(1e18);
+                continue;
+            }
+            const double inv_Hx1_2 = 1.0 / denom;
 
             const double r0 = Hx1_0 * inv_Hx1_2 - x2_0;
             const double r1 = Hx1_1 * inv_Hx1_2 - x2_1;
@@ -1297,7 +1458,10 @@ class HomographyJacobianAccumulator {
 
             const double Hx1_0 = H0_0 * x1_0 + H0_1 * x1_1 + H0_2;
             const double Hx1_1 = H1_0 * x1_0 + H1_1 * x1_1 + H1_2;
-            const double inv_Hx1_2 = 1.0 / (H2_0 * x1_0 + H2_1 * x1_1 + H2_2);
+            const double denom = H2_0 * x1_0 + H2_1 * x1_1 + H2_2;
+            if (std::abs(denom) < 1e-12)
+                continue;
+            const double inv_Hx1_2 = 1.0 / denom;
 
             const double z0 = Hx1_0 * inv_Hx1_2;
             const double z1 = Hx1_1 * inv_Hx1_2;

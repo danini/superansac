@@ -89,6 +89,14 @@ BundleStats refine_relpose(const std::vector<Point2D> &x1, const std::vector<Poi
                            const BundleOptions &opt = BundleOptions(),
                            const std::vector<double> &weights = std::vector<double>());
 
+// Relative pose refinement minimizing exact pixel-space Sampson error given normalized camera coordinates (x1, x2)
+// and inverse focal lengths (1/fx1, 1/fy1, 1/fx2, 1/fy2).
+BundleStats refine_relpose_calibrated(const std::vector<Point2D> &x1, const std::vector<Point2D> &x2,
+                                      double inv_fx1, double inv_fy1, double inv_fx2, double inv_fy2,
+                                      CameraPose *pose,
+                                      const BundleOptions &opt = BundleOptions(),
+                                      const std::vector<double> &weights = std::vector<double>());
+
 // Relative pose with single unknown focal refinement. Minimizes Sampson error error. Assumes identity intrinsics
 // (calibrated camera)
 BundleStats refine_shared_focal_relpose(const std::vector<Point2D> &x1, const std::vector<Point2D> &x2,
@@ -104,6 +112,11 @@ BundleStats refine_fundamental(const std::vector<Point2D> &x1, const std::vector
 BundleStats refine_homography(const std::vector<Point2D> &x1, const std::vector<Point2D> &x2, Eigen::Matrix3d *H,
                               const BundleOptions &opt = BundleOptions(),
                               const std::vector<double> &weights = std::vector<double>());
+
+// Isotropically Hartley-conditioned homography refinement minimizing the identical pixel-space forward-transfer loss.
+BundleStats refine_homography_conditioned(const std::vector<Point2D> &x1, const std::vector<Point2D> &x2,
+                                          Eigen::Matrix3d *H, const BundleOptions &opt = BundleOptions(),
+                                          const std::vector<double> &weights = std::vector<double>());
 
 // Generalized relative pose refinement. Minimizes Sampson error error. Assumes identity intrinsics (calibrated camera)
 BundleStats
@@ -193,7 +206,7 @@ BundleStats bundle_adjust(const std::vector<Point2D> &x, const std::vector<Point
                           const BundleOptions &opt, const std::vector<double> &weights) {
     poselib::Camera camera;
     camera.model_id = NullCameraModel::model_id;
-    return bundle_adjust(x, X, camera, pose, opt);
+    return bundle_adjust(x, X, camera, pose, opt, weights);
 }
 
 template <typename WeightType, typename CameraModel, typename LossFunction>
@@ -409,6 +422,44 @@ BundleStats refine_relpose(const std::vector<Point2D> &x1, const std::vector<Poi
     }
 }
 
+template <typename WeightType, typename LossFunction>
+BundleStats refine_relpose_calibrated(const std::vector<Point2D> &x1, const std::vector<Point2D> &x2,
+                                      double inv_fx1, double inv_fy1, double inv_fx2, double inv_fy2,
+                                      CameraPose *pose, const BundleOptions &opt, const WeightType &weights) {
+    LossFunction loss_fn(opt.loss_scale);
+    IterationCallback callback = setup_callback(opt, loss_fn);
+    CalibratedRelativePoseJacobianAccumulator<LossFunction, WeightType> accum(
+        x1, x2, inv_fx1, inv_fy1, inv_fx2, inv_fy2, loss_fn, weights);
+    return lm_impl<decltype(accum)>(accum, pose, opt, callback);
+}
+
+template <typename WeightType>
+BundleStats refine_relpose_calibrated(const std::vector<Point2D> &x1, const std::vector<Point2D> &x2,
+                                      double inv_fx1, double inv_fy1, double inv_fx2, double inv_fy2,
+                                      CameraPose *pose, const BundleOptions &opt, const WeightType &weights) {
+    switch (opt.loss_type) {
+#define SWITCH_LOSS_FUNCTION_CASE(LossFunction)                                                                        \
+    return refine_relpose_calibrated<WeightType, LossFunction>(                                                        \
+        x1, x2, inv_fx1, inv_fy1, inv_fx2, inv_fy2, pose, opt, weights);
+        SWITCH_LOSS_FUNCTIONS
+    default:
+        return BundleStats();
+    }
+#undef SWITCH_LOSS_FUNCTION_CASE
+}
+
+BundleStats refine_relpose_calibrated(const std::vector<Point2D> &x1, const std::vector<Point2D> &x2,
+                                      double inv_fx1, double inv_fy1, double inv_fx2, double inv_fy2,
+                                      CameraPose *pose, const BundleOptions &opt, const std::vector<double> &weights) {
+    if (weights.size() == x1.size()) {
+        return refine_relpose_calibrated<std::vector<double>>(
+            x1, x2, inv_fx1, inv_fy1, inv_fx2, inv_fy2, pose, opt, weights);
+    } else {
+        return refine_relpose_calibrated<UniformWeightVector>(
+            x1, x2, inv_fx1, inv_fy1, inv_fx2, inv_fy2, pose, opt, UniformWeightVector());
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////
 // Relative pose (essential matrix) refinement
 
@@ -510,7 +561,7 @@ BundleStats refine_homography(const std::vector<Point2D> &x1, const std::vector<
 #undef SWITCH_LOSS_FUNCTION_CASE
 }
 
-// Entry point for fundamental matrix refinement
+// Entry point for homography matrix refinement
 BundleStats refine_homography(const std::vector<Point2D> &x1, const std::vector<Point2D> &x2, Eigen::Matrix3d *H,
                               const BundleOptions &opt, const std::vector<double> &weights) {
     if (weights.size() == x1.size()) {
@@ -518,6 +569,82 @@ BundleStats refine_homography(const std::vector<Point2D> &x1, const std::vector<
     } else {
         return refine_homography<UniformWeightVector>(x1, x2, H, opt, UniformWeightVector());
     }
+}
+
+BundleStats refine_homography_conditioned(const std::vector<Point2D> &x1, const std::vector<Point2D> &x2,
+                                          Eigen::Matrix3d *H, const BundleOptions &opt,
+                                          const std::vector<double> &weights) {
+    const size_t n = x1.size();
+    if (n < 4 || x2.size() != n || H == nullptr || !H->allFinite()) {
+        return refine_homography(x1, x2, H, opt, weights);
+    }
+    Point2D c1(0.0, 0.0), c2(0.0, 0.0);
+    for (size_t i = 0; i < n; ++i) {
+        c1 += x1[i];
+        c2 += x2[i];
+    }
+    const double inv_n = 1.0 / static_cast<double>(n);
+    c1 *= inv_n;
+    c2 *= inv_n;
+
+    double d1 = 0.0, d2 = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        d1 += (x1[i] - c1).norm();
+        d2 += (x2[i] - c2).norm();
+    }
+    d1 *= inv_n;
+    d2 *= inv_n;
+    if (d1 < 1e-9 || d2 < 1e-9) {
+        return refine_homography(x1, x2, H, opt, weights);
+    }
+    constexpr double kSqrt2 = 1.4142135623730950488;
+    const double s1 = kSqrt2 / d1;
+    const double s2 = kSqrt2 / d2;
+
+    Eigen::Matrix3d T1, T1_inv, T2, T2_inv;
+    T1 << s1, 0.0, -s1 * c1(0),
+          0.0, s1, -s1 * c1(1),
+          0.0, 0.0, 1.0;
+    T1_inv << 1.0 / s1, 0.0, c1(0),
+              0.0, 1.0 / s1, c1(1),
+              0.0, 0.0, 1.0;
+    T2 << s2, 0.0, -s2 * c2(0),
+          0.0, s2, -s2 * c2(1),
+          0.0, 0.0, 1.0;
+    T2_inv << 1.0 / s2, 0.0, c2(0),
+              0.0, 1.0 / s2, c2(1),
+              0.0, 0.0, 1.0;
+
+    Eigen::Matrix3d H_norm = T2 * (*H) * T1_inv;
+    if (!H_norm.allFinite() || std::abs(H_norm(2, 2)) < 1e-12) {
+        return refine_homography(x1, x2, H, opt, weights);
+    }
+    H_norm /= H_norm(2, 2);
+
+    static thread_local std::vector<Point2D> u1, u2;
+    u1.resize(n);
+    u2.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        u1[i] = s1 * (x1[i] - c1);
+        u2[i] = s2 * (x2[i] - c2);
+    }
+
+    BundleOptions opt_norm = opt;
+    opt_norm.loss_scale = opt.loss_scale * s2;
+
+    BundleStats stats = refine_homography(u1, u2, &H_norm, opt_norm, weights);
+    if (H_norm.allFinite()) {
+        Eigen::Matrix3d H_px = T2_inv * H_norm * T1;
+        if (H_px.allFinite()) {
+            if (std::abs(H_px(2, 2)) > 1e-12) {
+                H_px /= H_px(2, 2);
+            } else {
+                H_px.normalize();
+            }
+            *H = H_px;
+        }
+    }
+    return stats;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////

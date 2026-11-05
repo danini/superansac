@@ -225,63 +225,52 @@ namespace superansac
                 std::vector<models::Model> &models_, // The estimated model parameters
                 const double *kWeights_) const // The weight for each point
 			{
-				constexpr size_t kEquationNumber = 2;
-				const size_t kRowNumber = kEquationNumber * kSampleNumber_;
-				// Thread-local scratch (this solver runs in the local-optimization
-				// inner loops); fully overwritten below.
-				static thread_local DataMatrix coefficients;
-				coefficients.resize(kRowNumber, 9);
-				coefficients.setZero();
-
-				size_t rowIdx = 0;
-				double weight = 1.0;
+				// Direct block-sparse accumulation of the 9x9 normal matrix A^T A:
+				// Every 3x3 block is a weighted sum of P = p1 * p1^T (where p1 = [x1, y1, 1]^T),
+				// avoiding the 2N x 9 zero-padded coefficient matrix and full GEMM.
+				Eigen::Matrix3d S1 = Eigen::Matrix3d::Zero();
+				Eigen::Matrix3d Sx = Eigen::Matrix3d::Zero();
+				Eigen::Matrix3d Sy = Eigen::Matrix3d::Zero();
+				Eigen::Matrix3d Sr2 = Eigen::Matrix3d::Zero();
 
 				for (size_t i = 0; i < kSampleNumber_; ++i)
 				{
-					const size_t idx =
-						kSample_ == nullptr ? i : kSample_[i];
+					const size_t idx = kSample_ == nullptr ? i : kSample_[i];
+					const double x1 = kData_(idx, 0);
+					const double y1 = kData_(idx, 1);
+					const double x2 = kData_(idx, 2);
+					const double y2 = kData_(idx, 3);
+					const double w = (kWeights_ != nullptr) ? kWeights_[i] : 1.0;
+					const double w2 = w * w;
+					if (w2 <= 0.0)
+						continue;
 
-					const double
-						& x1 = kData_(idx, 0),
-						& y1 = kData_(idx, 1),
-						& x2 = kData_(idx, 2),
-						& y2 = kData_(idx, 3);
+					Eigen::Matrix3d P;
+					P(0, 0) = x1 * x1; P(0, 1) = x1 * y1; P(0, 2) = x1;
+					P(1, 0) = P(0, 1); P(1, 1) = y1 * y1; P(1, 2) = y1;
+					P(2, 0) = x1;      P(2, 1) = y1;      P(2, 2) = 1.0;
 
-					if (kWeights_ != nullptr)
-						weight = kWeights_[i];
-
-					const double
-						minusWeightTimesX1 = -weight * x1,
-						minusWeightTimesY1 = -weight * y1,
-						weightTimesX2 = weight * x2,
-						weightTimesY2 = weight * y2;
-
-					coefficients(rowIdx, 0) = minusWeightTimesX1;
-					coefficients(rowIdx, 1) = minusWeightTimesY1;
-					coefficients(rowIdx, 2) = -weight;
-					coefficients(rowIdx, 6) = weightTimesX2 * x1;
-					coefficients(rowIdx, 7) = weightTimesX2 * y1;
-					coefficients(rowIdx, 8) = weightTimesX2;
-					++rowIdx;
-
-					coefficients(rowIdx, 3) = minusWeightTimesX1;
-					coefficients(rowIdx, 4) = minusWeightTimesY1;
-					coefficients(rowIdx, 5) = -weight;
-					coefficients(rowIdx, 6) = weightTimesY2 * x1;
-					coefficients(rowIdx, 7) = weightTimesY2 * y1;
-					coefficients(rowIdx, 8) = weightTimesY2;
-					++rowIdx;
+					S1.noalias()  += w2 * P;
+					Sx.noalias()  -= (w2 * x2) * P;
+					Sy.noalias()  -= (w2 * y2) * P;
+					Sr2.noalias() += (w2 * (x2 * x2 + y2 * y2)) * P;
 				}
 
-				// Homogeneous Total Least Squares (SVD of 9x9 normal matrix) avoids the
-				// Errors-in-Variables attenuation bias of fixing h(8) = 1.0 on foreshortened views.
-				const Eigen::Matrix<double, 9, 9> kNormalMatrix =
-					coefficients.transpose() * coefficients;
-				Eigen::JacobiSVD<Eigen::Matrix<double, 9, 9>> svd(
-					kNormalMatrix,
-					Eigen::ComputeFullV);
-				const Eigen::Matrix<double, 9, 1> h =
-					svd.matrixV().rightCols<1>();
+				Eigen::Matrix<double, 9, 9> kNormalMatrix = Eigen::Matrix<double, 9, 9>::Zero();
+				kNormalMatrix.block<3, 3>(0, 0) = S1;
+				kNormalMatrix.block<3, 3>(3, 3) = S1;
+				kNormalMatrix.block<3, 3>(6, 6) = Sr2;
+				kNormalMatrix.block<3, 3>(0, 6) = Sx;
+				kNormalMatrix.block<3, 3>(6, 0) = Sx;
+				kNormalMatrix.block<3, 3>(3, 6) = Sy;
+				kNormalMatrix.block<3, 3>(6, 3) = Sy;
+
+				// Homogeneous Total Least Squares via symmetric eigendecomposition of the 9x9 PSD
+				// normal matrix (equivalent to right singular vector of smallest singular value, ~6x faster).
+				Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 9, 9>> eig(kNormalMatrix);
+				if (eig.info() != Eigen::Success)
+					return false;
+				const Eigen::Matrix<double, 9, 1> h = eig.eigenvectors().col(0);
 
 				if (!h.allFinite())
 					return false;
